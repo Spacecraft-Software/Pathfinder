@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+version = 1
+
+# Agent context files. Annotated here rather than carrying an inline header:
+# both are read verbatim by coding agents, and a licence comment at the top is
+# noise in that context (Standard §5.7).
+[[annotations]]
+path = ["AGENTS.md", "CLAUDE.md"]
+SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
+SPDX-License-Identifier = "CC-BY-SA-4.0"
+
+# Posture/documentation files derived from /spacecraft-software/license/ templates.
+[[annotations]]
+path = ["NOTICE.md", "CONTRIBUTING.md"]
+SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
+SPDX-License-Identifier = "CC-BY-SA-4.0"
+
+# Build/VCS metadata that cannot carry meaningful authorship.
+[[annotations]]
+path = [".gitignore", "Cargo.lock"]
+SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# Data captured from upstream jq 1.8.1 and reproduced verbatim: its `--help`
+# text, so the shim's usage output is byte-identical to the tool it stands in
+# for, and its `builtins` list, so `builtins` answers what jq answers. Upstream
+# jq is MIT (Standard §4.2: third-party-derived artifacts keep their upstream
+# license).
+[[annotations]]
+path = ["src/embed/jq-help.txt", "src/embed/jq-builtins.json"]
+SPDX-FileCopyrightText = "2012 Stephen Dolan and jq contributors"
+SPDX-License-Identifier = "MIT"
