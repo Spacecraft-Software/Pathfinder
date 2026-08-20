@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Maintainer: Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+
+pkgname=pathfinder-jq
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="jq-compatible shim over jaq"
+arch=('x86_64' 'aarch64')
+url="https://Pathfinder.SpacecraftSoftware.org/"
+license=('GPL-3.0-or-later')
+depends=('jaq')
+makedepends=('cargo')
+# Deliberately NOT conflicts=('jq'): the two can coexist, and which one answers
+# to `jq` is decided by PATH order or by installing the shim yourself. Silently
+# displacing a system jq is not a package's call to make.
+optdepends=('jq: to run the differential test suite against real jq')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/$pkgname-$pkgver"
+  cargo build --release --locked
+}
+
+check() {
+  cd "$srcdir/$pkgname-$pkgver"
+  # The differential suite skips cleanly when no real jq is present.
+  cargo test --release --locked
+}
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  install -Dm755 "target/release/pathfinder" "$pkgdir/usr/bin/pathfinder"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 doc/DIVERGENCES.md "$pkgdir/usr/share/doc/$pkgname/DIVERGENCES.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # The `jq` name is opt-in: run `pathfinder --install-shim ~/.local/bin`.
+}

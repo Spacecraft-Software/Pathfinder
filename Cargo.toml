@@ -1,0 +1,86 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "pathfinder-jq"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+description = "jq-compatible shim over jaq: translates jq's command line and filter syntax, then execs jaq"
+homepage = "https://Pathfinder.SpacecraftSoftware.org/"
+repository = "https://github.com/Spacecraft-Software/pathfinder"
+authors = ["Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
+categories = ["command-line-utilities"]
+keywords = ["jq", "jaq", "json", "shim", "compatibility"]
+
+[[bin]]
+name = "pathfinder"
+path = "src/main.rs"
+
+# No runtime dependencies, deliberately.
+#
+# Pathfinder's whole job is to hand off to `jaq` as fast as possible: the common
+# path is parse-argv-then-execve, which std covers completely. Pulling in clap
+# would also be actively wrong — jq's command line is positional and
+# order-sensitive in ways clap cannot express (see `src/jqargs.rs`). This
+# mirrors `doas-rs/crates/sudo-shim`, which is a shim for the same reason.
+#
+# M-MIMALLOC-APPS is deliberately NOT applied: the process allocates a few
+# hundred bytes of argv strings and then replaces its own image with execve.
+# There is no allocating hot path for mimalloc to improve, and linking it would
+# add startup cost to a binary whose entire value proposition is being
+# unmeasurable next to the jaq run it fronts (Standard §3.2 trade-off note).
+[dependencies]
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+# LTO "thin": reliable on this toolchain and on the NixOS host. Full "fat" LTO
+# is disabled — this binary is a few thousand lines with no cross-crate hot
+# path, so the link-time cost buys nothing measurable (§3.2 flag notation).
+lto = "thin"
+codegen-units = 1
+# -C target-cpu=native intentionally NOT set: release binaries must stay
+# portable across machines. Opt in via RUSTFLAGS for a local-only build.
+
+[lints.rust]
+ambiguous_negative_literals = "warn"
+missing_debug_implementations = "warn"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+trivial_numeric_casts = "warn"
+unsafe_code = "forbid"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
+
+[lints.clippy]
+cargo = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+allow_attributes_without_reason = "warn"
+assertions_on_result_states = "warn"
+clone_on_ref_ptr = "warn"
+deref_by_slicing = "warn"
+empty_drop = "warn"
+empty_structs_with_brackets = "warn"
+if_then_some_else_none = "warn"
+map_err_ignore = "warn"
+redundant_type_annotations = "warn"
+renamed_function_params = "warn"
+unneeded_field_pattern = "warn"
+unused_result_ok = "warn"
+# Binary crate: the pedantic public-API doc lints are noise with no public API.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+# Flag sets really are a bag of independent booleans; jq's own `options` bitmask
+# is the same shape, and naming a struct per pair would obscure the mapping.
+struct_excessive_bools = "allow"
+literal_string_with_formatting_args = "allow"
