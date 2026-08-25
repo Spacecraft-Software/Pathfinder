@@ -120,7 +120,14 @@ cargo test      # unit tests, plus the differential suite
 The differential suite runs every case through **real jq** and through the shim
 and compares bytes and exit codes. Real jq does not have to be installed: it is
 located via `PATHFINDER_REAL_JQ`, or fetched ephemerally with
-`nix build nixpkgs#jq`, and the suite skips if neither is available.
+`nix build nixpkgs#jq`, and the suite skips if neither is available. Set
+`PATHFINDER_REQUIRE_JQ=1`, as CI does, to make that skip a hard failure.
+
+The jq it finds must be **1.8.1**, the declared baseline, and the suite checks
+rather than assumes. jq's own surface moves between releases — `trimstr` does
+not exist before 1.8, and `builtins` answers 218 in 1.7.1 against 226 in 1.8.1 —
+so an older jq produces confident-looking mismatches that are really just
+version drift.
 
 This matters more than it sounds. Hand-written golden values encode what the
 author believed jq does — and while building this, four such beliefs turned out

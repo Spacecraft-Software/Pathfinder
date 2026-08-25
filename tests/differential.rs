@@ -12,7 +12,15 @@
 //!
 //! Real jq is not installed on the development host and is not required here:
 //! the suite locates it via `PATHFINDER_REAL_JQ`, or falls back to an ephemeral
-//! `nix build nixpkgs#jq`, and **skips** if neither is available. Nothing is
+//! `nix build nixpkgs#jq`, and **skips** if neither is available. Set
+//! `PATHFINDER_REQUIRE_JQ=1` (as CI does) to turn that skip into a failure.
+//!
+//! The version is checked, not assumed. jq's own surface moves between
+//! releases — `trimstr` does not exist before 1.8, `builtins` answers 218 in
+//! 1.7.1 against 226 in 1.8.1 — so comparing against the wrong jq produces
+//! failures that say nothing about this shim. That is not hypothetical: the
+//! first CI run compared against the runner image's older jq and failed on
+//! three cases for exactly this reason. Nothing is
 //! installed on the host either way.
 
 use std::ffi::OsStr;
@@ -209,8 +217,32 @@ static FILE_CASES: &[Case] = &[
     c("", &["-r", ".a", "f1.json", "f2.json"]),
 ];
 
-/// Locate real jq, or return `None` so the suite skips rather than fails.
+/// The jq release this shim is written against.
+const BASELINE: &str = "jq-1.8.1";
+
+/// Locate a usable real jq, or return `None` so the suite skips rather than fails.
+///
+/// "Usable" includes being the baseline version: an older jq is worse than no
+/// jq, because it produces confident-looking mismatches that are really just
+/// version drift.
 fn real_jq() -> Option<PathBuf> {
+    let path = locate_jq()?;
+    let out = Command::new(&path).arg("--version").output().ok()?;
+    let version = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    if version == BASELINE {
+        return Some(path);
+    }
+    eprintln!(
+        "found {} at {}, but this suite is written against {BASELINE}; \
+         comparing against a different release reports version drift as shim bugs",
+        version,
+        path.display()
+    );
+    None
+}
+
+/// Find a jq binary, without checking which version it is.
+fn locate_jq() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("PATHFINDER_REAL_JQ") {
         return Some(PathBuf::from(p));
     }
@@ -226,6 +258,19 @@ fn real_jq() -> Option<PathBuf> {
     let first = String::from_utf8(out.stdout).ok()?;
     let path = PathBuf::from(first.lines().next()?).join("bin/jq");
     path.exists().then_some(path)
+}
+
+/// Report a missing jq: a warning normally, a hard failure under
+/// `PATHFINDER_REQUIRE_JQ`.
+///
+/// CI sets the variable, because a green tick that quietly skipped the
+/// compatibility contract is worse than a red one.
+fn skip_or_fail(reason: &str) {
+    assert!(
+        std::env::var_os("PATHFINDER_REQUIRE_JQ").is_none(),
+        "PATHFINDER_REQUIRE_JQ is set but {reason}"
+    );
+    eprintln!("skipping: {reason}");
 }
 
 /// The shim binary, invoked under the name `jq` so `argv[0]` dispatch applies.
@@ -262,9 +307,9 @@ fn run(exe: &std::path::Path, cwd: &std::path::Path, case: &Case) -> (Option<i32
 #[test]
 fn shim_matches_real_jq() {
     let Some(jq) = real_jq() else {
-        eprintln!(
-            "skipping: no real jq. Set PATHFINDER_REAL_JQ, or make `nix` available \
-             so `nix build nixpkgs#jq` can supply one ephemerally."
+        skip_or_fail(
+            "no usable jq. Set PATHFINDER_REAL_JQ to a jq-1.8.1 binary, or make `nix` \
+             available so `nix build nixpkgs#jq` can supply one ephemerally.",
         );
         return;
     };
@@ -313,7 +358,7 @@ fn shim_matches_real_jq() {
 #[test]
 fn documented_divergences_still_diverge() {
     let Some(jq) = real_jq() else {
-        eprintln!("skipping: no real jq available");
+        skip_or_fail("no usable jq available");
         return;
     };
     let dir = std::env::temp_dir().join(format!("pathfinder-div-{}", std::process::id()));

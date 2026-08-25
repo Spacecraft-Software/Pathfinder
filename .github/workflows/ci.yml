@@ -10,6 +10,13 @@ on:
 env:
   RUSTFLAGS: "-D warnings"
   CARGO_TERM_COLOR: always
+  # The declared compatibility baseline. The differential suite is only
+  # meaningful against this exact version: the runner image's own jq is older
+  # (it answers `builtins|length` = 218 where 1.8.1 answers 226, and has no
+  # `trimstr`), so comparing against it produces failures that say nothing about
+  # this shim.
+  JQ_BASELINE: "1.8.1"
+  JAQ_VERSION: "3.0.0"
 
 jobs:
   check:
@@ -19,14 +26,29 @@ jobs:
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
-      # jq is installed here so the differential suite actually runs rather than
-      # skipping; a green tick that skipped the compatibility contract would be
-      # worse than no tick at all.
-      - run: sudo apt-get update && sudo apt-get install -y jq
-      - run: cargo install jaq --locked
-      - name: Test against real jq
+
+      - name: Install the baseline jq
+        run: |
+          set -euo pipefail
+          url="https://github.com/jqlang/jq/releases/download/jq-${JQ_BASELINE}/jq-linux-amd64"
+          curl -fsSL "$url" -o /tmp/jq
+          # Official checksum from jqlang/jq's sha256sum.txt for jq-1.8.1.
+          echo "020468de7539ce70ef1bceaf7cde2e8c4f2ca6c3afb84642aabc5c97d9fc2a0d  /tmp/jq" | sha256sum -c -
+          chmod +x /tmp/jq
+          test "$(/tmp/jq --version)" = "jq-${JQ_BASELINE}"
+
+      - name: Install the pinned jaq
+        # Pinned for the same reason as jq: the differential results describe a
+        # specific engine, and an unpinned upgrade would silently change what
+        # the suite is asserting.
+        run: cargo install jaq --locked --version "${JAQ_VERSION}"
+
+      - name: Test against the baseline jq
         env:
-          PATHFINDER_REAL_JQ: /usr/bin/jq
+          PATHFINDER_REAL_JQ: /tmp/jq
+          # Turn "no usable jq" from a silent skip into a hard failure: a green
+          # tick that skipped the compatibility contract is worse than a red one.
+          PATHFINDER_REQUIRE_JQ: "1"
         run: cargo test -- --nocapture
 
   reuse:
