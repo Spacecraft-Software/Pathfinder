@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Audit
+
+# Deliberately NOT a pull-request gate. Advisories are published against
+# dependencies at arbitrary times, so running this per PR would redden a change
+# for a reason unrelated to it and train everyone to ignore a red tick.
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+  push:
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
