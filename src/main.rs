@@ -137,11 +137,11 @@ fn main() {
         return;
     }
 
+    // `exec` never returns: it replaces this process or exits.
     if plan.post.is_identity() && !plan.strip_input_rs && plan.concat_inputs.is_none() {
-        exec(prog, &plan.argv)
-    } else {
-        std::process::exit(pipe(prog, &plan));
+        exec(prog, &plan.argv);
     }
+    std::process::exit(pipe(prog, &plan));
 }
 
 /// Write jaq's input: the concatenated files, or stdin, with RS stripped if
