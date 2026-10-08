@@ -4,7 +4,6 @@
   lib,
   rustPlatform,
   jaq,
-  makeWrapper,
   # Install the `jq` symlink alongside the binary. Off by default so the package
   # can be added to a profile without silently taking over the `jq` name; the
   # flake exposes both variants.
@@ -18,19 +17,19 @@ rustPlatform.buildRustPackage rec {
   src = lib.cleanSource ../.;
   cargoLock.lockFile = ../Cargo.lock;
 
-  nativeBuildInputs = [ makeWrapper ];
+  # Pin jaq by store path rather than trusting the user's PATH: the shim is
+  # useless without it, and a PATH miss would surface as a confusing failure
+  # inside something that looks like jq. The path is compiled in (see
+  # `PINNED_JAQ` in src/main.rs) instead of set by `wrapProgram`, because a
+  # wrapper script would fork a shell before every `jq` call. PATHFINDER_JAQ
+  # still overrides it at run time.
+  env.PATHFINDER_DEFAULT_JAQ = "${jaq}/bin/jaq";
 
-  # The differential suite needs a real jq, which is not a build input here.
-  # It skips cleanly when jq is absent; CI is where it actually runs.
+  # The differential suite needs a real jq 1.8.1, which is not a build input
+  # here. It skips cleanly when none is found; CI is where it actually runs.
   doCheck = true;
 
-  postInstall = ''
-    # Pin jaq by store path rather than trusting the user's PATH: the shim is
-    # useless without it, and a PATH miss would surface as a confusing failure
-    # inside something that looks like jq.
-    wrapProgram "$out/bin/pathfinder" \
-      --set-default PATHFINDER_JAQ "${jaq}/bin/jaq"
-  '' + lib.optionalString withJqShim ''
+  postInstall = lib.optionalString withJqShim ''
     ln -s pathfinder "$out/bin/jq"
   '';
 

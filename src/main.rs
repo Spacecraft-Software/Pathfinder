@@ -186,9 +186,20 @@ fn read_filter_file(path: &OsString) -> io::Result<String> {
     std::fs::read_to_string(path)
 }
 
-/// Locate the jaq binary.
+/// The jaq a packager pinned at build time, if any.
+///
+/// Set by `packaging/default.nix` to a store path. It is compiled in rather
+/// than supplied by a wrapper script because a wrapper would put a shell
+/// process in front of every `jq` call, losing the single-`execve` fast path
+/// this binary exists to keep.
+const PINNED_JAQ: Option<&str> = option_env!("PATHFINDER_DEFAULT_JAQ");
+
+/// Locate the jaq binary: the runtime override, then the build-time pin, then
+/// whatever `jaq` resolves to on `PATH`.
 fn jaq_binary() -> OsString {
-    env::var_os(JAQ_ENV).unwrap_or_else(|| OsString::from("jaq"))
+    env::var_os(JAQ_ENV)
+        .or_else(|| PINNED_JAQ.map(OsString::from))
+        .unwrap_or_else(|| OsString::from("jaq"))
 }
 
 /// Replace this process with jaq. Only returns on failure.

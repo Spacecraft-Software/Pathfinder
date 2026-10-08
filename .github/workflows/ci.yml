@@ -16,7 +16,7 @@ env:
   # `trimstr`), so comparing against it produces failures that say nothing about
   # this shim.
   JQ_BASELINE: "1.8.1"
-  JAQ_VERSION: "3.0.0"
+  JAQ_VERSION: "3.1.0"
 
 jobs:
   check:
