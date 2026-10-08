@@ -8,51 +8,82 @@ SPDX-License-Identifier: CC-BY-SA-4.0
 Where Pathfinder cannot make `jaq` behave like `jq`, and why.
 
 Everything here was measured, not inferred: **jq 1.8.1** (the declared baseline,
-fetched with `nix build nixpkgs#jq`) against **jaq 3.0.0**. The cases Pathfinder
-*does* fix are not listed here — they are in the differential suite
-(`tests/differential.rs`), which asserts byte-for-byte agreement on 108
-invocations.
+fetched with `nix build nixpkgs#jq`) against **jaq 3.0.0, 3.1.0 and 3.1.1**. The
+cases Pathfinder *does* fix are mostly not listed here — they are in the
+differential suite (`tests/differential.rs`), which asserts byte-for-byte
+agreement on 156 invocations.
 
-## The one that will actually bite you: auto-vivification
+## Assignment, deletion and syntax: repaired by rewriting
 
-**jaq does not create missing containers when you assign through them.**
+Pathfinder parses the filter with a transcription of jq 1.8.1's grammar
+(`src/syntax/`) and rewrites what jaq would run differently. Untouched text is
+copied byte for byte; a filter that needs nothing is passed through unchanged.
 
-| filter | input | jq 1.8.1 | jaq 3.0.0 |
+| What | jq 1.8.1 | bare jaq | Pathfinder |
 |---|---|---|---|
-| `.a = 1` | `null` | `{"a":1}` | error |
-| `.a.b = 1` | `{}` | `{"a":{"b":1}}` | error |
-| `.a[0] = 1` | `{}` | `{"a":[1]}` | error |
-| `.[2] = 1` | `[]` | `[null,null,1]` | error |
-| `reduce … (null; .[$k] = 1)` | — | builds the object | error |
+| `null \| .a.b = 1`, `.[2] = 1` on `[]` | builds the containers | error | jq's result |
+| `.[1,2] \|= empty`, `del(.[0,1])` | deletes both | deletes the second against the shortened array | jq's result |
+| `del(.a)`, `.a \|= empty` on `{"a":…,"b":…,"c":…}` | keeps key order | swaps the last key into the hole | jq's order |
+| `. as [$a] ?// $b \| …` | destructuring alternatives | parse error | jq's semantics |
+| `. as {$b: [$c]}` | binds and destructures | parse error | jq's result |
+| `{(0): 1}`, `{(1+1): 2}`, `. as {(true): $x}` | compile error, exit 3 | accepted | jq's error, exit 3 |
+| `module (.+1); 0`, `module []; 0` | compile error | accepted | jq's error |
+| `.a?//1` | syntax error | `.a? // 1` | jq's error |
+| `{(.a): 1}` with a non-string `.a` | run-time error | `{1:1}` — not JSON | jq's error |
+| `{a, $__loc__}` | `"__loc__"` shorthand | parse error | jq's result |
+| `reduce .[] / .[] as $x (…)` | source is a whole expression | parse error | parenthesised |
 
-The error reads `cannot use null as iterable (array or object)`.
+Measured at 100,000 elements, the rewritten assignments take between 0.1× and
+3.6× jq's time (the slow end is building nested fields, `.[].w.x = 1`); `del`
+takes between 0.6× and 2.9×.
 
-**What Pathfinder repairs.** Calls to `setpath` are shadowed with an
-auto-vivifying definition that matches jq exactly — including the cases where jq
-*errors* because the existing value is the wrong type, which a naive widening
-version would silently accept. So `setpath(["a","b"];1)` on `null` works.
+What is still not quite jq:
 
-**What it cannot repair.** The `=`, `|=`, `+=`, `//=` operators. They are syntax,
-not builtins, so no definition can shadow them; rewriting them means parsing jq
-expressions to find the assignment's left- and right-hand sides. That is a
-substantially larger project than the rest of this shim put together.
+- **Error wording on a bad path.** Where jaq's own `path()` or `getpath` fails
+  first, its message is jaq's (`cannot index 1 with "b"`), not jq's.
+- **Fractional indices.** `.[1.5] = 1` and `del(.[1.5])` truncate in jq; jaq
+  rejects the index.
+- **`break` inside a `?//` body.** jq treats it like an error and tries the next
+  alternative; the rewrite, built on `try`, lets it through.
+- **`.[0]` of an object** is `null` in jaq and an error in jq. The `?//` rewrite
+  checks for it, because there it changes which branch runs; elsewhere it does
+  not.
 
-**Working around it.** Seed the container: `.a //= {} | .a.b = 1`, or use
-`setpath`, which is repaired.
-
-`pathfinder --explain '<filter>'` warns when a filter contains an assignment.
+`PATHFINDER_NO_REWRITE=1` hands every filter to jaq unparsed and unchecked.
 
 ## Not repaired, by design
 
 | Case | jq 1.8.1 | jaq 3.0.0 | Why not |
 |---|---|---|---|
-| `"a" * 0` | `""` | `null` | `*` is an operator; same problem as assignment. |
+| `"a" * 0` | `""` | `null` | Repairing it means rewriting every `*`. |
 | `"a" * 0.5` | `""` | error | Same. |
-| `1 / 0` | error | `Infinity` — **invalid JSON on stdout** | Same. Worth knowing about: the output will not parse. |
-| `1e1000` | `1E+1000` | `1e1000` | Number rendering, not semantics. |
+| `1 / 0` | error | `Infinity` — **invalid JSON on stdout** | Same, for `/`. Worth knowing about: the output will not parse. |
 | `"aGk" \| @base64d` (unpadded) | lenient | `Invalid padding` | `@`-formats cannot be defined in the jq language. |
 | `debug` output | `["DEBUG:",1]` | `["DEBUG:", 1]` | Stderr only. Fixing it means capturing stderr, which costs more than the space it saves. |
 | Error text | `jq: error (at <stdin>:0): …` | `Error: …` | Same reason. stderr is passed through untouched so `debug`, colour, and interleaving stay correct. |
+
+## The number model
+
+jq holds every number as a double, keeping a literal's text until it is
+computed on; jaq has integers, floats and literals. Most of the time the output
+is the same. Where it is not, the difference is in how a number is printed, not
+in what was computed — except for the last row.
+
+| Filter | jq 1.8.1 | jaq |
+|---|---|---|
+| `4 / 2`, `[1,2,3] \| add / length`, `1.5 * 2`, `9 \| sqrt` | `2`, `2`, `3`, `3` | `2.0`, `2.0`, `3.0`, `3.0` — also inside `tostring` and `tojson` |
+| `1e3`, `"1e3" \| tonumber` | `1E+3` | `1e3` |
+| `1e17 * 1`, `1e-7 * 1` | `1e+17`, `1e-07` | `1e17`, `1e-7` |
+| `nan`, `infinite` | `null`, `1.7976931348623157e+308` | `NaN`, `Infinity` — **not JSON** |
+| `0 * -1` | `-0` | `0` |
+| `9007199254740993 * 1` | `9007199254740992` (a double) | `9007199254740993` (exact) |
+| `[(1,2) + (10,20)]` | `[11,12,21,22]` | `[11,21,12,22]` |
+
+The last row is semantic: when both operands of an arithmetic or ordering
+operator produce several values, jq iterates the right-hand side in the outer
+loop and jaq the left. `==` and `!=` give the same set either way. Each would
+mean rewriting every arithmetic operator in every filter, which costs every
+user for a difference few filters can observe; they are documented instead.
 
 ## Unsupported, with a diagnostic
 
@@ -130,10 +161,12 @@ jq 1.8.1's own definition, or wraps jaq's builtin, only when the filter uses it:
 | `match`/`test`/`capture` with `[re, flags]` | error | accepted |
 | `ltrimstr`/`rtrimstr`/`startswith`/`endswith` on a non-string | generic error | jq's own message |
 | `setpath` past an array's start / at a huge index | pads or errors oddly | `Out of bounds negative array index` / `Array index too large` |
+| `delpaths` | deletes in the order given; reorders object keys | jq's simultaneous deletion, keys in order |
+| `tonumber` | parses a JSON stream: `"1a"` → `1` then an error, `" 4"` → `4`, `""` → nothing, `"+5.43"` → `+5.43` (not JSON) | jq's grammar: sign, digits, point, exponent, `nan`, `infinity`; anything else is an error |
 
-Still divergent: jaq's `from_entries` (and any object construction with a
-computed key) accepts a non-string key and prints an object that is not JSON
-(`{null:2}`); jq errors.
+Still divergent: jaq's `from_entries` accepts a non-string key and prints an
+object that is not JSON (`{null:2}`); jq errors. (An object *construction* with
+a computed key is checked; see above.)
 
 ## Behaviour Pathfinder adds on top of jaq
 

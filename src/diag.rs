@@ -13,6 +13,9 @@
 /// jq's exit code for any command-line usage failure (`die()` in `jq/src/main.c`).
 pub const EXIT_USAGE: i32 = 2;
 
+/// jq's exit code for a program that does not compile.
+pub const EXIT_COMPILE: i32 = 3;
+
 /// Print a jq-shaped usage error and terminate with jq's usage exit code.
 ///
 /// `prog` is `argv[0]`'s base name, so the message reads `jq: …` when invoked
