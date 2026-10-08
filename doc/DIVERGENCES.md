@@ -114,6 +114,27 @@ each was checked rather than assumed:
   keeps them exact through arithmetic where jq falls back to a double and prints
   `1e+29`.
 
+## Builtins repaired to jq's definitions
+
+jaq has these names, but they behave differently. Pathfinder shadows each with
+jq 1.8.1's own definition, or wraps jaq's builtin, only when the filter uses it:
+
+| Builtin | jaq 3.1 | jq 1.8.1 (and Pathfinder) |
+|---|---|---|
+| `scan("c")` | first match only | every match (`scan` is always global) |
+| `nth(1,2; g)` | one result | one result per index |
+| `mktime`, `strftime`, `strflocaltime`, `todate` | reject a short array like `[2024,2,15]` | pad missing fields with zeros |
+| `limit(-1; …)`, `skip(-1; …)`, `flatten(-1)` | silently empty / everything | error |
+| `join(",")` with `null` items | writes `null` | writes nothing |
+| `pick(.[1])` | `{1:2}` — not JSON | `[null,2]` |
+| `match`/`test`/`capture` with `[re, flags]` | error | accepted |
+| `ltrimstr`/`rtrimstr`/`startswith`/`endswith` on a non-string | generic error | jq's own message |
+| `setpath` past an array's start / at a huge index | pads or errors oddly | `Out of bounds negative array index` / `Array index too large` |
+
+Still divergent: jaq's `from_entries` (and any object construction with a
+computed key) accepts a non-string key and prints an object that is not JSON
+(`{null:2}`); jq errors.
+
 ## Behaviour Pathfinder adds on top of jaq
 
 Not divergences from jq — these are places where jaq differs from jq and
@@ -137,6 +158,10 @@ Pathfinder papers over it, listed so the mechanism is visible:
   jaq's parser keeps the last. Pathfinder de-duplicates before forwarding.
 - **`--argfile`** — removed in jq 1.8.1, so Pathfinder rejects it too rather than
   supporting something the baseline does not.
+- **A leading `-` is data where jq says it is.** jaq reads any argument
+  starting with `-` as a flag, so `jq -1`, a file named `-5`, and
+  `jq --args a -5` all fail on bare jaq. Pathfinder disguises each one (a
+  leading space, `./-5`, a by-name binding).
 - **Unknown flags are rejected, never forwarded.** This is a safety property:
   jaq has `-i/--in-place` and jq does not, so a pass-through shim would turn
   `jq -i '.' data.json` from an error into a silent, irreversible rewrite of the

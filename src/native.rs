@@ -190,7 +190,7 @@ mod tests {
                 force: false
             })
         );
-        assert!(a.is_empty());
+        assert_eq!(a, Vec::<OsString>::new());
 
         let mut a = argv(["--install-shim"].as_ref());
         assert_eq!(

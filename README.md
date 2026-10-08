@@ -35,7 +35,8 @@ the gap where it can and says so precisely where it cannot.
 |---|---|
 | Baseline | jq **1.8.1** |
 | Engine | jaq **3.0.0** |
-| Differential suite | **108 invocations**, byte-identical stdout and exit code |
+| Differential suite | **111 invocations**, byte-identical stdout and exit code |
+| jq's own test suite | **83.8%** (687/820); **95.2%** of the manual's examples — `make conformance` |
 | Known unrepaired divergences | 7, all in [`doc/DIVERGENCES.md`](doc/DIVERGENCES.md) |
 
 ## Install

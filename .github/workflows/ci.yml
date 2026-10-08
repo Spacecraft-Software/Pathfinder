@@ -49,6 +49,8 @@ jobs:
           # Turn "no usable jq" from a silent skip into a hard failure: a green
           # tick that skipped the compatibility contract is worse than a red one.
           PATHFINDER_REQUIRE_JQ: "1"
+          # Same for jaq: the conformance suite must run, never skip.
+          PATHFINDER_REQUIRE_JAQ: "1"
         run: cargo test -- --nocapture
 
   reuse:

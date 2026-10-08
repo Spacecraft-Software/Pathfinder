@@ -1,0 +1,20 @@
+# Cases real jq 1.8.1 fails under tests/conformance.rs: they need fixtures the
+# runner does not provide. Generated, not hand-edited.
+jq.test:661
+jq.test:936
+jq.test:940
+jq.test:944
+jq.test:948
+jq.test:1862
+jq.test:1866
+jq.test:1870
+jq.test:1874
+jq.test:1879
+jq.test:1883
+jq.test:1887
+jq.test:1891
+jq.test:1931
+jq.test:1935
+jq.test:1939
+jq.test:1955
+jq.test:2317

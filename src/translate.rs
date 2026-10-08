@@ -173,15 +173,22 @@ pub fn plan(
         argv.push(payload.clone());
     }
 
-    // `--args` needs no help: jaq's is position-sensitive exactly like jq's and
-    // populates `$ARGS.positional` the same way. Only `--jsonargs`, which jaq
-    // lacks entirely, has to be emulated.
+    // `--args` usually needs no help: jaq's is position-sensitive exactly like
+    // jq's and populates `$ARGS.positional` the same way. The exception is a
+    // positional that starts with `-`: jq takes `--args a -5` as data, jaq
+    // rejects `-5` as an unknown flag. Positionals are user data and cannot be
+    // renamed the way files can, so that case binds each one by name instead,
+    // the same mechanism `--jsonargs` (which jaq lacks entirely) always uses.
+    let dashed_positional = args.positional.iter().any(starts_with_dash);
     let wrap = match args.positional_mode {
+        PositionalMode::Strings if dashed_positional => {
+            Some(positional_wrap(&mut argv, args, "--arg"))
+        }
         PositionalMode::Strings => {
             push!("--args");
             None
         }
-        PositionalMode::Json => Some(jsonargs_wrap(&mut argv, args)),
+        PositionalMode::Json => Some(positional_wrap(&mut argv, args, "--argjson")),
         PositionalMode::Files => None,
     };
 
@@ -205,16 +212,16 @@ pub fn plan(
     let rewritten = assembly.rewritten || wrap.is_some();
     if f.from_file && !rewritten {
         push!("-f");
-        argv.push(args.program.clone().unwrap_or_default());
+        argv.push(not_a_flag_path(&args.program.clone().unwrap_or_default()));
     } else {
-        argv.push(OsString::from(&assembly.text));
+        argv.push(OsString::from(not_a_flag_program(&assembly.text)));
     }
 
     let concat = concat_inputs(args);
     if concat.is_none() {
-        argv.extend(args.files.iter().cloned());
+        argv.extend(args.files.iter().map(not_a_flag_path));
     }
-    if matches!(args.positional_mode, PositionalMode::Strings) {
+    if matches!(args.positional_mode, PositionalMode::Strings) && !dashed_positional {
         argv.extend(args.positional.iter().cloned());
     }
 
@@ -242,6 +249,43 @@ fn concat_inputs(args: &JqArgs) -> Option<Vec<OsString>> {
     (args.files.len() > 1).then(|| args.files.clone())
 }
 
+/// Whether an argument would be read by jaq as a flag.
+///
+/// jq decides with `isoptish`: a `-` followed by another `-` or a letter. jaq's
+/// parser is greedier and takes *any* leading `-` (`-1`, `-5`) as a flag, so a
+/// bare word jq treats as data has to be disguised before it reaches jaq. A
+/// lone `-` is the exception: it means stdin to both.
+fn starts_with_dash(arg: &OsString) -> bool {
+    let b = arg.as_encoded_bytes();
+    b.len() > 1 && b[0] == b'-'
+}
+
+/// A filter jaq will not mistake for a flag.
+///
+/// `jq -1` runs the program `-1`; jaq would read it as an unknown flag. A
+/// leading space changes nothing about the program's meaning.
+fn not_a_flag_program(program: &str) -> String {
+    if program.starts_with('-') {
+        format!(" {program}")
+    } else {
+        program.to_owned()
+    }
+}
+
+/// A file path jaq will not mistake for a flag: `-5` becomes `./-5`.
+///
+/// Not `--` before the files: after `--`, jaq reads `-` as a file literally
+/// named `-` rather than as stdin, which would break `jq . -`.
+fn not_a_flag_path(path: &OsString) -> OsString {
+    if starts_with_dash(path) {
+        let mut p = OsString::from("./");
+        p.push(path);
+        p
+    } else {
+        path.clone()
+    }
+}
+
 /// Decide the stdout transform from the output flags.
 fn post_plan(f: &Flags) -> Post {
     let terminator = if f.ascii_output {
@@ -265,21 +309,23 @@ fn post_plan(f: &Flags) -> Post {
     }
 }
 
-/// Build the `$ARGS` wrap that emulates `--jsonargs`.
+/// Build the `$ARGS` wrap that supplies `$ARGS.positional` by name.
 ///
-/// Each positional is bound individually with `--argjson` so jaq validates them
-/// one at a time, then the wrap *extends* jaq's own `$ARGS` rather than
-/// replacing it. Building the object from scratch would silently drop
-/// `$ARGS.named`, which `--arg` and `--argjson` populate.
+/// Used for `--jsonargs` (`flag = "--argjson"`), which jaq lacks, and for
+/// `--args` values jaq would read as flags (`flag = "--arg"`). Each positional
+/// is bound individually, so with `--argjson` jaq validates them one at a time,
+/// then the wrap *extends* jaq's own `$ARGS` rather than replacing it. Building
+/// the object from scratch would silently drop `$ARGS.named`, which `--arg` and
+/// `--argjson` populate.
 #[expect(
     clippy::similar_names,
     reason = "`args` and `argv` are the domain's own names"
 )]
-fn jsonargs_wrap(argv: &mut Vec<OsString>, args: &JqArgs) -> Wrap {
+fn positional_wrap(argv: &mut Vec<OsString>, args: &JqArgs, flag: &str) -> Wrap {
     let mut names: Vec<String> = Vec::with_capacity(args.positional.len());
     for (i, value) in args.positional.iter().enumerate() {
         let name = format!("{INTERNAL_PREFIX}p{i}");
-        argv.push(OsString::from("--argjson"));
+        argv.push(OsString::from(flag));
         argv.push(OsString::from(&name));
         argv.push(value.clone());
         names.push(format!("${name}"));
@@ -450,6 +496,33 @@ mod tests {
         assert_eq!(
             p.assembly.expect("assembly recorded").injected,
             ["tostream"]
+        );
+    }
+
+    #[test]
+    fn a_program_starting_with_a_dash_is_not_passed_as_a_flag() {
+        // jq runs the program `-1`; jaq would read it as an unknown flag.
+        let p = planned(&["-1"]);
+        assert_eq!(strs(&p), [" -1"]);
+    }
+
+    #[test]
+    fn dash_files_are_disguised_but_stdin_stays_stdin() {
+        // One file at a time: with several, the files are concatenated onto
+        // stdin and never reach jaq's argv at all.
+        assert_eq!(strs(&planned(&[".", "-5"])), [".", "./-5"]);
+        assert_eq!(strs(&planned(&[".", "-"])), [".", "-"]);
+    }
+
+    #[test]
+    fn dashed_args_positionals_are_bound_by_name() {
+        // `jq --args a -5` treats -5 as data; jaq rejects it as a flag.
+        let p = planned(&["-n", "$ARGS", "--args", "a", "-5"]);
+        let a = strs(&p);
+        assert!(!a.contains(&"--args".to_owned()));
+        assert!(
+            a.windows(3)
+                .any(|w| w == ["--arg", "__pathfinder_p1", "-5"])
         );
     }
 
