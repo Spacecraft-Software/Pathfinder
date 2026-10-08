@@ -40,19 +40,36 @@ the gap where it can and says so precisely where it cannot.
 
 ## Install
 
+With Nix, from this flake:
+
+```sh
+nix run github:Spacecraft-Software/Pathfinder -- -r '.a' in.json   # try it
+```
+
+To daily-drive it, add the flake as an input to your system or Home Manager
+configuration and put `packages.${system}.pathfinder-jq` in `home.packages`.
+That variant ships `bin/jq -> pathfinder`; `packages.${system}.default` is the
+binary alone, for when you want Pathfinder without it answering to `jq`. Taking
+over the `jq` name is always an explicit choice.
+
+The Nix build pins jaq by store path at compile time, so a missing or different
+`jaq` on `PATH` cannot break it, and no wrapper script sits in front of the
+binary — a `jq` call is still exactly one `execve` into Pathfinder and one into
+jaq.
+
+Without Nix:
+
 ```sh
 cargo build --release
 ./target/release/pathfinder --install-shim ~/.local/bin
 ```
 
-That creates `~/.local/bin/jq` pointing at the binary. It refuses to overwrite an
-existing `jq` without `--force`.
+That creates `~/.local/bin/jq` pointing at the binary, and refuses to overwrite
+an existing `jq` without `--force`. `jaq` must then be on `PATH`, or named by
+`PATHFINDER_JAQ`. Check that `~/.local/bin` comes before any real jq on your
+`PATH`, or the symlink never wins.
 
-On a declaratively managed host, prefer adding the package to `home.packages` or
-`environment.systemPackages` — `packaging/default.nix` installs the `jq` symlink
-itself. Pathfinder never edits your shell configuration.
-
-`jaq` must be on `PATH`, or named by `PATHFINDER_JAQ`.
+Pathfinder never edits your shell configuration.
 
 ## Use
 
