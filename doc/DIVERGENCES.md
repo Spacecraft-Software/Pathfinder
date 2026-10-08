@@ -49,7 +49,7 @@ What is still not quite jq:
   checks for it, because there it changes which branch runs; elsewhere it does
   not.
 
-`PATHFINDER_NO_REWRITE=1` hands every filter to jaq unparsed.
+`PATHFINDER_NO_REWRITE=1` hands every filter to jaq unparsed and unchecked.
 
 ## Not repaired, by design
 

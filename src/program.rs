@@ -162,6 +162,11 @@ pub fn assemble(
 /// construct that can be rejected: an object key computed with `(…)`, which
 /// follows a `{` or a `,`.
 fn compile_error(src: &str, header_end: usize) -> Option<CompileError> {
+    // The escape hatch covers the checks too: a false rejection must be
+    // avoidable without editing the filter.
+    if std::env::var_os(crate::syntax::rewrite::NO_REWRITE_ENV).is_some() {
+        return None;
+    }
     if let Some(e) = check::module_header(src) {
         return Some(e);
     }
