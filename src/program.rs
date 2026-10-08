@@ -26,6 +26,7 @@ use std::fmt::Write as _;
 
 use crate::prelude;
 use crate::scan::{self, Scan};
+use crate::syntax::check::{self, CompileError};
 
 /// The program to hand to jaq, plus what had to be done to it.
 #[derive(Debug, Clone)]
@@ -43,6 +44,9 @@ pub struct Assembly {
     /// False when `text` is byte-identical to the user's filter, which means the
     /// invocation can keep `-f` and stay on the untouched fast path.
     pub rewritten: bool,
+    /// A compile error jq would report for this program, located in `src`.
+    /// jaq would run the program; jq refuses it, and so must the shim.
+    pub compile_error: Option<CompileError>,
 }
 
 /// A binding to wrap the filter in, as the text before the parenthesised body.
@@ -72,8 +76,6 @@ pub fn assemble(
         .filter(|n| info.calls(n))
         .map(str::to_owned)
         .collect();
-    let prelude_text = prelude::render(&wanted, ctx);
-
     let inexpressible: Vec<(String, &'static str)> = info
         .called
         .iter()
@@ -81,12 +83,41 @@ pub fn assemble(
         .collect();
 
     let header = &src[..info.header_end];
-    let body = substitute_loc(src, &info, loc_file);
+    let compile_error = compile_error(src, info.header_end);
+    let shorthands: Vec<usize> = if info.loc_sites.is_empty() {
+        Vec::new()
+    } else {
+        check::loc_shorthands(&src[info.header_end..])
+            .into_iter()
+            .map(|o| o + info.header_end)
+            .collect()
+    };
+    let body = substitute_loc(src, &info, loc_file, &shorthands);
     let body = body.trim_start_matches(|c: char| c.is_ascii_whitespace());
 
     // jq 1.7+ treats an empty filter as the identity; `X as $ARGS | ( )` is a
     // syntax error, so normalize before wrapping.
     let body: &str = if info.is_effectively_empty { "." } else { body };
+
+    // Rewrite what jaq would run differently from jq (assignment, chiefly).
+    // `None` means the body needed nothing, or could not be parsed: either way
+    // it goes to jaq exactly as written.
+    let rewritten_body = crate::syntax::rewrite::rewrite(body);
+    let mut wanted = wanted;
+    if let Some(rw) = &rewritten_body {
+        for name in &rw.needs {
+            if !wanted.iter().any(|w| w == name) {
+                wanted.push((*name).to_owned());
+            }
+        }
+    }
+    let prelude_text = prelude::render(&wanted, ctx);
+    let body: &str = rewritten_body.as_ref().map_or(body, |rw| rw.text.as_str());
+
+    // Parser validation hook; see `debug_reprint`.
+    let mut inexpressible = inexpressible;
+    let reprinted = debug_reprint(body, &mut inexpressible);
+    let body: &str = reprinted.as_deref().unwrap_or(body);
 
     let mut text = String::with_capacity(src.len() + prelude_text.len() + 64);
     if !header.is_empty() {
@@ -121,6 +152,50 @@ pub fn assemble(
         inexpressible,
         shadowed,
         rewritten,
+        compile_error,
+    }
+}
+
+/// The compile error jq would report for `src`, if any.
+///
+/// Parsing costs something, so the body is only examined when it has a
+/// construct that can be rejected: an object key computed with `(…)`, which
+/// follows a `{` or a `,`.
+fn compile_error(src: &str, header_end: usize) -> Option<CompileError> {
+    if let Some(e) = check::module_header(src) {
+        return Some(e);
+    }
+    let body = &src[header_end..];
+    let toks = crate::syntax::lex::lex(body).ok()?;
+    if !check::has_computed_key(&toks) && !check::has_alternative(&toks) {
+        return None;
+    }
+    let mut e = check::program(body)?;
+    e.span.start += header_end;
+    e.span.end += header_end;
+    Some(e)
+}
+
+/// Environment switch that routes every program through the parser and the
+/// fully parenthesised printer.
+///
+/// A validation hook, not a feature: with it set, the conformance and
+/// differential suites test the parser's every grouping decision against jq's
+/// own expectations, because a wrong decision changes the reprinted program's
+/// meaning. A program the parser rejects is reported as unsupported rather
+/// than passed through, so parser gaps show up as failures too.
+const DEBUG_REPRINT_ENV: &str = "PATHFINDER_DEBUG_REPRINT";
+
+fn debug_reprint(body: &str, inexpressible: &mut Vec<(String, &'static str)>) -> Option<String> {
+    std::env::var_os(DEBUG_REPRINT_ENV)?;
+    if let Ok(tree) = crate::syntax::parse::parse(body) {
+        Some(crate::syntax::print::full(&tree, body))
+    } else {
+        inexpressible.push((
+            "the Pathfinder parser".to_owned(),
+            "rejected this program (PATHFINDER_DEBUG_REPRINT is set)",
+        ));
+        None
     }
 }
 
@@ -128,8 +203,9 @@ pub fn assemble(
 ///
 /// `$__loc__` is a literal, not a function, so it cannot be a `def`. jq
 /// documents it as an object with `file` and `line` keys, both of which
-/// Pathfinder knows at assembly time.
-fn substitute_loc(src: &str, info: &Scan, loc_file: &str) -> String {
+/// Pathfinder knows at assembly time. Used as an object shorthand
+/// (`{$__loc__}`, at an offset in `shorthands`) it means `"__loc__": $__loc__`.
+fn substitute_loc(src: &str, info: &Scan, loc_file: &str, shorthands: &[usize]) -> String {
     const TOKEN_LEN: usize = "$__loc__".len();
     if info.loc_sites.is_empty() {
         return src[info.header_end..].to_owned();
@@ -141,6 +217,9 @@ fn substitute_loc(src: &str, info: &Scan, loc_file: &str) -> String {
             continue;
         }
         out.push_str(&src[cursor..offset]);
+        if shorthands.contains(&offset) {
+            out.push_str(r#""__loc__": "#);
+        }
         let _ = write!(out, r#"{{"file":"{}","line":{}}}"#, escape(loc_file), line);
         cursor = offset + TOKEN_LEN;
     }

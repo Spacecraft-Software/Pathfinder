@@ -31,6 +31,7 @@ mod post;
 mod prelude;
 mod program;
 mod scan;
+mod syntax;
 mod translate;
 
 use std::env;
@@ -129,7 +130,11 @@ fn main() {
 
     let plan = match translate::plan(&args, &read_filter_file) {
         Ok(p) => p,
-        Err(u) => diag::unsupported(prog, &u.feature, &u.detail),
+        Err(translate::Refusal::Unsupported(u)) => diag::unsupported(prog, &u.feature, &u.detail),
+        Err(translate::Refusal::Compile { error, source }) => {
+            eprint!("{}", error.render(prog, &source));
+            std::process::exit(diag::EXIT_COMPILE);
+        }
     };
 
     if matches!(verb, Some(native::Verb::Explain)) {

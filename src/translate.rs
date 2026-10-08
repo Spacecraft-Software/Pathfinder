@@ -62,6 +62,25 @@ impl Unsupported {
     }
 }
 
+/// Why an invocation is not handed to jaq.
+#[derive(Debug, Clone)]
+pub enum Refusal {
+    /// A jq feature jaq cannot provide.
+    Unsupported(Unsupported),
+    /// A program jq refuses to compile. jaq would run it, so the shim reports
+    /// jq's error instead; `source` is the program text the span points into.
+    Compile {
+        error: crate::syntax::check::CompileError,
+        source: String,
+    },
+}
+
+impl From<Unsupported> for Refusal {
+    fn from(u: Unsupported) -> Self {
+        Self::Unsupported(u)
+    }
+}
+
 /// Build the jaq invocation for a parsed jq command line.
 ///
 /// `read_file` supplies the contents of a `-f` filter file, injected so the
@@ -77,11 +96,11 @@ impl Unsupported {
 pub fn plan(
     args: &JqArgs,
     read_file: &dyn Fn(&OsString) -> std::io::Result<String>,
-) -> Result<Plan, Unsupported> {
+) -> Result<Plan, Refusal> {
     let f = &args.flags;
 
     if f.stream {
-        return Err(Unsupported::new(
+        return Err(Refusal::from(Unsupported::new(
             if f.stream_errors {
                 "--stream-errors"
             } else {
@@ -90,7 +109,7 @@ pub fn plan(
             "jaq has no streaming parser. For a filter that only needs the events, \
              `tostream` is materialising but semantically equivalent; for a file too \
              large to hold in memory there is no substitute yet.",
-        ));
+        )));
     }
 
     let post = post_plan(f);
@@ -203,8 +222,12 @@ pub fn plan(
     // came from argv or from `-f`; only an included module reports a path.
     let assembly = program::assemble(&source, &ctx, wrap.as_ref(), LOC_FILE);
 
+    // jq refuses to compile before anything runs, so this comes first.
+    if let Some(error) = assembly.compile_error.clone() {
+        return Err(Refusal::Compile { error, source });
+    }
     if let Some((name, why)) = assembly.inexpressible.first() {
-        return Err(Unsupported::new(name.clone(), (*why).to_string()));
+        return Err(Unsupported::new(name.clone(), (*why).to_string()).into());
     }
 
     // Only give up `-f` when the program actually changed; an untouched filter
@@ -530,7 +553,7 @@ mod tests {
     fn stream_is_refused_by_name() {
         let raw: Vec<OsString> = ["--stream", "."].iter().map(OsString::from).collect();
         let parsed = parse(&raw).expect("parses");
-        let err = plan(&parsed, &no_files).expect_err("must refuse");
+        let err = unsupported(plan(&parsed, &no_files).expect_err("must refuse"));
         assert_eq!(err.feature, "--stream");
         assert!(
             err.detail.contains("tostream"),
@@ -542,8 +565,28 @@ mod tests {
     fn inexpressible_builtins_are_refused_by_name() {
         let raw: Vec<OsString> = ["input_line_number"].iter().map(OsString::from).collect();
         let parsed = parse(&raw).expect("parses");
-        let err = plan(&parsed, &no_files).expect_err("must refuse");
+        let err = unsupported(plan(&parsed, &no_files).expect_err("must refuse"));
         assert_eq!(err.feature, "input_line_number");
+    }
+
+    fn unsupported(r: super::Refusal) -> super::Unsupported {
+        match r {
+            super::Refusal::Unsupported(u) => u,
+            super::Refusal::Compile { error, .. } => panic!("unexpected compile error: {error:?}"),
+        }
+    }
+
+    #[test]
+    fn a_program_jq_will_not_compile_is_refused_with_its_error() {
+        let raw: Vec<OsString> = ["{(0):1}"].iter().map(OsString::from).collect();
+        let parsed = parse(&raw).expect("parses");
+        match plan(&parsed, &no_files).expect_err("must refuse") {
+            super::Refusal::Compile { error, source } => {
+                assert_eq!(error.message, "Cannot use number (0) as object key");
+                assert_eq!(source, "{(0):1}");
+            }
+            super::Refusal::Unsupported(u) => panic!("wrong refusal: {u:?}"),
+        }
     }
 
     #[test]

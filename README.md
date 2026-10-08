@@ -8,11 +8,12 @@ SPDX-License-Identifier: CC-BY-SA-4.0
 **A `jq`-compatible shim over [`jaq`](https://github.com/01mf02/jaq).**
 
 Pathfinder accepts jq's exact command line, translates it into jaq's, rewrites
-the filter when a missing builtin needs supplying, and hands off to jaq. Install
-it as `jq` and existing scripts keep working.
+the filter where jaq would run it differently, and hands off to jaq. Install it
+as `jq` and existing scripts keep working.
 
-Not a jq implementation: it implements none of the jq language. jaq does the
-work; Pathfinder is the translation layer in front of it.
+Not a jq implementation: it parses jq, so that it can rewrite assignments,
+syntax jaq lacks, and programs jq refuses to compile — but it evaluates nothing.
+jaq does the work; Pathfinder is the translation layer in front of it.
 
 ## Why
 
@@ -24,7 +25,8 @@ described as one. Measured against jq 1.8.1:
 - Twenty-two jq builtins are `undefined filter`.
 - **jaq does not auto-vivify**: `null | .a = 1` and `{} | .a.b = 1` error, where
   jq builds the containers. This is the one that breaks real scripts, and it is
-  not mentioned in any of the "drop-in replacement" write-ups.
+  not mentioned in any of the "drop-in replacement" write-ups. Pathfinder
+  rewrites the assignment so it does.
 
 `alias jq = jaq` hides all of that until it fails at runtime. Pathfinder closes
 the gap where it can and says so precisely where it cannot.
@@ -34,10 +36,10 @@ the gap where it can and says so precisely where it cannot.
 | | |
 |---|---|
 | Baseline | jq **1.8.1** |
-| Engine | jaq **3.0.0** |
-| Differential suite | **111 invocations**, byte-identical stdout and exit code |
-| jq's own test suite | **83.8%** (687/820); **95.2%** of the manual's examples — `make conformance` |
-| Known unrepaired divergences | 7, all in [`doc/DIVERGENCES.md`](doc/DIVERGENCES.md) |
+| Engine | jaq **3.0.0, 3.1.0, 3.1.1** (CI pins 3.1.0) |
+| Differential suite | **156 invocations**, byte-identical stdout and exit code |
+| jq's own test suite | **89.1%** (731/820); **98.7%** of the manual's examples — `make conformance` |
+| Known unrepaired divergences | All in [`doc/DIVERGENCES.md`](doc/DIVERGENCES.md), measured |
 
 ## Install
 
@@ -119,8 +121,8 @@ argv[0] ──► parse jq's grammar ──► translate flags ──► exec ja
 ## Scope
 
 Pathfinder will not silently change what a filter means. Where jaq's semantics
-differ from jq's in a way that cannot be repaired from the filter level — the
-assignment operators, `*`, `/` — it documents and warns rather than guessing.
+differ from jq's in a way it does not repair — the number model, the order in
+which `(a,b) + (c,d)` combines — it documents rather than guessing.
 
 It also refuses to be *more* permissive than jq. `leaf_paths`, `ascii`,
 `isvalid`, `toarray`, `ANY`, `ALL`, `@base32` and friends are missing from jaq,

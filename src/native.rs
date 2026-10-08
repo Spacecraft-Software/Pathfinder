@@ -67,14 +67,14 @@ pub fn explain(args: &JqArgs, plan: &Plan) {
         );
     }
 
-    // Assignment operators are the one common divergence Pathfinder cannot
-    // repair, so say so where the user is already looking.
-    if uses_assignment(args) {
+    if let Some(a) = &plan.assembly
+        && a.rewritten
+        && uses_assignment(args)
+    {
         println!(
-            "\nnote: this filter assigns to a path. jaq does not create missing \
-             containers the way jq does, so `null | .a.b = 1` errors instead of \
-             producing {{\"a\":{{\"b\":1}}}}. Calls to `setpath` are repaired; the \
-             `=`, `|=` and `+=` operators cannot be. See doc/DIVERGENCES.md."
+            "\nnote: this filter assigns to or deletes a path. Pathfinder rewrote it so \
+             jaq creates missing containers and deletes the way jq does. Set \
+             PATHFINDER_NO_REWRITE=1 to compare with jaq's own behaviour."
         );
     }
 }

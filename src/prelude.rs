@@ -57,10 +57,11 @@ const JQ_BUILTINS: &str = include_str!("embed/jq-builtins.json");
 /// written on top of that behaviour, so without this helper they cannot be
 /// polyfilled at all.
 ///
-/// Only `null` is widened. A path that indexes a *wrong-typed* existing value
-/// still errors, matching jq — including the object-indexed-by-number case,
-/// which jaq's own `.[$k] = v` would otherwise accept and turn into a
-/// non-string object key.
+/// Only `null` is widened. Every key is checked against its container the way
+/// jq's `jv_set` checks it — a wrong-typed key errors with jq's message rather
+/// than letting jaq's own `.[$k] = v` build an object with a non-string key,
+/// which is not JSON. Slice keys (`{start, end}`) replace that slice with an
+/// array, and fractional array indices truncate, as in jq.
 ///
 /// It also reproduces jq's two array-index errors. A negative index reaching
 /// before the start of the array is `Out of bounds negative array index`, and
@@ -68,17 +69,31 @@ const JQ_BUILTINS: &str = include_str!("embed/jq-builtins.json");
 /// is `Array index too large`. Without the second guard, `.[999999999] = 0`
 /// would pad a billion-element array instead of erroring.
 const SETPATH_BODY: &str = concat!(
-    "if ($p|length) == 0 then $v else ($p[0]) as $k ",
-    "| (if . == null then (if ($k|type) == \"number\" then [] else {} end) else . end) as $c ",
-    "| (if ($k|type) == \"number\" and ($c|type) == \"object\" ",
-    "then error(\"Cannot index object with number\") else . end) ",
-    "| (if ($k|type) == \"number\" and ($c|type) == \"array\" and $k < 0 and ($k + ($c|length)) < 0 ",
-    "then error(\"Out of bounds negative array index\") else . end) ",
-    "| (if ($k|type) == \"number\" and $k > 536870911 ",
-    "then error(\"Array index too large\") else . end) ",
-    "| (if ($k|type) == \"number\" and ($c|type) == \"array\" and $k >= ($c|length) ",
-    "then $c + [range($c|length; $k+1) | null] else $c end) as $d ",
-    "| $d | .[$k] = (($d|.[$k]) | _pf_setpath($p[1:]; $v)) end"
+    "if ($p|length) == 0 then $v else ($p[0]) as $k | ($k|type) as $kt ",
+    // The container, created from null by key type, or the type error jq gives.
+    "| (if . == null then (if $kt == \"number\" or $kt == \"object\" then [] ",
+    "elif $kt == \"string\" then {} else error(\"Cannot index null with \\($kt)\") end) ",
+    "elif type == \"object\" then (if $kt == \"string\" then . ",
+    "else error(\"Cannot index object with \\($kt)\") end) ",
+    "elif type == \"array\" then (if $kt == \"number\" or $kt == \"object\" then . ",
+    "else error(\"Cannot update field at \\($kt) index of array\") end) ",
+    "else error(\"Cannot index \\(type) with \\($kt)\") end) as $c ",
+    // A slice key: both bounds must be numbers; the slice is replaced by an array.
+    "| if $kt == \"object\" then ",
+    "(if ($k|has(\"start\") and has(\"end\")) and ([$k.start, $k.end] | all(type == \"number\" or type == \"null\")) | not ",
+    "then error(\"Array/string slice indices must be integers\") else . end) ",
+    "| _pf_slice($k; $c|length) as [$s, $e] ",
+    "| (if ($p|length) == 1 then $v else ($c[$s:$e] | _pf_setpath($p[1:]; $v)) end) as $new ",
+    "| (if ($new|type) != \"array\" then error(\"A slice of an array can only be assigned another array\") else . end) ",
+    "| $c[:$s] + $new + $c[$e:] ",
+    // A number key: truncated to an integer; jq's two index errors; padding.
+    "elif $kt == \"number\" then ($k|_pf_toint) as $ki ",
+    "| (if $ki < 0 and ($ki + ($c|length)) < 0 then error(\"Out of bounds negative array index\") else . end) ",
+    "| (if $ki > 536870911 then error(\"Array index too large\") else . end) ",
+    "| (if $ki >= ($c|length) then $c + [range($c|length; $ki+1) | null] else $c end) as $d ",
+    "| $d | .[$ki] = (($d|.[$ki]) | _pf_setpath($p[1:]; $v)) ",
+    // A string key on an object.
+    "else $c | .[$k] = (($c|.[$k]) | _pf_setpath($p[1:]; $v)) end end"
 );
 
 /// One injectable definition.
@@ -228,6 +243,26 @@ static REPAIRS: &[Def] = &[
         deps: &["todateiso8601"],
         src: Some("def todate: todateiso8601;"),
     },
+    // --- deletion -----------------------------------------------------------
+    // jaq's `delpaths` deletes in the order given, so an earlier deletion
+    // shifts the indices of later ones: `["a","b","c"] | del(.[0,1])` is
+    // `["b"]` under jaq and `["c"]` under jq. It also errors on out-of-range
+    // indices and `null` intermediates, which jq ignores, and outputs nothing
+    // for `delpaths([[]])`. These shadows run jq's algorithm (`jv_delpaths` in
+    // jq's src/jv_aux.c): sort, group by leading key, recurse, and delete a
+    // container's keys all at once against its original length.
+    Def {
+        name: "delpaths",
+        deps: &["_pf_delpaths"],
+        src: Some("def delpaths($ps): _pf_delpaths($ps);"),
+    },
+    Def {
+        name: "del",
+        // `_pf_del0` is not used here; depending on it guarantees the alias of
+        // jaq's own `del` is emitted before this shadow, whichever comes first.
+        deps: &["_pf_del0", "_pf_delpaths"],
+        src: Some("def del(f): _pf_delpaths([path(f)]);"),
+    },
     // --- regex ------------------------------------------------------------
     // jq's `scan` is always global: its definition matches with `"g" + $flags`.
     // jaq's `scan/1` returns only the first match (`"abcdc" | [scan("c")]` is
@@ -329,6 +364,45 @@ static REPAIRS: &[Def] = &[
              else error(\"endswith() requires string inputs\") end;",
         ),
     },
+    // jaq's `tonumber` parses the string as a stream of JSON values: `"1a"`
+    // yields `1` and then an error, `""` yields nothing, `" 4"` is accepted.
+    // jq 1.8.1 accepts exactly an optional sign, digits with an optional point
+    // (or a leading one), an optional exponent, and `nan`/`infinity` in any
+    // case. A string jaq's `tonumber` reads in full — its first number prints
+    // back as the string — is already right; anything else takes the exact
+    // path, which normalises valid strings to JSON's spelling (no `+`, no bare
+    // point) and raises jq's error for the rest — including the strings jaq
+    // reads as no value at all (`""`), which fall past the label. A float
+    // keeps its literal text in jaq, sign included, so `"+5.43"` would print
+    // back as itself — and as invalid JSON — and is sent the exact way. Measured on
+    // `map(tonumber)`: the exact path alone ran 35x slower than jq; this shape
+    // costs 1.5x jaq's own `tonumber`.
+    Def {
+        name: "tonumber",
+        deps: &[],
+        src: Some(
+            "def _pf_tonumber0: tonumber; \
+             def _pf_tonumber_exact: if type == \"string\" \
+             and test(\"^[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][+-]?[0-9]+)?$\") then \
+             (if .[:1] == \"+\" then .[1:] else . end) \
+             | (if .[:1] == \"-\" then \"-\" else \"\" end) as $s | .[($s | length):] \
+             | split(\".\") as $p \
+             | (if ($p | length) == 1 then $p[0] \
+             elif $p[1] == \"\" or ($p[1][:1] | . == \"e\" or . == \"E\") then (if $p[0] == \"\" then \"0\" else $p[0] end) + $p[1] \
+             else (if $p[0] == \"\" then \"0\" else $p[0] end) + \".\" + $p[1] end) \
+             | $s + . | _pf_tonumber0 \
+             elif type == \"string\" and (ascii_downcase | . == \"nan\" or . == \"-nan\" or . == \"+nan\") then nan \
+             elif type == \"string\" and (ascii_downcase | . == \"infinity\" or . == \"+infinity\") then infinite \
+             elif type == \"string\" and ascii_downcase == \"-infinity\" then 0 - infinite \
+             else error(\"\\(type) (\\(tojson | if length > 14 then .[:11] + \"...\" else . end)) cannot be parsed as a number\") end; \
+             def tonumber: label $__pf_o \
+             | ((try _pf_tonumber0 catch null) as $__pf_r \
+             | ($__pf_r | tostring) as $__pf_t \
+             | if ($__pf_r | type) == \"number\" and $__pf_t == tostring and $__pf_t[:1] != \"+\" \
+             then $__pf_r, break $__pf_o else _pf_tonumber_exact, break $__pf_o end), \
+             _pf_tonumber_exact;",
+        ),
+    },
     Def {
         name: "ltrimstr",
         deps: &["startswith"],
@@ -411,8 +485,204 @@ static REPAIRS: &[Def] = &[
 static INTERNAL: &[Def] = &[
     Def {
         name: "_pf_setpath",
-        deps: &[],
+        deps: &["_pf_slice", "_pf_toint"],
         src: None,
+    },
+    // `(int)` in C truncates toward zero.
+    Def {
+        name: "_pf_toint",
+        deps: &[],
+        src: Some("def _pf_toint: if . < 0 then ceil else floor end;"),
+    },
+    // jq's `parse_slice`: a `{start, end}` key against an array of length
+    // `$len`, as `[start, end)`. Start rounds down, end rounds up.
+    Def {
+        name: "_pf_slice",
+        deps: &[],
+        src: Some(
+            "def _pf_slice($s; $len): (if $s.start == null then 0 else $s.start end) as $a \
+             | (if $s.end == null then $len else $s.end end) as $b \
+             | if ($a|type) != \"number\" or ($b|type) != \"number\" \
+             then error(\"Array/string slice indices must be integers\") \
+             else ($a | if isnan then 0 else . end | if . < 0 then . + $len else . end \
+             | if . < 0 then 0 elif . > $len then $len else . end | floor) as $start \
+             | ($b | if isnan then $len else . end | if . < 0 then . + $len else . end) as $dend \
+             | (if $dend < 0 then $start else ($dend | floor) end) as $e0 \
+             | ([$e0, $len] | min) as $e1 \
+             | (if $e1 < $len and $e1 < $dend then $e1 + 1 else $e1 end) as $e2 \
+             | [$start, ([$e2, $start] | max)] end;",
+        ),
+    },
+    // jaq's own `del`, reachable after the repair shadows it.
+    Def {
+        name: "_pf_del0",
+        deps: &[],
+        src: Some("def _pf_del0(f): del(f);"),
+    },
+    // An index or slice deletion with jaq's own `del`, on arrays only: jaq
+    // quietly ignores `del(.[0])` on an object, where jq raises an error, so
+    // anything else is refused for the rewriter's fallback to answer.
+    Def {
+        name: "_pf_delat",
+        deps: &["_pf_del0"],
+        src: Some(
+            "def _pf_delat(f): if type == \"array\" then _pf_del0(f) \
+             else error(\"pathfinder: not an array\") end;",
+        ),
+    },
+    // Order-preserving deletion of named keys. jaq deletes a key named
+    // directly (`del(.a)`) by swapping the last key into its place, so jq's key
+    // order is lost; rebuilding keeps it. Anything but an object is refused so
+    // the rewriter's fallback can answer as jq does.
+    Def {
+        name: "_pf_delkeys",
+        deps: &[],
+        src: Some(
+            "def _pf_delkeys($ks): if type == \"object\" then . as $o \
+             | if any($ks[]; . as $k | $o | has($k)) \
+             then reduce (keys_unsorted[] | select(. as $x | all($ks[]; . != $x))) as $x ({}; .[$x] = $o[$x]) \
+             else . end \
+             else error(\"pathfinder: not an object\") end;",
+        ),
+    },
+    // jq's `jv_dels`: delete a set of keys from one container, all at once.
+    // A few plain indices are deleted natively from the highest down, which is
+    // the same as deleting them simultaneously; many indices, or any slice,
+    // rebuild the array in one pass through a deletion mask instead (one
+    // native delete per index, or a membership scan per element, is quadratic).
+    Def {
+        name: "_pf_dels",
+        deps: &["_pf_toint", "_pf_slice", "_pf_delkeys"],
+        src: Some(
+            "def _pf_dels($keys): if type == \"null\" or ($keys | length) == 0 then . \
+             elif type == \"array\" then length as $len \
+             | if ($keys | length) <= 32 and all($keys[]; type == \"number\") then \
+             reduce ($keys | map(if . < 0 then $len + (.|_pf_toint) else (.|_pf_toint) end) \
+             | unique | reverse[] | select(. >= 0 and . < $len)) as $i (.; del(.[$i])) \
+             else . as $a | (reduce $keys[] as $k ([range($len) | false]; \
+             if ($k|type) == \"number\" then (if $k < 0 then $len + ($k|_pf_toint) else ($k|_pf_toint) end) as $i \
+             | if $i >= 0 and $i < $len then .[$i] = true else . end \
+             elif ($k|type) == \"object\" then _pf_slice($k; $len) as [$f, $t] \
+             | reduce range($f; $t) as $i (.; .[$i] = true) \
+             else error(\"Cannot delete \\($k|type) element of array\") end)) as $m \
+             | [range($len) as $i | select($m[$i] | not) | $a[$i]] end \
+             elif type == \"object\" then \
+             if any($keys[]; type != \"string\") \
+             then error(\"Cannot delete \\(first($keys[] | select(type != \"string\")) | type) field of object\") \
+             else _pf_delkeys($keys) end \
+             else error(\"Cannot delete fields from \\(type)\") end;",
+        ),
+    },
+    // jq's `delpaths_sorted`: group paths by leading key; recurse into groups
+    // that go deeper (skipping `null` sub-values), then delete the whole keys
+    // via `_pf_dels`. The two sets of keys are disjoint, so the order is free;
+    // collecting the keys in one array keeps it linear. A key that just read a
+    // non-null value exists, so jaq's own in-place `.[$k] =` is safe for it.
+    Def {
+        name: "_pf_delsorted",
+        deps: &["_pf_dels", "_pf_setpath"],
+        src: Some(
+            "def _pf_delsorted($ps): ($ps | group_by(.[0])) as $gs \
+             | reduce ($gs[] | select(all(.[]; length > 1))) as $g (.; \
+             ($g[0][0]) as $k | .[$k] as $sub \
+             | if $sub == null then . \
+             else ($sub | _pf_delsorted($g | map(.[1:]))) as $new \
+             | if ($k|type) == \"string\" or (($k|type) == \"number\" and $k >= 0 and $k == ($k|floor)) \
+             then .[$k] = $new else _pf_setpath([$k]; $new) end end) \
+             | _pf_dels([$gs[] | select(any(.[]; length == 1)) | .[0][0]]);",
+        ),
+    },
+    // jq's `jv_delpaths`: validate, sort, and handle deleting the root.
+    Def {
+        name: "_pf_delpaths",
+        deps: &["_pf_delsorted"],
+        src: Some(
+            "def _pf_delpaths($paths): if ($paths|type) != \"array\" \
+             then error(\"Paths must be specified as an array\") \
+             else ($paths | sort) as $ps \
+             | if any($ps[]; type != \"array\") then error(\"Path must be specified as array, not \\(first($ps[] | select(type != \"array\")) | type)\") \
+             elif ($ps | length) == 0 then . \
+             elif ($ps[0] | length) == 0 then null \
+             else _pf_delsorted($ps) end end;",
+        ),
+    },
+    // The pre-pass that lets jaq's own (fast) assignment run with jq's
+    // semantics. Measured: where every container on a path already exists,
+    // jaq's native `=`, `|=` and `op=` agree with jq — `|= empty`, multiple
+    // outputs, slices. They differ only where a container is missing, an array
+    // index is past the end, or a key is the wrong type for its container. This
+    // walks each path the assignment will touch and fixes exactly those,
+    // without touching the leaf value: `null` containers become `[]`/`{}` by
+    // key type, short arrays are padded with `null`, and a bad key raises jq's
+    // own error. Writes happen only where something is missing, so on data
+    // that needs nothing it reads paths and passes the document through. The
+    // common case — the leaf's parent exists, has the right type, and the
+    // index is in range — is decided by one `getpath` and a type test; only
+    // the rest walks the path level by level. The check is written inline
+    // rather than as a helper: calling a jq-defined function costs jaq about
+    // 15 µs, which dominated the whole pre-pass (2 s for 100,000 elements
+    // with a helper, under 0.7 s inline — faster than jq itself).
+    //
+    // Why not jq's `_modify`: jq writes it with a builtin-private `$$$$v` that
+    // releases the reference it reads, letting the update happen in place.
+    // Without that, jaq copies the whole container on every path, so
+    // `.[] |= f` became quadratic — 2.4 s for 10,000 elements against jaq's
+    // 17 ms.
+    Def {
+        name: "_pf_vivify",
+        deps: &["_pf_toint"],
+        src: Some(
+            "def _pf_vivify_slow($p): \
+             ((first(range($p|length) as $i | select(($p[$i]|type) as $t \
+             | $t != \"number\" and $t != \"string\") | $i)) // ($p|length)) as $lim \
+             | reduce range(0; [$lim + 1, ($p|length)] | min) as $i (.; \
+             ($p[$i]) as $k | ($k|type) as $kt | getpath($p[:$i]) as $c | ($c|type) as $ct \
+             | if $kt == \"number\" and ($ct == \"null\" or $ct == \"array\") then \
+             (if $ct == \"null\" then [] else $c end) as $a | ($k|_pf_toint) as $ki \
+             | if $ki < 0 and ($ki + ($a|length)) < 0 then error(\"Out of bounds negative array index\") \
+             elif $ki > 536870911 then error(\"Array index too large\") \
+             elif $ct == \"null\" or $ki >= ($a|length) \
+             then setpath($p[:$i]; $a + [range($a|length; [$ki + 1, ($a|length)] | max) | null]) \
+             else . end \
+             elif $ct == \"null\" then \
+             (if $kt == \"string\" then setpath($p[:$i]; {}) elif $kt == \"object\" then setpath($p[:$i]; []) \
+             else error(\"Cannot index null with \\($kt)\") end) \
+             elif $ct == \"object\" then (if $kt == \"string\" then . else error(\"Cannot index object with \\($kt)\") end) \
+             elif $ct == \"array\" then (if $kt == \"object\" then . else error(\"Cannot update field at \\($kt) index of array\") end) \
+             else error(\"Cannot index \\($ct) with \\($kt)\") end); \
+             def _pf_vivify(paths): reduce path(paths) as $p (.; \
+             if ($p|length) > 0 and (try (($p[-1]) as $k | getpath($p[:-1]) \
+             | (type == \"object\" and ($k|type) == \"string\") \
+             or (type == \"array\" and ($k|type) == \"number\" and $k == ($k|floor) \
+             and $k < length and $k + length >= 0)) catch false) \
+             then . else _pf_vivify_slow($p) end);",
+        ),
+    },
+    // jq's assignment builtins, which the parser-based rewrite in
+    // `syntax::rewrite` calls in place of the `=` / `|=` / `op=` operators.
+    // jq 1.8.1's `_assign` and `_modify`, verbatim except: `setpath` and
+    // `delpaths` become `_pf_setpath` (auto-vivifying, which is the point) and
+    // `_pf_delpaths` (jq's deletion order, so `|= empty` deletes correctly),
+    // and jq's builtin-private `$$$$v` spelling (a variable read that also
+    // releases it) becomes an ordinary variable with the same value.
+    Def {
+        name: "_pf_assign",
+        deps: &["_pf_setpath"],
+        src: Some(
+            "def _pf_assign(paths; $value): reduce path(paths) as $p (.; _pf_setpath($p; $value));",
+        ),
+    },
+    Def {
+        name: "_pf_modify",
+        deps: &["_pf_setpath", "_pf_delpaths"],
+        src: Some(
+            "def _pf_modify(paths; update): reduce path(paths) as $p ([., []]; \
+             . as $__pf_dot | null | label $__pf_out | ($__pf_dot[0] | getpath($p)) as $__pf_v \
+             | (($__pf_v | update | (., break $__pf_out) as $__pf_v | $__pf_dot \
+             | _pf_setpath([0] + $p; $__pf_v)), \
+             ($__pf_dot | _pf_setpath([1, (.[1] | length)]; $p)))) \
+             | . as $__pf_dot | $__pf_dot[0] | _pf_delpaths($__pf_dot[1]);",
+        ),
     },
     // Pad a short broken-down-time array to jq's eight fields with zeros.
     Def {
@@ -517,7 +787,9 @@ pub fn inexpressible(name: &str) -> Option<&'static str> {
 pub fn render(wanted: &[String], ctx: &Context) -> String {
     let mut chosen: Vec<&'static str> = Vec::new();
     for name in wanted {
-        if let Some(def) = find(name, POLYFILLS).or_else(|| find(name, REPAIRS)) {
+        // Internal helpers are wanted by name too: the syntax rewriter asks for
+        // `_pf_assign`/`_pf_modify` directly.
+        if let Some(def) = lookup(name) {
             push_with_deps(def, &mut chosen);
         }
     }

@@ -7,8 +7,9 @@ file is only what is true *here*.
 ## What this is
 
 A single-crate binary, `pathfinder`, installed with a `jq` symlink beside it. It
-translates jq's command line into jaq's and hands off. It implements none of the
-jq language.
+translates jq's command line into jaq's, rewrites the filter where jaq would run
+it differently, and hands off. It parses jq (`src/syntax/`) but evaluates
+nothing.
 
 Baseline is **jq 1.8.1**. The differential suite passes unchanged against jaq
 **3.0.0, 3.1.0 and 3.1.1**; CI pins 3.1.0, the version nixpkgs 26.05 ships and
@@ -82,6 +83,36 @@ hand-written golden.
 - **stderr is inherited, never captured**, so jaq's diagnostics, `debug` output,
   colour detection and interleaving stay correct.
 
+### The parser and the rewriter (`src/syntax/`)
+
+- **The grammar is jq's.** `parse.rs` mirrors `src/parser.y`'s rules and
+  precedence, `lex.rs` mirrors `src/lexer.l`. Validate a grouping change with
+  `PATHFINDER_DEBUG_REPRINT=1 make conformance`, which runs the whole suite
+  through the fully parenthesised printer.
+- **Splice, never reprint.** Only rewritten nodes are re-emitted; every other
+  byte is copied from the source. A rewritten node is always parenthesised.
+- **A parse failure passes the filter through** — it may be a gap in this
+  parser. Only a construct *proven* to be a jq compile error exits 3: a constant
+  non-string object key (by jq's own folding rules, `check.rs`), non-constant or
+  non-object `module` metadata, and a parse failure *at* a `?//` token.
+- **Assignment is vivify-then-native.** Prepare the containers (inline guard for
+  a literal target, `_pf_vivify` otherwise), then let jaq's own operator run —
+  it matches jq once the containers exist. jq's `_modify` transcribed into jaq
+  is quadratic (2.4 s for 10k elements); a comma target is the only thing still
+  sent through `_pf_modify`.
+- **`del(f)` uses jaq's `del` only where it is jq's**: one path per array
+  (`single_path`), a deleting step that is not a named key (jaq swap-removes
+  keys, breaking order), with `try … catch` falling back to `_pf_delpaths` on
+  the original input. The fallback evaluates the target twice, so effectful
+  calls (`input`, `debug`, …) keep a target off this route (`repeatable`).
+- **Program-defined names disable reasoning about them.** If the filter defines
+  `del`, `select`, or a name `single_valued` trusts, the `del` route is off.
+- **Emit `.[a][b]`, never `.[a].[b]`** — jaq 3.0 does not parse the latter.
+- **Measure the cost of a jq-level definition before adding one per element.**
+  A filter-parameter call, `first`, and `if type == …` each cost hundreds of
+  milliseconds per 100k calls under jaq; inline text and `label`/`break` were
+  the measured winners (`tonumber`, key deletion).
+
 ## Conformance
 
 `tests/conformance.rs` runs jq 1.8.1's own test suite (`tests/jq-suite/`,
@@ -107,6 +138,10 @@ pass rates; `V=1` lists every failure.
 | `src/translate.rs` | jq argv → jaq argv. The only module that knows both dialects. |
 | `src/post.rs` | `-a` and `--seq` byte transforms. |
 | `src/native.rs` | `--explain` / `--install-shim`, reachable only under the native name. |
+| `src/syntax/lex.rs`, `parse.rs` | jq's lexer and grammar, transcribed. Every node keeps its span. |
+| `src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
+| `src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
+| `src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
 | `tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
 | `tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
 
