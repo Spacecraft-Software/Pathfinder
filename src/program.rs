@@ -170,7 +170,7 @@ mod tests {
             !a.rewritten,
             "no rewrite means the exec fast path stays available"
         );
-        assert!(a.injected.is_empty());
+        assert_eq!(a.injected, Vec::<String>::new());
     }
 
     #[test]
