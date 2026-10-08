@@ -4,7 +4,7 @@
 CARGO ?= cargo
 PREFIX ?= $(HOME)/.local
 
-.PHONY: all check fmt lint test diff build install clean reuse
+.PHONY: all check fmt lint test diff conformance build install clean reuse
 
 all: build
 
@@ -26,6 +26,11 @@ test:
 # nix when PATHFINDER_REAL_JQ is unset; nothing is installed on the host.
 diff:
 	$(CARGO) test --test differential -- --nocapture
+
+# jq 1.8.1's own test suite through the shim: per-file pass rates, the FLOOR
+# ratchet, and (with V=1) every failing case. Needs jaq, not jq.
+conformance:
+	$(if $(V),PATHFINDER_CONFORMANCE_VERBOSE=1) $(CARGO) test --test conformance -- --nocapture
 
 # Installs the binary and the `jq` symlink into $(PREFIX)/bin.
 # Refuses to clobber an existing jq; pass FORCE=--force to override.

@@ -82,6 +82,9 @@ static CASES: &[Case] = &[
     c(r#"{"a":9}"#, &["-c", ".", "-"]),
     c("null", &["-nc", "--arg", "a", "1", "--arg", "a", "2", "$a"]),
     c("null", &["-nc", "--arg", "x", "1", "$ARGS"]),
+    // jq reads `-1` and `-5` as data here; jaq would read them as flags.
+    c("null", &["-c", "-1"]),
+    c("null", &["-nc", "$ARGS", "--args", "a", "-5"]),
     c("null", &["-nc", "--args", "$ARGS", "p", "q"]),
     c("null", &["-nc", "--jsonargs", "$ARGS", "1", r#"{"a":2}"#]),
     c(
@@ -215,6 +218,8 @@ static FILE_CASES: &[Case] = &[
     c("", &["-c", "input", "f1.json", "f2.json"]),
     c("", &["-c", "add", "-s", "f1.json", "f2.json"]),
     c("", &["-r", ".a", "f1.json", "f2.json"]),
+    // A file whose name starts with `-` (jq: a file; jaq: a flag).
+    c("", &["-c", ".", "-5"]),
 ];
 
 /// The jq release this shim is written against.
@@ -320,6 +325,7 @@ fn shim_matches_real_jq() {
     std::fs::write(dir.join("f2.json"), r#"{"a":2}"#).expect("fixture");
     std::fs::write(dir.join("filt.jq"), ".a\n").expect("fixture");
     std::fs::write(dir.join("filt2.jq"), "[tostream]\n").expect("fixture");
+    std::fs::write(dir.join("-5"), "[5]").expect("fixture");
     let shim = shim(&dir);
 
     let mut failures: Vec<String> = Vec::new();

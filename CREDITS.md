@@ -22,6 +22,11 @@ does. The polyfill definitions in `src/prelude.rs` are taken from jq's
 `src/builtin.jq`, adapted only where jaq's semantics required it — each such
 adaptation is noted at the definition.
 
+`tests/jq-suite/` vendors jq 1.8.1's own test files (`jq.test`, `man.test`,
+the regex, base64 and URI suites) unchanged. They are the conformance measure:
+written by jq's maintainers, they judge Pathfinder by a standard its author did
+not choose.
+
 The behavioural baseline is **jq 1.8.1**. Every golden value in the compat
 corpus was produced by running that version.
 
