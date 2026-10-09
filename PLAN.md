@@ -53,9 +53,9 @@ outwards and answers `null`. A non-literal index key is normalised inline
 (nested `if`, measured +0.4 µs per index; a `type ==` test cost three times
 that), so it stays a path expression for assignment and `del`.
 
-- [ ] P-006 Array index keys truncate toward zero, as jq's `jv_get`; literal fractions too
-- [ ] P-007 Slice bounds round start down and end up; NaN bounds; `null` slices
-- [ ] P-008 Index-heavy benchmark before and after, recorded in DIVERGENCES
+- [x] P-006 Array index keys truncate toward zero, as jq's `jv_get`; literal fractions too
+- [x] P-007 Slice bounds round start down and end up; NaN bounds; `null` slices
+- [x] P-008 Index-heavy benchmark before and after, recorded in DIVERGENCES
 
 ## M12 — Regex results like jq's
 

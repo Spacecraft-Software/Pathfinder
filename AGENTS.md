@@ -108,6 +108,10 @@ hand-written golden.
 - **Program-defined names disable reasoning about them.** If the filter defines
   `del`, `select`, or a name `single_valued` trusts, the `del` route is off.
 - **Emit `.[a][b]`, never `.[a].[b]`** — jaq 3.0 does not parse the latter.
+- **Index keys and slice bounds are evaluated against the input, not the
+  base.** `[1,2][0:.]` slices with the outer `.`; a rewrite that pipes the base
+  first must bind the bounds before it. A non-literal key is rounded inline
+  (`INDEX_NORM`) so it stays a path expression; never guard with `type ==`.
 - **Measure the cost of a jq-level definition before adding one per element.**
   A filter-parameter call, `first`, and `if type == …` each cost hundreds of
   milliseconds per 100k calls under jaq; inline text and `label`/`break` were

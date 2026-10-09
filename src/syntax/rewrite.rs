@@ -104,7 +104,8 @@ fn worth_parsing(src: &str) -> bool {
         toks.iter().any(|t| match &t.tok {
             // Assignment; `reduce`/`foreach` sources; `?//` alternatives and
             // `{$b: pattern}` (a binding before `:`).
-            Tok::Op("=" | "|=" | "+=" | "-=" | "*=" | "/=" | "%=" | "//=" | "?//")
+            // `[`: an index or slice that may need jq's number rules.
+            Tok::Op("=" | "|=" | "+=" | "-=" | "*=" | "/=" | "%=" | "//=" | "?//" | "[")
             | Tok::Keyword(Kw::Reduce | Kw::Foreach)
             | Tok::Binding(_) => true,
             Tok::Ident(name) => name == "del",
@@ -139,6 +140,10 @@ impl Cx<'_> {
     }
 
     /// Emit `node`; the flag says whether anything in it was rewritten.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per rewritten construct; the dispatch is the index of what is rewritten"
+    )]
     fn emit(&mut self, node: &Node) -> (String, bool) {
         match &node.kind {
             // jaq builds `{1: 2}` — not JSON — from a computed key that is not
@@ -230,6 +235,21 @@ impl Cx<'_> {
                     None => self.splice(node),
                 }
             }
+            // jaq rejects a fractional index (`.[1.5]`, `.[length/2]`, a `1.0`
+            // read from JSON); jq truncates it. The key is normalised inline,
+            // so the index stays a path expression for assignment and `del`.
+            Kind::Index { index, .. } if index_needs_norm(index, self.src) => {
+                let (text, _) = self
+                    .splice_mapping(node, Some(index.span), |k| format!("({k}) | {INDEX_NORM}"));
+                (text, true)
+            }
+            // jq slices `null` to `null` and rounds fractional bounds outwards;
+            // jaq errors on both. The bounds are evaluated against the input,
+            // not the base (`[1,2][0:.]`), so they are bound first; a bound
+            // that is a literal stays in place.
+            Kind::Slice { base, from, to } => {
+                (self.slice(base, from.as_deref(), to.as_deref()), true)
+            }
             // jaq's decoders are stricter than jq's in some places and more
             // lenient in others; the prelude has jq's rules.
             Kind::Format(f) if f == "base64d" || f == "urid" => {
@@ -253,6 +273,17 @@ impl Cx<'_> {
 
     /// [`Self::splice`], additionally parenthesising the child at `wrap`.
     fn splice_wrapping(&mut self, node: &Node, wrap: Option<super::Span>) -> (String, bool) {
+        self.splice_mapping(node, wrap, |t| format!("({t})"))
+    }
+
+    /// [`Self::splice`], replacing the emitted text of the child at `target`
+    /// with `f` applied to it.
+    fn splice_mapping(
+        &mut self,
+        node: &Node,
+        target: Option<super::Span>,
+        f: impl Fn(&str) -> String,
+    ) -> (String, bool) {
         let span = node.span;
         let mut out = String::with_capacity(span.end - span.start);
         let mut cursor = span.start;
@@ -265,10 +296,8 @@ impl Cx<'_> {
             }
             let (text, child_dirty) = self.emit(child);
             out.push_str(&self.src[cursor..child.span.start]);
-            if wrap == Some(child.span) {
-                out.push('(');
-                out.push_str(&text);
-                out.push(')');
+            if target == Some(child.span) {
+                out.push_str(&f(&text));
                 dirty = true;
             } else {
                 out.push_str(&text);
@@ -390,13 +419,69 @@ impl Cx<'_> {
         Some(format!("(. as {v} | try {fast} catch {exact})"))
     }
 
+    /// A slice with jq's semantics: see the call site in [`Self::emit`].
+    fn slice(&mut self, base: &Node, from: Option<&Node>, to: Option<&Node>) -> String {
+        let b = if base.span.start == base.span.end {
+            ".".to_owned()
+        } else {
+            self.emit(base).0
+        };
+        let mut binds = String::new();
+        let mut bound = |cx: &mut Self, n: Option<&Node>, norm: &str| -> String {
+            match n {
+                Some(n)
+                    if !matches!(&n.kind, Kind::Number)
+                        && !matches!(&n.kind, Kind::Neg(m) if matches!(m.kind, Kind::Number)) =>
+                {
+                    let v = format!("$__pf_t{}", cx.temps);
+                    cx.temps += 1;
+                    let _ = write!(binds, "({}) as {v} | ", cx.bound(Some(n), norm));
+                    v
+                }
+                n => cx.bound(n, norm),
+            }
+        };
+        let f = bound(self, from, START_NORM);
+        let t = bound(self, to, END_NORM);
+        // Truthiness first: `if .` is nearly free under jaq, where an
+        // `== null` test on every slice cost 1.3 µs (300,000 slices:
+        // 0.34 s against 0.76 s; unguarded, 0.32 s).
+        let slice = format!("if . then .[{f}:{t}] elif . == null then . else .[{f}:{t}] end");
+        if b == "." && binds.is_empty() {
+            format!("({slice})")
+        } else {
+            format!("({binds}{b} | {slice})")
+        }
+    }
+
+    /// A slice bound, normalised with `norm` unless it is an integer literal.
+    fn bound(&mut self, n: Option<&Node>, norm: &str) -> String {
+        n.map_or_else(String::new, |n| {
+            let (t, _) = self.emit(n);
+            if index_needs_norm(n, self.src) {
+                format!("({t}) | {norm}")
+            } else {
+                t
+            }
+        })
+    }
+
     /// An index or slice step re-based on `.`: `.a[0]` gives `.[0]`.
     fn step_on_dot(&mut self, step: &Node) -> String {
-        let mut part = |n: Option<&Node>| n.map_or_else(String::new, |n| self.emit(n).0);
         match &step.kind {
-            Kind::Index { index, .. } => format!(".[{}]", part(Some(index))),
+            Kind::Index { index, .. } => {
+                let (k, _) = self.emit(index);
+                if index_needs_norm(index, self.src) {
+                    format!(".[({k}) | {INDEX_NORM}]")
+                } else {
+                    format!(".[{k}]")
+                }
+            }
             Kind::Slice { from, to, .. } => {
-                let (f, t) = (part(from.as_deref()), part(to.as_deref()));
+                let (f, t) = (
+                    self.bound(from.as_deref(), START_NORM),
+                    self.bound(to.as_deref(), END_NORM),
+                );
                 format!(".[{f}:{t}]")
             }
             _ => unreachable!("position_split returns only index and slice steps"),
@@ -665,6 +750,45 @@ fn addresses(node: &Node) -> bool {
             (name.as_str(), args.len()),
             ("select", 1) | ("recurse" | "empty", 0)
         ),
+        _ => true,
+    }
+}
+
+/// jq's array index from a number key (`jv_get`): truncated toward zero, and
+/// `null` for NaN. Every other key passes through. Written as nested
+/// comparisons: under jaq a `type == "number"` test costs three times as much
+/// (0.92 s against 0.33 s for 300,000 indexings; unguarded, 0.22 s).
+/// jaq orders NaN below every number, so it takes the negative branch and
+/// becomes an index far below any array, which reads as `null`.
+const INDEX_NORM: &str = "if . < 0 then (if . > true then (if . > -9007199254740992 then ceil \
+     else -9007199254740992 end) else . end) elif . < \"\" then floor else . end";
+
+/// jq's slice start (`parse_slice`): rounded down; NaN and -Infinity are 0;
+/// +Infinity is past any end. Non-numbers are left for jaq to reject.
+const START_NORM: &str = "if . > true then (if isnan then 0 elif . > -9007199254740992 \
+     then (if . < 9007199254740992 then floor else 9007199254740992 end) else 0 end) else . end";
+
+/// jq's slice end: rounded up; NaN and +Infinity are the length (`null`);
+/// -Infinity is before any start.
+const END_NORM: &str = "if . > true then (if isnan then null elif . < 9007199254740992 \
+     then (if . > -9007199254740992 then ceil else -9007199254740992 end) else null end) else . end";
+
+/// Whether an index key or slice bound needs jq's number handling. A string,
+/// a constructed array or object, `null`, and an integer literal (negated or
+/// not) are left exactly as written.
+fn index_needs_norm(key: &Node, src: &str) -> bool {
+    let integer = |n: &Node| {
+        src[n.span.start..n.span.end]
+            .bytes()
+            .all(|b| b.is_ascii_digit())
+    };
+    match &key.kind {
+        Kind::Str(_) | Kind::Array(_) | Kind::Object(_) => false,
+        Kind::Call { name, args } if name == "null" && args.is_empty() => false,
+        Kind::Number => !integer(key),
+        Kind::Neg(n) if matches!(n.kind, Kind::Number) => !integer(n),
+        Kind::Paren(n) => index_needs_norm(n, src),
+        Kind::Comma(a, b) => index_needs_norm(a, src) || index_needs_norm(b, src),
         _ => true,
     }
 }

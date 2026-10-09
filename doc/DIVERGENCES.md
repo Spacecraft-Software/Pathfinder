@@ -32,17 +32,28 @@ copied byte for byte; a filter that needs nothing is passed through unchanged.
 | `{(.a): 1}` with a non-string `.a` | run-time error | `{1:1}` — not JSON | jq's error |
 | `{a, $__loc__}` | `"__loc__"` shorthand | parse error | jq's result |
 | `reduce .[] / .[] as $x (…)` | source is a whole expression | parse error | parenthesised |
+| `.[1.5]`, `.[length/2]`, `.[.i]` with `"i": 1.0` | truncates the index | error | jq's result |
+| `.[nan]`, `.[1.2:3.5]`, `.[nan:2]` | `null`; bounds rounded outwards | error | jq's result |
+| `null \| .[1:3]`, `[.[] \| .[1:3]?]` over nulls | `null` | error | `null` |
 
 Measured at 100,000 elements, the rewritten assignments take between 0.1× and
 3.6× jq's time (the slow end is building nested fields, `.[].w.x = 1`); `del`
 takes between 0.6× and 2.9×.
 
+An index whose key is not a literal (`.[$i]`, `.[.k]`) is rounded inline, which
+costs about 0.5 µs per indexing: 300,000 of them took 0.49 s, against 0.30 s
+unrewritten and jq's 0.22 s. A key written as an integer or a string is left
+alone, and slices cost nothing measurable (0.37 s against 0.35 s).
+
 What is still not quite jq:
 
 - **Error wording on a bad path.** Where jaq's own `path()` or `getpath` fails
   first, its message is jaq's (`cannot index 1 with "b"`), not jq's.
-- **Fractional indices.** `.[1.5] = 1` and `del(.[1.5])` truncate in jq; jaq
-  rejects the index.
+- **Paths through a rounded index.** `path(.[1.5])` is `[1.5]` in jq and `[1]`
+  here; `null | path(.[1:3])` is `[{"start":1,"end":3}]` in jq and `[]` here.
+  The values read and written are jq's.
+- **`.[infinite]`** is `null` in jq and still an error here; `.[nan] = 1`
+  raises an error in both, but with different words.
 - **`break` inside a `?//` body.** jq treats it like an error and tries the next
   alternative; the rewrite, built on `try`, lets it through.
 - **`.[0]` of an object** is `null` in jaq and an error in jq. The `?//` rewrite
