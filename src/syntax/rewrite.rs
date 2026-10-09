@@ -100,25 +100,31 @@ pub fn rewrite(src: &str) -> Option<Rewrite> {
 /// Whether any construct this module rewrites could be present — including
 /// inside string interpolations, whose tokens nest within the string token.
 fn worth_parsing(src: &str) -> bool {
-    fn any(toks: &[super::lex::Token]) -> bool {
+    fn any(src: &str, toks: &[super::lex::Token]) -> bool {
         toks.iter().any(|t| match &t.tok {
+            // A number written with a leading point, `.5`, which jaq cannot read.
+            Tok::Number => src[t.span.start..].starts_with('.'),
             // Assignment; `reduce`/`foreach` sources; `?//` alternatives and
             // `{$b: pattern}` (a binding before `:`).
             // `[`: an index or slice that may need jq's number rules; `-`: a
             // negation, which has its own error message; `catch`: a handler,
             // which sees jq's wording for errors.
-            Tok::Op("=" | "|=" | "+=" | "-=" | "*=" | "/=" | "%=" | "//=" | "?//" | "[" | "-")
+            // `/` and `%`: jq's zero-divisor errors and integer remainder.
+            Tok::Op(
+                "=" | "|=" | "+=" | "-=" | "*=" | "/=" | "%=" | "//=" | "?//" | "[" | "-" | "/"
+                | "%",
+            )
             | Tok::Keyword(Kw::Reduce | Kw::Foreach | Kw::Catch)
             | Tok::Binding(_) => true,
             Tok::Ident(name) => name == "del",
             Tok::Format(name) => matches!(name.as_str(), "base64d" | "urid"),
             Tok::Str(parts) => parts
                 .iter()
-                .any(|p| matches!(p, StrPart::Interp(inner, _) if any(inner))),
+                .any(|p| matches!(p, StrPart::Interp(inner, _) if any(src, inner))),
             _ => false,
         })
     }
-    lex(src).is_ok_and(|toks| any(&toks) || super::check::has_computed_key(&toks))
+    lex(src).is_ok_and(|toks| any(src, &toks) || super::check::has_computed_key(&toks))
 }
 
 struct Cx<'a> {
@@ -185,11 +191,54 @@ impl Cx<'_> {
                 });
                 (format!("({text})"), true)
             }
+            // `L /= R` and `L %= R` are `R as $t | L |= . op $t` in jq; the
+            // update goes through the same division as the operator.
+            Kind::Binary { op, lhs, rhs } if *op == "/=" || *op == "%=" => {
+                let (l, _) = self.emit(lhs);
+                let (r, _) = self.emit(rhs);
+                let t = self.temp();
+                let update = self.arith(&op[..1], ".", &t);
+                (
+                    format!(
+                        "(({r}) as {t} | {})",
+                        self.assignment("|=", lhs, &l, &update)
+                    ),
+                    true,
+                )
+            }
             Kind::Binary { op, lhs, rhs } if is_assignment(op) => {
                 let (l, _) = self.emit(lhs);
                 let (r, _) = self.emit(rhs);
                 (self.assignment(op, lhs, &l, &r), true)
             }
+            // jq raises an error for a zero divisor where jaq returns
+            // `Infinity`/`NaN`, and jq's `%` is on integers. A divisor written
+            // as a non-zero literal needs no check for `/`.
+            Kind::Binary { op, lhs, rhs }
+                if (*op == "/" || *op == "%") && !nonzero_literal(rhs, self.src, op) =>
+            {
+                let (l, _) = self.emit(lhs);
+                let (r, _) = self.emit(rhs);
+                // jq evaluates the right operand in the outer loop.
+                let (a, b) = (self.temp(), self.temp());
+                let body = self.arith(op, &a, &b);
+                (format!("(({r}) as {b} | ({l}) as {a} | {body})"), true)
+            }
+            Kind::Binary { op, lhs, rhs } if *op == "%" => {
+                // A non-zero literal divisor: only the dividend is truncated.
+                let (l, _) = self.emit(lhs);
+                let (r, _) = self.emit(rhs);
+                let a = self.temp();
+                (
+                    format!("(({l}) as {a} | try (({a} - ({a} % 1)) % {r}) catch ({a} % {r}))"),
+                    true,
+                )
+            }
+            // `.5`: jaq reads only `0.5`.
+            Kind::Number if self.src[node.span.start..].starts_with('.') => (
+                format!("0{}", &self.src[node.span.start..node.span.end]),
+                true,
+            ),
             Kind::Bind {
                 source,
                 patterns,
@@ -454,6 +503,48 @@ impl Cx<'_> {
             }
         };
         Some(format!("(. as {v} | try {fast} catch {exact})"))
+    }
+
+    /// A fresh `$__pf_tN` variable name.
+    fn temp(&mut self) -> String {
+        let v = format!("$__pf_t{}", self.temps);
+        self.temps += 1;
+        v
+    }
+
+    /// jq's `/` or `%` of two simple operands (variables, or `.`).
+    ///
+    /// `/`: a zero divisor of a number is jq's error; anything else is jaq's
+    /// own division, whose type errors `catch` translates. `%`: both operands
+    /// truncated toward zero (`x - x % 1`, which also keeps NaN), and a
+    /// divisor that truncates to zero raises jq's error with the values as
+    /// written. Measured over 300,000 operations: `%` 0.31 s against jaq's
+    /// 0.06 s, where a test-and-truncate chain took 1.37 s.
+    fn arith(&mut self, op: &str, a: &str, b: &str) -> String {
+        self.need("_pf_dump");
+        let zero = |what: &str| {
+            format!(
+                "error(\"\\({a} | type) (\\({a} | _pf_dump)) and \\({b} | type) \
+                 (\\({b} | _pf_dump)) cannot be divided{what} because the divisor is zero\")"
+            )
+        };
+        if op == "/" {
+            let err = zero("");
+            format!(
+                "if {b} == 0 then (if {a} > true then (if {a} < \"\" then {err} else {a} / {b} end) \
+                 else {a} / {b} end) else {a} / {b} end"
+            )
+        } else {
+            let err = zero(" (remainder)");
+            // jaq's float `%` by `0.0` is NaN, not an error, so the truncated
+            // divisor is tested; a non-number fails in `% 1` and is handed to
+            // jaq's `%`, whose type error `catch` translates.
+            format!(
+                "try (({b} - ({b} % 1)) as $__pf_bi | if $__pf_bi == 0 then error(\"__pf_zero\") \
+                 else ({a} - ({a} % 1)) % $__pf_bi end) \
+                 catch (if . == \"__pf_zero\" then {err} else {a} % {b} end)"
+            )
+        }
     }
 
     /// A slice with jq's semantics: see the call site in [`Self::emit`].
@@ -809,6 +900,19 @@ const START_NORM: &str = "if . > true then (if isnan then 0 elif . > -9007199254
 /// -Infinity is before any start.
 const END_NORM: &str = "if . > true then (if isnan then null elif . < 9007199254740992 \
      then (if . > -9007199254740992 then ceil else -9007199254740992 end) else null end) else . end";
+
+/// Whether `rhs` is a number literal that needs no divisor check for `op`:
+/// non-zero for `/`; a non-zero integer for `%`, where only the dividend
+/// still needs truncating.
+fn nonzero_literal(rhs: &Node, src: &str, op: &str) -> bool {
+    let text = match &rhs.kind {
+        Kind::Number => &src[rhs.span.start..rhs.span.end],
+        Kind::Neg(n) if matches!(n.kind, Kind::Number) => &src[n.span.start..n.span.end],
+        _ => return false,
+    };
+    let integer = text.bytes().all(|b| b.is_ascii_digit());
+    text.parse::<f64>().is_ok_and(|v| v != 0.0) && (op == "/" || integer)
+}
 
 /// Whether a `catch` handler can see the error it receives. Conservative: only
 /// constants, variables, `empty` and the like answer `false`, and those handlers
@@ -1448,8 +1552,8 @@ mod tests {
     #[test]
     fn compound_reduce_sources_are_parenthesised() {
         assert_eq!(
-            rw("reduce .[] / .[] as $i (0; . + $i)").as_deref(),
-            Some("reduce (.[] / .[]) as $i (0; . + $i)")
+            rw("reduce .[] * .[] as $i (0; . + $i)").as_deref(),
+            Some("reduce (.[] * .[]) as $i (0; . + $i)")
         );
         assert_eq!(
             rw("reduce .[] as $i (0; . + $i)"),

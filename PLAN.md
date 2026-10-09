@@ -88,10 +88,10 @@ Both are operators, so the rewriter replaces them with an inline check that
 evaluates the right-hand side first, as jq does. jaq also cannot read a
 number literal with a leading point (`.5`), which jq accepts.
 
-- [ ] P-019 `/` by zero raises jq's error; strings still split
-- [ ] P-020 `%` truncates operands, raises on a zero divisor, as jq 1.8.1
-- [ ] P-021 Leading-point number literals (`.5`) are rewritten to `0.5`
-- [ ] P-022 Division-heavy benchmark before and after, recorded
+- [x] P-019 `/` by zero raises jq's error; strings still split
+- [x] P-020 `%` truncates operands, raises on a zero divisor, as jq 1.8.1
+- [x] P-021 Leading-point number literals (`.5`) are rewritten to `0.5`
+- [x] P-022 Division-heavy benchmark before and after, recorded
 
 ## M15 — A patched jaq
 
