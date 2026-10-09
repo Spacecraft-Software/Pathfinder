@@ -418,6 +418,24 @@ static CASES: &[Case] = &[
     ),
     // `.a.[0]` is jq 1.7+ syntax that jaq 3.0 cannot parse; it is rewritten.
     c(r#"{"a":[1,2]}"#, &["-c", ".a.[0], [.a.[]], (.a.[1] = 9)"]),
+    // --- division, modulo and number syntax (M14) ---
+    c(
+        "0",
+        &[
+            "-c",
+            "[try (1 / .) catch ., try (0 / 0) catch ., try (5 % 0.4) catch ., try (1 % .) catch .]",
+        ],
+    ),
+    c("[2,0,-4]", &["-c", "[.[] | (1 / .)?]"]),
+    c(
+        "null",
+        &[
+            "-c",
+            r#"[5 % 2, -5 % 2, 5 % -2, 5 % -1], ("a,b" / ","), [(1,2) / (10,20)]"#,
+        ],
+    ),
+    c(r#"{"a":8}"#, &["-c", "try (.a /= 0) catch ., (.a %= 3)"]),
+    c("0.7", &["-c", "select(. > .5), [.5, -.5]"]),
     // --- date repair ---
     c("1.5", &["-c", "todate"]),
     c("0", &["-c", "todate"]),

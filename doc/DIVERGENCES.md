@@ -35,10 +35,21 @@ copied byte for byte; a filter that needs nothing is passed through unchanged.
 | `.[1.5]`, `.[length/2]`, `.[.i]` with `"i": 1.0` | truncates the index | error | jq's result |
 | `.[nan]`, `.[1.2:3.5]`, `.[nan:2]` | `null`; bounds rounded outwards | error | jq's result |
 | `null \| .[1:3]`, `[.[] \| .[1:3]?]` over nulls | `null` | error | `null` |
+| `1 / 0`, `0 / 0`, `.a /= 0` | error: `… cannot be divided because the divisor is zero` | `Infinity`, `NaN` — **not JSON** | jq's error |
+| `5.9 % 2.9`, `5 % 0.4`, `.a %= 3` | on integers: `1`; divisor truncates to 0, error | `0.1`; `NaN` | jq's integer remainder and error |
+| `select(. > .5)` | `.5` is `0.5` | parse error | `0.5` |
 
 Measured at 100,000 elements, the rewritten assignments take between 0.1× and
 3.6× jq's time (the slow end is building nested fields, `.[].w.x = 1`); `del`
 takes between 0.6× and 2.9×.
+
+Division and remainder are checked inline, with the right operand evaluated in
+the outer loop as in jq: `1 / $i` over 300,000 values took 0.17 s (jaq 0.07 s,
+jq 0.11 s), `100 % $i` 0.40 s (jaq 0.07 s); a divisor written as a non-zero
+literal (`. / 7`, `. % 7`) costs nothing for `/` and 0.1 s for `%`. Only `/`
+and `%` take jq's operand order; `+`, `-` and `*` keep jaq's (see the number
+model below). `infinite % 1` is `NaN` here and `0` in jq, which clamps to a
+64-bit integer first.
 
 An index whose key is not a literal (`.[$i]`, `.[.k]`) is rounded inline, which
 costs about 0.5 µs per indexing: 300,000 of them took 0.49 s, against 0.30 s
@@ -68,7 +79,6 @@ What is still not quite jq:
 |---|---|---|---|
 | `"a" * 0` | `""` | `null` | Repairing it means rewriting every `*`. |
 | `"a" * 0.5` | `""` | error | Same. |
-| `1 / 0` | error | `Infinity` — **invalid JSON on stdout** | Same, for `/`. Worth knowing about: the output will not parse. |
 | `debug` output | `["DEBUG:",1]` | `["DEBUG:", 1]` | Stderr only. Fixing it means capturing stderr, which costs more than the space it saves. |
 | Error text on stderr | `jq: error (at <stdin>:0): …` | `Error: …` | Same reason. stderr is passed through untouched so `debug`, colour, and interleaving stay correct. What a `catch` handler sees *is* jq's text; see below. |
 
