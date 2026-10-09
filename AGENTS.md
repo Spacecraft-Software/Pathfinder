@@ -108,6 +108,8 @@ hand-written golden.
 - **Program-defined names disable reasoning about them.** If the filter defines
   `del`, `select`, or a name `single_valued` trusts, the `del` route is off.
 - **Emit `.[a][b]`, never `.[a].[b]`** — jaq 3.0 does not parse the latter.
+  The user's own `.a.[0]`/`.a.[]` are spliced without the dot for the same
+  reason (`splice_mapping`).
 - **Index keys and slice bounds are evaluated against the input, not the
   base.** `[1,2][0:.]` slices with the outer `.`; a rewrite that pipes the base
   first must bind the bounds before it. A non-literal key is rounded inline

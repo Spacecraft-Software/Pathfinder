@@ -307,6 +307,23 @@ impl Cx<'_> {
         let mut out = String::with_capacity(span.end - span.start);
         let mut cursor = span.start;
         let mut dirty = false;
+        // `.a.[0]` and `.a.[]` are `.a[0]` and `.a[]`, which jaq 3.0 does not
+        // parse; the `.` after the base is dropped. Any later gap is copied.
+        let undot = matches!(node.kind, Kind::Index { .. } | Kind::Iterate(_));
+        let gap = |out: &mut String, from: usize, to: usize, first: bool| {
+            let text = &self.src[from..to];
+            match text.trim_start().strip_prefix('.') {
+                Some(rest) if first && undot && rest.trim_start().starts_with('[') => {
+                    out.push_str(rest);
+                    true
+                }
+                _ => {
+                    out.push_str(text);
+                    false
+                }
+            }
+        };
+        let mut first = false;
         for child in node.children() {
             // Zero-width synthetic children (the `.` implied by `.foo`) have no
             // text of their own and can never be rewritten.
@@ -314,7 +331,8 @@ impl Cx<'_> {
                 continue;
             }
             let (text, child_dirty) = self.emit(child);
-            out.push_str(&self.src[cursor..child.span.start]);
+            dirty |= gap(&mut out, cursor, child.span.start, first);
+            first = cursor == span.start && child.span.start == span.start;
             if target == Some(child.span) {
                 out.push_str(&f(&text));
                 dirty = true;
@@ -324,7 +342,7 @@ impl Cx<'_> {
             cursor = child.span.end;
             dirty |= child_dirty;
         }
-        out.push_str(&self.src[cursor..span.end]);
+        dirty |= gap(&mut out, cursor, span.end, first);
         if dirty {
             (out, true)
         } else {

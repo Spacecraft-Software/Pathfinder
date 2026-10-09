@@ -24,9 +24,10 @@ The measured starting point, by cause of the 89 remaining failures:
 | Number printing, big integers, input parsing | ~9 | Phase 2 |
 | Unreachable (decNumber literals, jq quirks) | ~5 | — |
 
-Phase 2 (proposals 5 and 6) is planned once M10–M13 have landed.
-Order of work: M13, M11, M12, M10 — the most mechanical first, and the
-message translation, which is the most fragile, last.
+Phase 1 (M10–M13, proposals 1–4) landed at 785/820 (95.7%). Phase 2 (M14,
+M15; proposals 5 and 6) is planned below from the 35 failures left after it.
+Order of work in phase 1 was M13, M11, M12, M10 — the most mechanical first,
+and the message translation, which is the most fragile, last.
 
 ## M10 — jq's error messages
 
@@ -77,3 +78,38 @@ synthetic names before matching, so every group can be reported in place.
 - [x] P-015 `implode` follows jq's codepoint rules and messages
 - [x] P-016 `from_entries` is jq 1.8.1's definition
 - [x] P-017 `has(nan)`, `toboolean`, `trim` and the remaining builtin edge cases
+
+## M14 — Division, modulo and number syntax in the shim
+
+jaq divides by zero to `Infinity`/`NaN` and prints them, which is not JSON;
+jq raises `… cannot be divided because the divisor is zero`. jq's `%`
+truncates both operands to integers first (`5 % 0.5` is a divisor of zero).
+Both are operators, so the rewriter replaces them with an inline check that
+evaluates the right-hand side first, as jq does. jaq also cannot read a
+number literal with a leading point (`.5`), which jq accepts.
+
+- [ ] P-019 `/` by zero raises jq's error; strings still split
+- [ ] P-020 `%` truncates operands, raises on a zero divisor, as jq 1.8.1
+- [ ] P-021 Leading-point number literals (`.5`) are rewritten to `0.5`
+- [ ] P-022 Division-heavy benchmark before and after, recorded
+
+## M15 — A patched jaq
+
+The rest is jaq's number model and input reader, which no filter rewrite can
+reach. A small patch set, carried in-tree under `packaging/jaq/` and applied
+to the pinned jaq by the Nix package (Standard §4.2, §6.4: nothing is sent
+upstream), makes jaq print and read numbers as jq 1.8.1 does. Pathfinder keeps
+working on a stock jaq; the patched one is what the package pins.
+
+- [ ] P-023 Patch set applied to the pinned jaq; version marked `+pathfinder`
+- [ ] P-024 Numbers print with jq's `jvp_dtoa_fmt`: `2`, not `2.0`; `1e+17`
+- [ ] P-025 NaN prints `null`; ±Infinity prints ±1.7976931348623157e+308
+- [ ] P-026 Integer arithmetic beyond 2^53 rounds to a double, as jq's does
+- [ ] P-027 Input accepts `nan`/`NaN`/`Infinity` literals and a leading BOM
+- [ ] P-028 String repetition: `n * "s"`, fractional and non-positive counts
+- [ ] P-029 Conformance and differential measured against the patched jaq
+- [ ] P-030 Output-heavy benchmark: the patched printer is not slower
+- [ ] P-031 Operand evaluation order of binary operators (optional)
+- [ ] ~~P-032 Path-expression error wording~~ (dropped) — jaq's path tracking
+- [ ] ~~P-033 decNumber literal canonicalisation~~ (dropped) — needs decNumber
+

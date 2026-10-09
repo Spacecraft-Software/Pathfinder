@@ -416,6 +416,8 @@ static CASES: &[Case] = &[
         "null",
         &["-c", r#"try ("foobar" | .[1.5:3.5] = "xyz") catch ."#],
     ),
+    // `.a.[0]` is jq 1.7+ syntax that jaq 3.0 cannot parse; it is rewritten.
+    c(r#"{"a":[1,2]}"#, &["-c", ".a.[0], [.a.[]], (.a.[1] = 9)"]),
     // --- date repair ---
     c("1.5", &["-c", "todate"]),
     c("0", &["-c", "todate"]),
