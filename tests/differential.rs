@@ -233,6 +233,52 @@ static CASES: &[Case] = &[
         &["-c", "[.[] | try tonumber catch .]"],
     ),
     c("[null, true, [1]]", &["-c", "[.[] | try tonumber catch .]"]),
+    // --- rejecting what jq rejects, accepting what it accepts (M13) ---
+    c(
+        r#"["", "=", "cWl4YmF6Cg", "Not base64 data", "QUJDa", "QU=JD", "QR==", "_-", "Q"]"#,
+        &["-c", "[.[] | try @base64d catch .]"],
+    ),
+    c(
+        r#"["a%20b", "%", "%2", "%F0%93%81", "%C3%28", "%EF%BF%BD", "%FX"]"#,
+        &["-c", "[.[] | try @urid catch .]"],
+    ),
+    c(r#""QQ""#, &["-c", r#"[format("base64d"), format("urid")]"#]),
+    c(
+        r#"[{"key":"a","value":1},{"Key":"b","Value":2},{"name":"c","value":3},{"Name":"d","Value":4}]"#,
+        &["-c", "from_entries"],
+    ),
+    c(
+        r#"[[{"key":null,"value":1}],[{"key":1,"value":2}],[{"key":false,"name":"x","value":2}],[]]"#,
+        &["-c", "[.[] | try from_entries catch .]"],
+    ),
+    c(
+        r#"{"a":1}"#,
+        &["-c", "try with_entries(.key = null) catch ."],
+    ),
+    c(
+        "[0,1,2]",
+        &[
+            "-c",
+            r#"[(nan, 1.5, -1, 5, "a", [0]) as $k | try has($k) catch .]"#,
+        ],
+    ),
+    c(
+        r#"{"a":1}"#,
+        &["-c", r#"[(0, "a", "b", []) as $k | try has($k) catch .]"#],
+    ),
+    c("null", &["-c", r#"[has(0), has("a")]"#]),
+    c(
+        "[-1,0,1,1114112,55296,1.9,65]",
+        &["-c", "implode | explode"],
+    ),
+    c(
+        r#"[123,["a"],[null]]"#,
+        &["-c", "[.[] | try implode catch .]"],
+    ),
+    c(
+        r#"["true","false",true," true",null,0]"#,
+        &["-c", "[.[] | try toboolean catch .]"],
+    ),
     // --- date repair ---
     c("1.5", &["-c", "todate"]),
     c("0", &["-c", "todate"]),

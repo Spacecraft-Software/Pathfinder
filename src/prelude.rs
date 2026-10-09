@@ -174,13 +174,13 @@ static POLYFILLS: &[Def] = &[
     // jq's so an unsupported name reads identically.
     Def {
         name: "format",
-        deps: &[],
+        deps: &["_pf_base64d", "_pf_urid"],
         src: Some(
             "def format($fmt): if $fmt == \"text\" then @text elif $fmt == \"json\" then @json \
              elif $fmt == \"csv\" then @csv elif $fmt == \"tsv\" then @tsv \
              elif $fmt == \"html\" then @html elif $fmt == \"uri\" then @uri \
              elif $fmt == \"sh\" then @sh elif $fmt == \"base64\" then @base64 \
-             elif $fmt == \"base64d\" then @base64d \
+             elif $fmt == \"base64d\" then _pf_base64d elif $fmt == \"urid\" then _pf_urid \
              else error($fmt + \" is not a valid format\") end;",
         ),
     },
@@ -342,6 +342,86 @@ static REPAIRS: &[Def] = &[
              _pf_setpath($a; $in | getpath($a)));",
         ),
     },
+    // jaq's `from_entries` reads only `key`/`k`/`name` and `value`/`v`, and
+    // builds an object around whatever key it finds — `[{"key":null,
+    // "value":1}]` prints `{null:1}`, which is not JSON. jq 1.8.1 also accepts
+    // `Key`/`Name`/`Value` and rejects a non-string key. jq's definition
+    // (`map({(k): v}) | add | .//={}`), as one pass that sets each key in turn,
+    // with the key check jq's object construction makes. The type test uses
+    // comparisons — under jaq, `type == "string"` costs several times more.
+    Def {
+        name: "from_entries",
+        deps: &["_pf_dump"],
+        src: Some(
+            "def from_entries: reduce .[] as $__pf_e ({}; \
+             ($__pf_e | .key // .Key // .name // .Name) as $__pf_k \
+             | if $__pf_k < \"\" or $__pf_k >= [] \
+             then error(\"Cannot use \\($__pf_k|type) (\\($__pf_k|_pf_dump)) as object key\") \
+             else .[$__pf_k] = ($__pf_e | if has(\"value\") then .value else .Value end) end);",
+        ),
+    },
+    // jaq's native `with_entries` reaches jaq's own `from_entries`, not the
+    // repair above. jq 1.8.1's definition, verbatim.
+    Def {
+        name: "with_entries",
+        deps: &["from_entries"],
+        src: Some("def with_entries(f): to_entries | map(f) | from_entries;"),
+    },
+    // jaq's `has` answers `true` for a negative array index and `false` for a
+    // number key on an object; jq answers `false` and raises an error. jaq
+    // also rejects `has(nan)` and `has(1.5)`, which jq answers. jq's
+    // `jv_has`: `null` has nothing, an object takes a string key, an array a
+    // number key (NaN is absent, a fraction truncates, a negative index is
+    // absent), anything else is an error. A string key goes to jaq's builtin, which is right
+    // wherever it does not raise an error; everything else takes the exact
+    // path. Measured on `select(has("a"))` over 300,000 objects: 0.36 s
+    // against jaq's 0.28 s; the same guard written with `type ==` took 2.8 s.
+    Def {
+        name: "has",
+        deps: &[],
+        src: Some(
+            "def _pf_has0($k): has($k); \
+             def _pf_has_err($k): error(\"Cannot check whether \\(type) has a \\($k|type) key\"); \
+             def _pf_has_slow($k): if . == null then false elif . >= {} then \
+             (if $k >= \"\" then (if $k < [] then _pf_has0($k) else _pf_has_err($k) end) else _pf_has_err($k) end) \
+             elif . >= [] then (if $k > true then (if $k < \"\" then \
+             (if ($k|isnan) then false else ($k | if . < 0 then ceil else floor end) as $i \
+             | $i >= 0 and $i < length end) else _pf_has_err($k) end) else _pf_has_err($k) end) \
+             else _pf_has_err($k) end; \
+             def has($k): if $k < \"\" then _pf_has_slow($k) elif $k >= [] then _pf_has_slow($k) \
+             else . as $__pf_in | try _pf_has0($k) catch ($__pf_in | _pf_has_slow($k)) end;",
+        ),
+    },
+    // jaq's `implode` rejects a fractional codepoint and one outside Unicode;
+    // jq truncates the first and writes U+FFFD for the second (and for a
+    // surrogate), and words its errors differently. jaq's builtin answers
+    // every array it accepts the way jq does, so it runs first.
+    Def {
+        name: "implode",
+        deps: &["_pf_dump"],
+        src: Some(
+            "def _pf_implode0: implode; \
+             def implode: if . >= [] then (if . < {} then . as $__pf_a | try _pf_implode0 \
+             catch ($__pf_a | map(if . > true then (if . < \"\" then (if isnan then null else . end) else null end) else null end \
+             // error(\"\\(type) (\\(_pf_dump)) can't be imploded, unicode codepoint needs to be numeric\") \
+             | if . < 0 then ceil else floor end \
+             | if . < 0 or . > 1114111 or (. >= 55296 and . <= 57343) then 65533 else . end) \
+             | _pf_implode0) \
+             else error(\"implode input must be an array\") end) \
+             else error(\"implode input must be an array\") end;",
+        ),
+    },
+    // jq accepts exactly `true`, `false`, `"true"` and `"false"`. jaq parses
+    // the string as JSON, so `" true"` is accepted, and its errors differ.
+    Def {
+        name: "toboolean",
+        deps: &["_pf_dump"],
+        src: Some(
+            "def toboolean: if . == true or . == false then . elif . == \"true\" then true \
+             elif . == \"false\" then false \
+             else error(\"\\(type) (\\(_pf_dump)) cannot be parsed as a boolean\") end;",
+        ),
+    },
     // --- strings ------------------------------------------------------------
     // jq's `startswith`/`endswith` reject a non-string with their own message,
     // and jq 1.8.1 defines `ltrimstr`/`rtrimstr` on top of them, so all four
@@ -379,7 +459,7 @@ static REPAIRS: &[Def] = &[
     // costs 1.5x jaq's own `tonumber`.
     Def {
         name: "tonumber",
-        deps: &[],
+        deps: &["_pf_dump"],
         src: Some(
             "def _pf_tonumber0: tonumber; \
              def _pf_tonumber_exact: if type == \"string\" \
@@ -394,7 +474,7 @@ static REPAIRS: &[Def] = &[
              elif type == \"string\" and (ascii_downcase | . == \"nan\" or . == \"-nan\" or . == \"+nan\") then nan \
              elif type == \"string\" and (ascii_downcase | . == \"infinity\" or . == \"+infinity\") then infinite \
              elif type == \"string\" and ascii_downcase == \"-infinity\" then 0 - infinite \
-             else error(\"\\(type) (\\(tojson | if length > 14 then .[:11] + \"...\" else . end)) cannot be parsed as a number\") end; \
+             else error(\"\\(type) (\\(_pf_dump)) cannot be parsed as a number\") end; \
              def tonumber: label $__pf_o \
              | ((try _pf_tonumber0 catch null) as $__pf_r \
              | ($__pf_r | tostring) as $__pf_t \
@@ -682,6 +762,62 @@ static INTERNAL: &[Def] = &[
              | _pf_setpath([0] + $p; $__pf_v)), \
              ($__pf_dot | _pf_setpath([1, (.[1] | length)]; $p)))) \
              | . as $__pf_dot | $__pf_dot[0] | _pf_delpaths($__pf_dot[1]);",
+        ),
+    },
+    // jq 1.8.1's `jv_dump_string_trunc` with its 15-byte buffer, which every
+    // `type (value)` error message uses: the JSON text, cut to 11 bytes plus
+    // `...` when it does not fit in 14 — backing off to a character boundary
+    // rather than splitting UTF-8 (`"☆☆☆...`, not 11 bytes of it).
+    Def {
+        name: "_pf_dump",
+        deps: &[],
+        src: Some(
+            "def _pf_dump: tojson | if utf8bytelength <= 14 then . else explode as $__pf_cs \
+             | ([foreach $__pf_cs[] as $c (0; . + (if $c < 128 then 1 elif $c < 2048 then 2 \
+             elif $c < 65536 then 3 else 4 end)) | select(. <= 11)] | length) as $__pf_n \
+             | ($__pf_cs[:$__pf_n] | implode) + \"...\" end;",
+        ),
+    },
+    // jq's `@base64d` decodes up to the first `=` and ignores the rest,
+    // accepts missing padding, and rejects only a character outside the
+    // standard alphabet or a single leftover character. jaq's requires exact
+    // padding, and its errors differ. jq also ignores the unused low bits of
+    // the last character (`"QR"` is `"A"`), which jaq rejects; they are
+    // cleared before decoding. jaq runs first; what it rejects is
+    // re-decoded the way jq reads it, with jq's errors. Both read `tostring`.
+    Def {
+        name: "_pf_base64d",
+        deps: &["_pf_dump"],
+        src: Some(
+            "def _pf_base64d: tostring | . as $__pf_s | try @base64d catch ($__pf_s \
+             | (split(\"=\")[0]) as $__pf_t \
+             | if ($__pf_t | test(\"^[A-Za-z0-9+/]*$\") | not) \
+             then error(\"string (\\($__pf_s|_pf_dump)) is not valid base64 data\") \
+             elif ($__pf_t | length) % 4 == 1 \
+             then error(\"string (\\($__pf_s|_pf_dump)) trailing base64 byte found\") \
+             else (($__pf_t | length) % 4) as $__pf_r \
+             | \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\" as $__pf_a \
+             | (if $__pf_r == 0 then $__pf_t else ($__pf_a | index($__pf_t[-1:])) as $__pf_v \
+             | $__pf_t[:-1] + $__pf_a[$__pf_v - $__pf_v % (if $__pf_r == 2 then 16 else 4 end):][:1] end) \
+             + (\"==\" | .[:(4 - $__pf_r) % 4]) | @base64d end);",
+        ),
+    },
+    // jq's `@urid` rejects a `%` not followed by two hex digits, and decoded
+    // bytes that are not UTF-8; jaq keeps the first as text and replaces the
+    // second with U+FFFD. Decoding added a U+FFFD the input did not spell —
+    // literally or as `%EF%BF%BD` — exactly when the bytes were invalid.
+    Def {
+        name: "_pf_urid",
+        deps: &["_pf_dump"],
+        src: Some(
+            "def _pf_urid: tostring | if index(\"%\") == null then . \
+             else . as $__pf_s | if test(\"^([^%]|%[0-9A-Fa-f]{2})*$\") | not \
+             then error(\"string (\\($__pf_s|_pf_dump)) is not a valid uri encoding\") \
+             else @urid as $__pf_d \
+             | if ([$__pf_d | match(\"\\uFFFD\"; \"g\")] | length) \
+             > ([$__pf_s | match(\"\\uFFFD|%[Ee][Ff]%[Bb][Ff]%[Bb][Dd]\"; \"g\")] | length) \
+             then error(\"string (\\($__pf_s|_pf_dump)) is not a valid uri encoding\") \
+             else $__pf_d end end end;",
         ),
     },
     // Pad a short broken-down-time array to jq's eight fields with zeros.

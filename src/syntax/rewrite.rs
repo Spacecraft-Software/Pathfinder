@@ -108,6 +108,7 @@ fn worth_parsing(src: &str) -> bool {
             | Tok::Keyword(Kw::Reduce | Kw::Foreach)
             | Tok::Binding(_) => true,
             Tok::Ident(name) => name == "del",
+            Tok::Format(name) => matches!(name.as_str(), "base64d" | "urid"),
             Tok::Str(parts) => parts
                 .iter()
                 .any(|p| matches!(p, StrPart::Interp(inner, _) if any(inner))),
@@ -144,6 +145,7 @@ impl Cx<'_> {
             // a string, where jq raises an error. Check the key first.
             Kind::Paren(inner) if self.keys.contains(&node.span) => {
                 let (k, _) = self.emit(inner);
+                self.need("_pf_dump");
                 (format!("(({k}) | {KEY_CHECK})"), true)
             }
             Kind::Object(pairs) => {
@@ -227,6 +229,17 @@ impl Cx<'_> {
                     Some(text) => (text, true),
                     None => self.splice(node),
                 }
+            }
+            // jaq's decoders are stricter than jq's in some places and more
+            // lenient in others; the prelude has jq's rules.
+            Kind::Format(f) if f == "base64d" || f == "urid" => {
+                let name = if f == "base64d" {
+                    "_pf_base64d"
+                } else {
+                    "_pf_urid"
+                };
+                self.need(name);
+                (format!("({name})"), true)
             }
             _ => self.splice(node),
         }
@@ -658,8 +671,8 @@ fn addresses(node: &Node) -> bool {
 
 /// jq's check on a computed object key, with its message: the value is shown
 /// as `jv_dump_string_trunc` shows it, cut to 11 bytes plus `...`.
-const KEY_CHECK: &str = "if type == \"string\" then . else error(\"Cannot use \\(type) \
-     (\\(tojson | if length > 14 then .[:11] + \"...\" else . end)) as object key\") end";
+const KEY_CHECK: &str = "if . >= \"\" and . < [] then . \
+     else error(\"Cannot use \\(type) (\\(_pf_dump)) as object key\") end";
 
 /// Names whose builtin meaning [`single_path`] and [`single_valued`] assume.
 const FAST_DEL_RELIES_ON: &[&str] = &[

@@ -58,7 +58,6 @@ What is still not quite jq:
 | `"a" * 0` | `""` | `null` | Repairing it means rewriting every `*`. |
 | `"a" * 0.5` | `""` | error | Same. |
 | `1 / 0` | error | `Infinity` — **invalid JSON on stdout** | Same, for `/`. Worth knowing about: the output will not parse. |
-| `"aGk" \| @base64d` (unpadded) | lenient | `Invalid padding` | `@`-formats cannot be defined in the jq language. |
 | `debug` output | `["DEBUG:",1]` | `["DEBUG:", 1]` | Stderr only. Fixing it means capturing stderr, which costs more than the space it saves. |
 | Error text | `jq: error (at <stdin>:0): …` | `Error: …` | Same reason. stderr is passed through untouched so `debug`, colour, and interleaving stay correct. |
 
@@ -163,10 +162,17 @@ jq 1.8.1's own definition, or wraps jaq's builtin, only when the filter uses it:
 | `setpath` past an array's start / at a huge index | pads or errors oddly | `Out of bounds negative array index` / `Array index too large` |
 | `delpaths` | deletes in the order given; reorders object keys | jq's simultaneous deletion, keys in order |
 | `tonumber` | parses a JSON stream: `"1a"` → `1` then an error, `" 4"` → `4`, `""` → nothing, `"+5.43"` → `+5.43` (not JSON) | jq's grammar: sign, digits, point, exponent, `nan`, `infinity`; anything else is an error |
+| `from_entries` | reads only `key`/`k`/`name`, `value`/`v`; `[{"key":null,"value":1}]` → `{null:1}` — not JSON | also `Key`/`Name`/`Value`; a non-string key is an error |
+| `with_entries(f)` | goes through jaq's own `from_entries` | through the repaired one |
+| `has(k)` | `true` for a negative index, `false` for a number key on an object; errors on `has(nan)`, `has(1.5)` | `false`, an error, `false`, truncates; `null` has nothing |
+| `implode` | rejects `1.5`, `-1`, `1114112` | truncates; writes U+FFFD outside Unicode and for surrogates; jq's messages |
+| `toboolean` | parses JSON: `" true"` → `true` | exactly `true`, `false`, `"true"`, `"false"` |
+| `@base64d` | exact padding only; rejects unused low bits (`"QR=="`) | decodes up to the first `=`, padding optional, low bits ignored; jq's two errors |
+| `@urid` | keeps `%`-garbage as text; invalid UTF-8 becomes U+FFFD | both are errors |
 
-Still divergent: jaq's `from_entries` accepts a non-string key and prints an
-object that is not JSON (`{null:2}`); jq errors. (An object *construction* with
-a computed key is checked; see above.)
+One deliberate exception: jq 1.8.1's `@urid` turns every non-ASCII character
+of its input into U+FFFD (`"é%41" | @urid` is `"��A"`), a bug jq 1.8.2 fixed
+(`"éA"`). Pathfinder follows 1.8.2 there rather than reproduce the bug.
 
 ## Behaviour Pathfinder adds on top of jaq
 
