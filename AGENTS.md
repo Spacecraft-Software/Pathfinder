@@ -118,9 +118,14 @@ hand-written golden.
   both or neither. The literal table is *bound*, not defined
   (`{…} as $__pf_rl | def …`): a definition rebuilds it on every call.
 - **Measure the cost of a jq-level definition before adding one per element.**
-  A filter-parameter call, `first`, and `if type == …` each cost hundreds of
-  milliseconds per 100k calls under jaq; inline text and `label`/`break` were
-  the measured winners (`tonumber`, key deletion).
+  A filter-parameter call, `first`, `type` (about 4 µs under jaq 3.1) and
+  `and`/`or` (several µs each) are expensive; comparisons (`. < ""` is "not a
+  string, number or later type"), nested `if`s, inline text and `label`/`break`
+  are cheap. Type tests in a per-element path are written as comparisons.
+- **Error text reaches scripts only through `catch`.** The rewriter wraps a
+  handler that reads its input in `_pf_err`, which turns jaq's templates back
+  into jq's wording; a builtin whose jq message names it gets a guard that runs
+  jaq's builtin first and re-raises with jq's text only on a wrong input type.
 
 ## Conformance
 

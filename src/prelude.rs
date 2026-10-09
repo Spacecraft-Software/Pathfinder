@@ -77,6 +77,7 @@ const SETPATH_BODY: &str = concat!(
     "else error(\"Cannot index object with \\($kt)\") end) ",
     "elif type == \"array\" then (if $kt == \"number\" or $kt == \"object\" then . ",
     "else error(\"Cannot update field at \\($kt) index of array\") end) ",
+    "elif type == \"string\" and $kt == \"object\" then error(\"Cannot update string slices\") ",
     "else error(\"Cannot index \\(type) with \\($kt)\") end) as $c ",
     // A slice key: both bounds must be numbers; the slice is replaced by an array.
     "| if $kt == \"object\" then ",
@@ -447,8 +448,8 @@ static REPAIRS: &[Def] = &[
     // jaq's `tonumber` parses the string as a stream of JSON values: `"1a"`
     // yields `1` and then an error, `""` yields nothing, `" 4"` is accepted.
     // jq 1.8.1 accepts exactly an optional sign, digits with an optional point
-    // (or a leading one), an optional exponent, and `nan`/`infinity` in any
-    // case. A string jaq's `tonumber` reads in full — its first number prints
+    // (or a leading one), an optional exponent, and `nan`/`infinity`/`inf`
+    // in any case. A string jaq's `tonumber` reads in full — its first number prints
     // back as the string — is already right; anything else takes the exact
     // path, which normalises valid strings to JSON's spelling (no `+`, no bare
     // point) and raises jq's error for the rest — including the strings jaq
@@ -457,31 +458,44 @@ static REPAIRS: &[Def] = &[
     // back as itself — and as invalid JSON — and is sent the exact way. Measured on
     // `map(tonumber)`: the exact path alone ran 35x slower than jq; this shape
     // costs 1.5x jaq's own `tonumber`.
+    // A string that cannot start a number (`"N/A"`, `"abc"`, `""`) is rejected
+    // on its first character, before the regex, which jaq compiles on every
+    // call. Type tests are comparisons: under jaq 3.1 `type == "string"` costs
+    // about 4 µs, and the first version ran it up to six times per call
+    // (`try tonumber catch null` over `"N/A"`: 57 µs each).
     Def {
         name: "tonumber",
         deps: &["_pf_dump"],
-        src: Some(
-            "def _pf_tonumber0: tonumber; \
-             def _pf_tonumber_exact: if type == \"string\" \
-             and test(\"^[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][+-]?[0-9]+)?$\") then \
-             (if .[:1] == \"+\" then .[1:] else . end) \
-             | (if .[:1] == \"-\" then \"-\" else \"\" end) as $s | .[($s | length):] \
-             | split(\".\") as $p \
-             | (if ($p | length) == 1 then $p[0] \
-             elif $p[1] == \"\" or ($p[1][:1] | . == \"e\" or . == \"E\") then (if $p[0] == \"\" then \"0\" else $p[0] end) + $p[1] \
-             else (if $p[0] == \"\" then \"0\" else $p[0] end) + \".\" + $p[1] end) \
-             | $s + . | _pf_tonumber0 \
-             elif type == \"string\" and (ascii_downcase | . == \"nan\" or . == \"-nan\" or . == \"+nan\") then nan \
-             elif type == \"string\" and (ascii_downcase | . == \"infinity\" or . == \"+infinity\") then infinite \
-             elif type == \"string\" and ascii_downcase == \"-infinity\" then 0 - infinite \
-             else error(\"\\(type) (\\(_pf_dump)) cannot be parsed as a number\") end; \
-             def tonumber: label $__pf_o \
-             | ((try _pf_tonumber0 catch null) as $__pf_r \
-             | ($__pf_r | tostring) as $__pf_t \
-             | if ($__pf_r | type) == \"number\" and $__pf_t == tostring and $__pf_t[:1] != \"+\" \
-             then $__pf_r, break $__pf_o else _pf_tonumber_exact, break $__pf_o end), \
-             _pf_tonumber_exact;",
-        ),
+        src: Some(concat!(
+            r#"def _pf_tonumber0: tonumber; "#,
+            r#"def _pf_tonumber_err: error("\(type) (\(_pf_dump)) cannot be parsed as a number"); "#,
+            r#"def _pf_tonumber_serr: error("string (\(_pf_dump)) cannot be parsed as a number"); "#,
+            r#"def _pf_tonumber_exact: if . < "" then _pf_tonumber_err elif . >= [] then _pf_tonumber_err "#,
+            r#"else .[:1] as $c | if $c > "9" then (ascii_downcase as $l | if $l == "nan" then nan "#,
+            r#"elif $l == "infinity" then infinite elif $l == "inf" then infinite else _pf_tonumber_serr end) "#,
+            r#"elif $c < "+" then _pf_tonumber_serr elif $c == "," then _pf_tonumber_serr "#,
+            r#"elif $c == "/" then _pf_tonumber_serr "#,
+            r#"elif test("^[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][+-]?[0-9]+)?$") then "#,
+            r#"(if .[:1] == "+" then .[1:] else . end) "#,
+            r#"| (if .[:1] == "-" then "-" else "" end) as $s | .[($s | length):] "#,
+            r#"| split(".") as $p "#,
+            r#"| (if ($p | length) == 1 then $p[0] "#,
+            r#"elif $p[1] == "" or ($p[1][:1] | . == "e" or . == "E") then (if $p[0] == "" then "0" else $p[0] end) + $p[1] "#,
+            r#"else (if $p[0] == "" then "0" else $p[0] end) + "." + $p[1] end) "#,
+            r#"| $s + . | _pf_tonumber0 "#,
+            r#"else ascii_downcase as $l | if $l == "-nan" then nan elif $l == "+nan" then nan "#,
+            r#"elif $l == "+infinity" then infinite elif $l == "-infinity" then 0 - infinite "#,
+            r#"elif $l == "+inf" then infinite elif $l == "-inf" then 0 - infinite "#,
+            r#"else _pf_tonumber_serr end end end; "#,
+            // Nested `if`s, not `and`: each `and` costs jaq several µs.
+            r#"def tonumber: label $__pf_o "#,
+            r#"| ((try _pf_tonumber0 catch null) as $__pf_r "#,
+            r#"| if $__pf_r > true then (if $__pf_r < "" then (($__pf_r | tostring) as $__pf_t "#,
+            r#"| if $__pf_t == tostring then (if $__pf_t[:1] != "+" then $__pf_r, break $__pf_o "#,
+            r#"else _pf_tonumber_exact, break $__pf_o end) else _pf_tonumber_exact, break $__pf_o end) "#,
+            r#"else _pf_tonumber_exact, break $__pf_o end) else _pf_tonumber_exact, break $__pf_o end), "#,
+            r#"_pf_tonumber_exact;"#,
+        )),
     },
     Def {
         name: "ltrimstr",
@@ -644,6 +658,52 @@ static REPAIRS: &[Def] = &[
             r#"def gsub($re; s; flags): sub($re; s; flags + "g"); def gsub($re; s): sub($re; s; "g");"#,
         ),
     },
+    // Builtins whose jq error names the builtin, so no translation of jaq's
+    // generic message can produce it. jaq's builtin runs first; only an error
+    // with an input of the wrong type is re-raised with jq's text.
+    Def {
+        name: "utf8bytelength",
+        deps: &["_pf_dump"],
+        src: Some(concat!(
+            r#"def _pf_utf8bytelength0: utf8bytelength; def utf8bytelength: . as $__pf_v "#,
+            r#"| try _pf_utf8bytelength0 catch (if $__pf_v < "" or $__pf_v >= [] "#,
+            r#"then $__pf_v | error("\(type) (\(_pf_dump)) only strings have UTF-8 byte length") "#,
+            r#"else error end);"#,
+        )),
+    },
+    Def {
+        name: "trim",
+        deps: &[],
+        src: Some(concat!(
+            r#"def _pf_trim0: trim; def trim: . as $__pf_v | try _pf_trim0 "#,
+            r#"catch (if $__pf_v < "" or $__pf_v >= [] then error("trim input must be a string") else error end);"#,
+        )),
+    },
+    Def {
+        name: "ltrim",
+        deps: &[],
+        src: Some(concat!(
+            r#"def _pf_ltrim0: ltrim; def ltrim: . as $__pf_v | try _pf_ltrim0 "#,
+            r#"catch (if $__pf_v < "" or $__pf_v >= [] then error("trim input must be a string") else error end);"#,
+        )),
+    },
+    Def {
+        name: "rtrim",
+        deps: &[],
+        src: Some(concat!(
+            r#"def _pf_rtrim0: rtrim; def rtrim: . as $__pf_v | try _pf_rtrim0 "#,
+            r#"catch (if $__pf_v < "" or $__pf_v >= [] then error("trim input must be a string") else error end);"#,
+        )),
+    },
+    Def {
+        name: "bsearch",
+        deps: &["_pf_dump"],
+        src: Some(concat!(
+            r#"def _pf_bsearch0($t): bsearch($t); def bsearch($t): . as $__pf_v | try _pf_bsearch0($t) "#,
+            r#"catch (if $__pf_v < [] or $__pf_v >= {} "#,
+            r#"then $__pf_v | error("\(type) (\(_pf_dump)) cannot be searched from") else error end);"#,
+        )),
+    },
     // --- dates --------------------------------------------------------------
     // jq accepts a broken-down time shorter than eight fields and treats the
     // missing fields as zero: `[2024,2,15] | mktime` is 1710460800. jaq
@@ -652,22 +712,36 @@ static REPAIRS: &[Def] = &[
     Def {
         name: "mktime",
         deps: &["_pf_pad_tm"],
-        src: Some("def _pf_mktime: mktime; def mktime: _pf_pad_tm | _pf_mktime;"),
+        src: Some(concat!(
+            r#"def _pf_mktime: mktime; def mktime: . as $__pf_a | try (_pf_pad_tm | _pf_mktime) "#,
+            r#"catch (if $__pf_a < [] or $__pf_a >= {} then error("mktime requires array inputs") "#,
+            r#"elif any($__pf_a[]; type != "number") then error("mktime requires parsed datetime inputs") "#,
+            r#"else error end);"#,
+        )),
     },
     Def {
         name: "strftime",
         deps: &["_pf_pad_tm"],
-        src: Some(
-            "def _pf_strftime($f): strftime($f); def strftime($f): _pf_pad_tm | _pf_strftime($f);",
-        ),
+        src: Some(concat!(
+            r#"def _pf_strftime($f): strftime($f); def strftime($f): . as $__pf_a | try (_pf_pad_tm | _pf_strftime($f)) "#,
+            r#"catch (($__pf_a | type) as $t | if $t != "number" and $t != "array" "#,
+            r#"then error("strftime/1 requires parsed datetime inputs") "#,
+            r#"elif ($f | type) != "string" then error("strftime/1 requires a string format") "#,
+            r#"elif $t == "array" and any($__pf_a[]; type != "number") "#,
+            r#"then error("strftime/1 requires parsed datetime inputs") else error end);"#,
+        )),
     },
     Def {
         name: "strflocaltime",
         deps: &["_pf_pad_tm"],
-        src: Some(
-            "def _pf_strflocaltime($f): strflocaltime($f); \
-             def strflocaltime($f): _pf_pad_tm | _pf_strflocaltime($f);",
-        ),
+        src: Some(concat!(
+            r#"def _pf_strflocaltime($f): strflocaltime($f); def strflocaltime($f): . as $__pf_a | try (_pf_pad_tm | _pf_strflocaltime($f)) "#,
+            r#"catch (($__pf_a | type) as $t | if $t != "number" and $t != "array" "#,
+            r#"then error("strflocaltime/1 requires parsed datetime inputs") "#,
+            r#"elif ($f | type) != "string" then error("strflocaltime/1 requires a string format") "#,
+            r#"elif $t == "array" and any($__pf_a[]; type != "number") "#,
+            r#"then error("strflocaltime/1 requires parsed datetime inputs") else error end);"#,
+        )),
     },
 ];
 
@@ -839,6 +913,7 @@ static INTERNAL: &[Def] = &[
              else error(\"Cannot index null with \\($kt)\") end) \
              elif $ct == \"object\" then (if $kt == \"string\" then . else error(\"Cannot index object with \\($kt)\") end) \
              elif $ct == \"array\" then (if $kt == \"object\" then . else error(\"Cannot update field at \\($kt) index of array\") end) \
+             elif $ct == \"string\" and $kt == \"object\" then error(\"Cannot update string slices\") \
              else error(\"Cannot index \\($ct) with \\($kt)\") end); \
              def _pf_vivify(paths): reduce path(paths) as $p (.; \
              if ($p|length) > 0 and (try (($p[-1]) as $k | getpath($p[:-1]) \
@@ -935,6 +1010,54 @@ static INTERNAL: &[Def] = &[
              > ([$__pf_s | match(\"\\uFFFD|%[Ee][Ff]%[Bb][Ff]%[Bb][Dd]\"; \"g\")] | length) \
              then error(\"string (\\($__pf_s|_pf_dump)) is not a valid uri encoding\") \
              else $__pf_d end end end;",
+        ),
+    },
+    // jq's wording for the errors jaq raises with its own, applied to what a
+    // `catch` handler receives. Each of jaq's templates carries the values
+    // involved as JSON, so they are parsed back out and re-described the way
+    // jq's `type_error` and `jv_get` describe them. Anything else, and any
+    // non-string error value, passes through unchanged. Only the error path
+    // pays for it.
+    Def {
+        name: "_pf_err",
+        deps: &["_pf_dump"],
+        src: Some(concat!(
+            r#"def _pf_err1: [try fromjson catch empty] | if length == 1 then .[0] else empty end; "#,
+            r#"def _pf_err: if type != "string" then . "#,
+            r#"elif (startswith("cannot ") or endswith(" has no length")) | not then . else . as $m | first("#,
+            r#"(if startswith("cannot use ") and endswith(" as iterable (array or object)") "#,
+            r#"then $m[11:-30] | _pf_err1 | "Cannot iterate over \(type) (\(_pf_dump))" else empty end), "#,
+            r#"(if startswith("cannot use ") and endswith(" as number") "#,
+            r#"then $m[11:-10] | _pf_err1 | "\(type) (\(_pf_dump)) number required" else empty end), "#,
+            r#"(if startswith("cannot use ") and endswith(" as rangeable (array or string)") "#,
+            r#"then $m[11:-31] | _pf_err1 | "Cannot index \(type) with object" else empty end), "#,
+            r#"(if endswith(" has no length") "#,
+            r#"then $m[:-14] | _pf_err1 | "\(type) (\(_pf_dump)) has no length" else empty end), "#,
+            // jq's `jv_get`: a short string key is spelled out, raw.
+            r#"(if startswith("cannot index ") then $m[13:] | indices(" with ")[] as $i "#,
+            r#"| (.[:$i] | _pf_err1) as $v | (.[$i + 6:] | _pf_err1) as $k "#,
+            r#"| if ($k | type) == "string" and ($k | utf8bytelength) < 30 "#,
+            r#"then "Cannot index \($v | type) with string \"" + $k + "\"" "#,
+            r#"else "Cannot index \($v | type) with \($k | type)" end else empty end), "#,
+            r#"(if startswith("cannot calculate ") then $m[17:] | (" + ", " - ", " * ", " / ", " % ") as $op "#,
+            r#"| indices($op)[] as $i | (.[:$i] | _pf_err1) as $a | (.[$i + 3:] | _pf_err1) as $b "#,
+            r#"| (($a | type) == "number" and ($b | type) == "number" and $b > -1 and $b < 1) as $zero "#,
+            r#"| {"+": "cannot be added", "-": "cannot be subtracted", "*": "cannot be multiplied", "#,
+            r#""/": "cannot be divided", "%": "cannot be divided (remainder)"}[$op[1:2]] "#,
+            r#"+ (if $zero and ($op == " / " or $op == " % ") then " because the divisor is zero" else "" end) "#,
+            r#"| "\($a | type) (\($a | _pf_dump)) and \($b | type) (\($b | _pf_dump)) \(.)" else empty end), "#,
+            r#"$m) end;"#,
+        )),
+    },
+    // jq's unary minus raises `cannot be negated`; jaq's says `cannot use …
+    // as number`, which `catch` would translate to the math functions'
+    // wording. The rewriter sends a non-literal negation here.
+    Def {
+        name: "_pf_neg",
+        deps: &["_pf_dump"],
+        src: Some(
+            "def _pf_neg: . as $__pf_v | try (- $__pf_v) \
+             catch ($__pf_v | error(\"\\(type) (\\(_pf_dump)) cannot be negated\"));",
         ),
     },
     // Pad a short broken-down-time array to jq's eight fields with zeros.

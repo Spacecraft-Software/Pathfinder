@@ -360,6 +360,62 @@ static CASES: &[Case] = &[
         r#""ab""#,
         &["-c", r#"[scan("(a)|(b)")], [capture("(?<x>[a-z])"; "g")]"#],
     ),
+    // --- jq's error messages (M10) ---
+    c(
+        r#"[{"a":[1,2]}, {"a":123}]"#,
+        &["-c", "map(try .a[] catch ., .a[]?)"],
+    ),
+    c(
+        r#"[0, 1, true, "foobar"]"#,
+        &[
+            "-c",
+            r"[.[] | try .a catch ., try .[0] catch ., try length catch .]",
+        ],
+    ),
+    c(
+        r#"["very-long-string", "x☆☆☆☆☆", [1], null]"#,
+        &["-c", "[.[] | try -. catch ., try (. - .) catch .]"],
+    ),
+    c(
+        "[1,2,{\"a\":{\"b\":{\"c\":33}}}]",
+        &["-c", r#"try join(",") catch ."#],
+    ),
+    c(
+        "0",
+        &[
+            "-c",
+            r#"[try (1 % .) catch ., try ({} * 2) catch ., try ("a" | floor) catch .]"#,
+        ],
+    ),
+    c(
+        r"[[], {}, 55, true]",
+        &[
+            "-c",
+            "[.[] | try utf8bytelength catch ., try trim catch ., try bsearch(0) catch .]",
+        ],
+    ),
+    c(
+        r#"["a",1,2,3,4,5,6,7]"#,
+        &[
+            "-c",
+            r#"[try strftime("%Y") catch ., try mktime catch ., try (0 | strftime([])) catch ., try ("x" | mktime) catch .]"#,
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            r#"[try error("x") catch ., try error({"a":1}) catch ., try error(null) catch .]"#,
+        ],
+    ),
+    c(
+        r#"["", "abc", "N/A", "infin", "1a", ".5", "+5", null]"#,
+        &["-c", "[.[] | try tonumber catch .]"],
+    ),
+    c(
+        "null",
+        &["-c", r#"try ("foobar" | .[1.5:3.5] = "xyz") catch ."#],
+    ),
     // --- date repair ---
     c("1.5", &["-c", "todate"]),
     c("0", &["-c", "todate"]),

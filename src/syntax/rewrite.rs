@@ -104,9 +104,11 @@ fn worth_parsing(src: &str) -> bool {
         toks.iter().any(|t| match &t.tok {
             // Assignment; `reduce`/`foreach` sources; `?//` alternatives and
             // `{$b: pattern}` (a binding before `:`).
-            // `[`: an index or slice that may need jq's number rules.
-            Tok::Op("=" | "|=" | "+=" | "-=" | "*=" | "/=" | "%=" | "//=" | "?//" | "[")
-            | Tok::Keyword(Kw::Reduce | Kw::Foreach)
+            // `[`: an index or slice that may need jq's number rules; `-`: a
+            // negation, which has its own error message; `catch`: a handler,
+            // which sees jq's wording for errors.
+            Tok::Op("=" | "|=" | "+=" | "-=" | "*=" | "/=" | "%=" | "//=" | "?//" | "[" | "-")
+            | Tok::Keyword(Kw::Reduce | Kw::Foreach | Kw::Catch)
             | Tok::Binding(_) => true,
             Tok::Ident(name) => name == "del",
             Tok::Format(name) => matches!(name.as_str(), "base64d" | "urid"),
@@ -249,6 +251,23 @@ impl Cx<'_> {
             // that is a literal stays in place.
             Kind::Slice { base, from, to } => {
                 (self.slice(base, from.as_deref(), to.as_deref()), true)
+            }
+            // A `catch` handler sees jq's wording for the errors jaq words
+            // differently. Only the handler is touched: `try` without one, and
+            // `?`, discard the message anyway.
+            Kind::Try {
+                handler: Some(h), ..
+            } if reads_input(h) => {
+                self.need("_pf_err");
+                let (text, _) =
+                    self.splice_mapping(node, Some(h.span), |t| format!("(_pf_err | {t})"));
+                (text, true)
+            }
+            // jq's unary minus has its own message for a non-number.
+            Kind::Neg(n) if !matches!(n.kind, Kind::Number) => {
+                self.need("_pf_neg");
+                let (t, _) = self.emit(n);
+                (format!("(({t}) | _pf_neg)"), true)
             }
             // jaq's decoders are stricter than jq's in some places and more
             // lenient in others; the prelude has jq's rules.
@@ -772,6 +791,28 @@ const START_NORM: &str = "if . > true then (if isnan then 0 elif . > -9007199254
 /// -Infinity is before any start.
 const END_NORM: &str = "if . > true then (if isnan then null elif . < 9007199254740992 \
      then (if . > -9007199254740992 then ceil else -9007199254740992 end) else null end) else . end";
+
+/// Whether a `catch` handler can see the error it receives. Conservative: only
+/// constants, variables, `empty` and the like answer `false`, and those handlers
+/// are left alone — translating a message nobody reads costs 12 µs per error.
+fn reads_input(node: &Node) -> bool {
+    match &node.kind {
+        Kind::Number | Kind::Var(_) | Kind::Loc | Kind::Break(_) | Kind::Format(_) => {
+            matches!(node.kind, Kind::Format(_))
+        }
+        Kind::Str(s) => s
+            .parts
+            .iter()
+            .any(|p| matches!(p, super::StrSeg::Interp(_))),
+        Kind::Call { name, args } => {
+            !(args.is_empty() && matches!(name.as_str(), "empty" | "null" | "true" | "false"))
+        }
+        Kind::Paren(n) => reads_input(n),
+        Kind::Array(n) => n.as_deref().is_some_and(reads_input),
+        Kind::Comma(a, b) => reads_input(a) || reads_input(b),
+        _ => true,
+    }
+}
 
 /// Whether an index key or slice bound needs jq's number handling. A string,
 /// a constructed array or object, `null`, and an integer literal (negated or

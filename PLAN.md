@@ -39,11 +39,11 @@ templates is translated too; that collision is contrived and documented.
 Both cost nothing until an error happens, apart from the guard's `try`
 (0.3–0.7 µs per call, measured on `keys`, `sort_by` and `test`).
 
-- [ ] P-001 `_pf_dump`: jq 1.8.1's truncated value dump (11 bytes, UTF-8 safe)
-- [ ] P-002 `try … catch` handlers see jq's wording for iterate, index, arithmetic, length and number errors
-- [ ] P-003 Unary minus on a non-number raises `cannot be negated`
-- [ ] P-004 Builtin guards raise jq's own message, only when the input type is wrong
-- [ ] P-005 Differential cases for every translated message
+- [x] P-001 `_pf_dump`: jq 1.8.1's truncated value dump (11 bytes, UTF-8 safe)
+- [x] P-002 `try … catch` handlers see jq's wording for iterate, index, arithmetic, length and number errors
+- [x] P-003 Unary minus on a non-number raises `cannot be negated`
+- [x] P-004 Builtin guards raise jq's own message, only when the input type is wrong
+- [x] P-005 Differential cases for every translated message
 
 ## M11 — Fractional and null indices
 
