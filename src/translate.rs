@@ -215,6 +215,7 @@ pub fn plan(
         input_filename: (args.files.len() == 1)
             .then(|| args.files[0].to_string_lossy().into_owned()),
         ambiguous_filename: args.files.len() > 1,
+        regex_literals: Vec::new(),
     };
 
     let source = program_source(args, read_file)?;

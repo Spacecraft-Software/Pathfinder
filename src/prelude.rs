@@ -77,6 +77,7 @@ const SETPATH_BODY: &str = concat!(
     "else error(\"Cannot index object with \\($kt)\") end) ",
     "elif type == \"array\" then (if $kt == \"number\" or $kt == \"object\" then . ",
     "else error(\"Cannot update field at \\($kt) index of array\") end) ",
+    "elif type == \"string\" and $kt == \"object\" then error(\"Cannot update string slices\") ",
     "else error(\"Cannot index \\(type) with \\($kt)\") end) as $c ",
     // A slice key: both bounds must be numbers; the slice is replaced by an array.
     "| if $kt == \"object\" then ",
@@ -174,13 +175,13 @@ static POLYFILLS: &[Def] = &[
     // jq's so an unsupported name reads identically.
     Def {
         name: "format",
-        deps: &[],
+        deps: &["_pf_base64d", "_pf_urid"],
         src: Some(
             "def format($fmt): if $fmt == \"text\" then @text elif $fmt == \"json\" then @json \
              elif $fmt == \"csv\" then @csv elif $fmt == \"tsv\" then @tsv \
              elif $fmt == \"html\" then @html elif $fmt == \"uri\" then @uri \
              elif $fmt == \"sh\" then @sh elif $fmt == \"base64\" then @base64 \
-             elif $fmt == \"base64d\" then @base64d \
+             elif $fmt == \"base64d\" then _pf_base64d elif $fmt == \"urid\" then _pf_urid \
              else error($fmt + \" is not a valid format\") end;",
         ),
     },
@@ -266,11 +267,11 @@ static REPAIRS: &[Def] = &[
     // --- regex ------------------------------------------------------------
     // jq's `scan` is always global: its definition matches with `"g" + $flags`.
     // jaq's `scan/1` returns only the first match (`"abcdc" | [scan("c")]` is
-    // `["c"]`, not `["c","c"]`). jq 1.8.1's definition, verbatim; it goes
-    // through `match`, which is not shadowed.
+    // `["c"]`, not `["c","c"]`). jq 1.8.1's definition, verbatim, over the
+    // repaired `match`, so an unmatched group scans as `null` as in jq.
     Def {
         name: "scan",
-        deps: &[],
+        deps: &["match"],
         src: Some(
             "def scan($re; $flags): match($re; \"g\" + $flags) \
              | if (.captures|length > 0) then [ .captures | .[] | .string ] else .string end; \
@@ -342,6 +343,86 @@ static REPAIRS: &[Def] = &[
              _pf_setpath($a; $in | getpath($a)));",
         ),
     },
+    // jaq's `from_entries` reads only `key`/`k`/`name` and `value`/`v`, and
+    // builds an object around whatever key it finds — `[{"key":null,
+    // "value":1}]` prints `{null:1}`, which is not JSON. jq 1.8.1 also accepts
+    // `Key`/`Name`/`Value` and rejects a non-string key. jq's definition
+    // (`map({(k): v}) | add | .//={}`), as one pass that sets each key in turn,
+    // with the key check jq's object construction makes. The type test uses
+    // comparisons — under jaq, `type == "string"` costs several times more.
+    Def {
+        name: "from_entries",
+        deps: &["_pf_dump"],
+        src: Some(
+            "def from_entries: reduce .[] as $__pf_e ({}; \
+             ($__pf_e | .key // .Key // .name // .Name) as $__pf_k \
+             | if $__pf_k < \"\" or $__pf_k >= [] \
+             then error(\"Cannot use \\($__pf_k|type) (\\($__pf_k|_pf_dump)) as object key\") \
+             else .[$__pf_k] = ($__pf_e | if has(\"value\") then .value else .Value end) end);",
+        ),
+    },
+    // jaq's native `with_entries` reaches jaq's own `from_entries`, not the
+    // repair above. jq 1.8.1's definition, verbatim.
+    Def {
+        name: "with_entries",
+        deps: &["from_entries"],
+        src: Some("def with_entries(f): to_entries | map(f) | from_entries;"),
+    },
+    // jaq's `has` answers `true` for a negative array index and `false` for a
+    // number key on an object; jq answers `false` and raises an error. jaq
+    // also rejects `has(nan)` and `has(1.5)`, which jq answers. jq's
+    // `jv_has`: `null` has nothing, an object takes a string key, an array a
+    // number key (NaN is absent, a fraction truncates, a negative index is
+    // absent), anything else is an error. A string key goes to jaq's builtin, which is right
+    // wherever it does not raise an error; everything else takes the exact
+    // path. Measured on `select(has("a"))` over 300,000 objects: 0.36 s
+    // against jaq's 0.28 s; the same guard written with `type ==` took 2.8 s.
+    Def {
+        name: "has",
+        deps: &[],
+        src: Some(
+            "def _pf_has0($k): has($k); \
+             def _pf_has_err($k): error(\"Cannot check whether \\(type) has a \\($k|type) key\"); \
+             def _pf_has_slow($k): if . == null then false elif . >= {} then \
+             (if $k >= \"\" then (if $k < [] then _pf_has0($k) else _pf_has_err($k) end) else _pf_has_err($k) end) \
+             elif . >= [] then (if $k > true then (if $k < \"\" then \
+             (if ($k|isnan) then false else ($k | if . < 0 then ceil else floor end) as $i \
+             | $i >= 0 and $i < length end) else _pf_has_err($k) end) else _pf_has_err($k) end) \
+             else _pf_has_err($k) end; \
+             def has($k): if $k < \"\" then _pf_has_slow($k) elif $k >= [] then _pf_has_slow($k) \
+             else . as $__pf_in | try _pf_has0($k) catch ($__pf_in | _pf_has_slow($k)) end;",
+        ),
+    },
+    // jaq's `implode` rejects a fractional codepoint and one outside Unicode;
+    // jq truncates the first and writes U+FFFD for the second (and for a
+    // surrogate), and words its errors differently. jaq's builtin answers
+    // every array it accepts the way jq does, so it runs first.
+    Def {
+        name: "implode",
+        deps: &["_pf_dump"],
+        src: Some(
+            "def _pf_implode0: implode; \
+             def implode: if . >= [] then (if . < {} then . as $__pf_a | try _pf_implode0 \
+             catch ($__pf_a | map(if . > true then (if . < \"\" then (if isnan then null else . end) else null end) else null end \
+             // error(\"\\(type) (\\(_pf_dump)) can't be imploded, unicode codepoint needs to be numeric\") \
+             | if . < 0 then ceil else floor end \
+             | if . < 0 or . > 1114111 or (. >= 55296 and . <= 57343) then 65533 else . end) \
+             | _pf_implode0) \
+             else error(\"implode input must be an array\") end) \
+             else error(\"implode input must be an array\") end;",
+        ),
+    },
+    // jq accepts exactly `true`, `false`, `"true"` and `"false"`. jaq parses
+    // the string as JSON, so `" true"` is accepted, and its errors differ.
+    Def {
+        name: "toboolean",
+        deps: &["_pf_dump"],
+        src: Some(
+            "def toboolean: if . == true or . == false then . elif . == \"true\" then true \
+             elif . == \"false\" then false \
+             else error(\"\\(type) (\\(_pf_dump)) cannot be parsed as a boolean\") end;",
+        ),
+    },
     // --- strings ------------------------------------------------------------
     // jq's `startswith`/`endswith` reject a non-string with their own message,
     // and jq 1.8.1 defines `ltrimstr`/`rtrimstr` on top of them, so all four
@@ -367,8 +448,8 @@ static REPAIRS: &[Def] = &[
     // jaq's `tonumber` parses the string as a stream of JSON values: `"1a"`
     // yields `1` and then an error, `""` yields nothing, `" 4"` is accepted.
     // jq 1.8.1 accepts exactly an optional sign, digits with an optional point
-    // (or a leading one), an optional exponent, and `nan`/`infinity` in any
-    // case. A string jaq's `tonumber` reads in full — its first number prints
+    // (or a leading one), an optional exponent, and `nan`/`infinity`/`inf`
+    // in any case. A string jaq's `tonumber` reads in full — its first number prints
     // back as the string — is already right; anything else takes the exact
     // path, which normalises valid strings to JSON's spelling (no `+`, no bare
     // point) and raises jq's error for the rest — including the strings jaq
@@ -377,31 +458,44 @@ static REPAIRS: &[Def] = &[
     // back as itself — and as invalid JSON — and is sent the exact way. Measured on
     // `map(tonumber)`: the exact path alone ran 35x slower than jq; this shape
     // costs 1.5x jaq's own `tonumber`.
+    // A string that cannot start a number (`"N/A"`, `"abc"`, `""`) is rejected
+    // on its first character, before the regex, which jaq compiles on every
+    // call. Type tests are comparisons: under jaq 3.1 `type == "string"` costs
+    // about 4 µs, and the first version ran it up to six times per call
+    // (`try tonumber catch null` over `"N/A"`: 57 µs each).
     Def {
         name: "tonumber",
-        deps: &[],
-        src: Some(
-            "def _pf_tonumber0: tonumber; \
-             def _pf_tonumber_exact: if type == \"string\" \
-             and test(\"^[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][+-]?[0-9]+)?$\") then \
-             (if .[:1] == \"+\" then .[1:] else . end) \
-             | (if .[:1] == \"-\" then \"-\" else \"\" end) as $s | .[($s | length):] \
-             | split(\".\") as $p \
-             | (if ($p | length) == 1 then $p[0] \
-             elif $p[1] == \"\" or ($p[1][:1] | . == \"e\" or . == \"E\") then (if $p[0] == \"\" then \"0\" else $p[0] end) + $p[1] \
-             else (if $p[0] == \"\" then \"0\" else $p[0] end) + \".\" + $p[1] end) \
-             | $s + . | _pf_tonumber0 \
-             elif type == \"string\" and (ascii_downcase | . == \"nan\" or . == \"-nan\" or . == \"+nan\") then nan \
-             elif type == \"string\" and (ascii_downcase | . == \"infinity\" or . == \"+infinity\") then infinite \
-             elif type == \"string\" and ascii_downcase == \"-infinity\" then 0 - infinite \
-             else error(\"\\(type) (\\(tojson | if length > 14 then .[:11] + \"...\" else . end)) cannot be parsed as a number\") end; \
-             def tonumber: label $__pf_o \
-             | ((try _pf_tonumber0 catch null) as $__pf_r \
-             | ($__pf_r | tostring) as $__pf_t \
-             | if ($__pf_r | type) == \"number\" and $__pf_t == tostring and $__pf_t[:1] != \"+\" \
-             then $__pf_r, break $__pf_o else _pf_tonumber_exact, break $__pf_o end), \
-             _pf_tonumber_exact;",
-        ),
+        deps: &["_pf_dump"],
+        src: Some(concat!(
+            r#"def _pf_tonumber0: tonumber; "#,
+            r#"def _pf_tonumber_err: error("\(type) (\(_pf_dump)) cannot be parsed as a number"); "#,
+            r#"def _pf_tonumber_serr: error("string (\(_pf_dump)) cannot be parsed as a number"); "#,
+            r#"def _pf_tonumber_exact: if . < "" then _pf_tonumber_err elif . >= [] then _pf_tonumber_err "#,
+            r#"else .[:1] as $c | if $c > "9" then (ascii_downcase as $l | if $l == "nan" then nan "#,
+            r#"elif $l == "infinity" then infinite elif $l == "inf" then infinite else _pf_tonumber_serr end) "#,
+            r#"elif $c < "+" then _pf_tonumber_serr elif $c == "," then _pf_tonumber_serr "#,
+            r#"elif $c == "/" then _pf_tonumber_serr "#,
+            r#"elif test("^[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][+-]?[0-9]+)?$") then "#,
+            r#"(if .[:1] == "+" then .[1:] else . end) "#,
+            r#"| (if .[:1] == "-" then "-" else "" end) as $s | .[($s | length):] "#,
+            r#"| split(".") as $p "#,
+            r#"| (if ($p | length) == 1 then $p[0] "#,
+            r#"elif $p[1] == "" or ($p[1][:1] | . == "e" or . == "E") then (if $p[0] == "" then "0" else $p[0] end) + $p[1] "#,
+            r#"else (if $p[0] == "" then "0" else $p[0] end) + "." + $p[1] end) "#,
+            r#"| $s + . | _pf_tonumber0 "#,
+            r#"else ascii_downcase as $l | if $l == "-nan" then nan elif $l == "+nan" then nan "#,
+            r#"elif $l == "+infinity" then infinite elif $l == "-infinity" then 0 - infinite "#,
+            r#"elif $l == "+inf" then infinite elif $l == "-inf" then 0 - infinite "#,
+            r#"else _pf_tonumber_serr end end end; "#,
+            // Nested `if`s, not `and`: each `and` costs jaq several µs.
+            r#"def tonumber: label $__pf_o "#,
+            r#"| ((try _pf_tonumber0 catch null) as $__pf_r "#,
+            r#"| if $__pf_r > true then (if $__pf_r < "" then (($__pf_r | tostring) as $__pf_t "#,
+            r#"| if $__pf_t == tostring then (if $__pf_t[:1] != "+" then $__pf_r, break $__pf_o "#,
+            r#"else _pf_tonumber_exact, break $__pf_o end) else _pf_tonumber_exact, break $__pf_o end) "#,
+            r#"else _pf_tonumber_exact, break $__pf_o end) else _pf_tonumber_exact, break $__pf_o end), "#,
+            r#"_pf_tonumber_exact;"#,
+        )),
     },
     Def {
         name: "ltrimstr",
@@ -421,38 +515,194 @@ static REPAIRS: &[Def] = &[
     // builtin instead: jaq's two-argument forms reject `null` ("cannot use null
     // as string"), which broke plain `match("re")` in the first version of this
     // repair.
+    // jaq leaves an unmatched group out of `captures` altogether and gives an
+    // unnamed group no `name`; jq lists every group in order, unmatched ones
+    // as `{"offset":-1,"string":null,"length":0,"name":…}`, and names unnamed
+    // ones `null`. Once a group is missing, jaq's list no longer says which
+    // group each entry was, so every unnamed capture group is given a
+    // synthetic name (`(?<__pf_g0>`) before matching, and the list is rebuilt
+    // in group order. Group openers are found with one native match over the
+    // regex text that steps over escapes, character classes and `(?…)`. A
+    // regex without `(` is matched as it is.
     Def {
         name: "match",
-        deps: &[],
-        src: Some(
-            "def _pf_match(re; mode): match(re; mode); def _pf_match1(re): match(re); def match($val): ($val|type) as $vt \
-             | if $vt == \"string\" then _pf_match1($val) \
-             elif $vt == \"array\" and ($val | length) > 1 then _pf_match($val[0]; $val[1]) \
-             elif $vt == \"array\" and ($val | length) > 0 then _pf_match1($val[0]) \
-             else error($vt + \" not a string or array\") end;",
-        ),
+        deps: &["_pf_regex_lit"],
+        src: Some(concat!(
+            r#"def _pf_match0(re; mode): match(re; mode); def _pf_match01(re): match(re); "#,
+            // What is known about a regex: the table for a literal (from
+            // `src/regex.rs`), or the run-time scan, which assumes the worst.
+            // Extended mode (`x`) changes what the text means, so it always
+            // takes the scan.
+            r#"def _pf_scanre($re): if ($re | contains("(")) | not "#,
+            r#"then {re: $re, simple: true, unnamed: false, nullable: null} "#,
+            r#"else reduce ($re | _pf_match0("\\\\.|\\[\\^?\\]?(?:\\[:[a-z]+:\\]|\\\\.|[^\\]\\\\])*\\]"#,
+            r#"|\\(\\?P?<[A-Za-z_][A-Za-z0-9_]*>|\\(\\?|\\("; "g")) as $t "#,
+            r#"({re: "", at: 0, groups: [], dict: {}, simple: false, nullable: null}; "#,
+            r#"if $t.string == "(" then ("__pf_g\(.groups | length)") as $n "#,
+            r#"| .re += $re[.at:$t.offset] + "(?<\($n)>" | .at = $t.offset + 1 | .groups += [[null, $n]] "#,
+            r#"| .dict[$n] = null "#,
+            r#"elif ($t.string | .[:3] == "(?<" or .[:4] == "(?P<") "#,
+            r#"then ($t.string | if .[2:3] == "P" then .[4:-1] else .[3:-1] end) as $n "#,
+            r#"| .groups += [[$n, $n]] | .dict[$n] = $n else . end) | .re += $re[.at:] end; "#,
+            r#"def _pf_regex($re; $mode): if $mode == null then ($__pf_rl[$re] // _pf_scanre($re)) "#,
+            r#"elif ($mode | contains("x")) then _pf_scanre($re) else ($__pf_rl[$re] // _pf_scanre($re)) end; "#,
+            // jaq's global matching drops an empty match that starts where a
+            // non-empty one ended (`"ab1" | match("[a-z]*"; "g")` misses the
+            // one at 2); jq reports it. Where the regex can match empty, each
+            // such position is re-tried with one character of left context,
+            // which is all a Rust-regex assertion looks at.
+            r#"def _pf_gaps($re; $mode): . as $s | ($mode | explode | map(select(. != 103)) | implode) as $m1 "#,
+            r#"| [_pf_match0($re; $mode)] as $ms | range($ms | length) as $i | $ms[$i] "#,
+            r#"| ., (if .length > 0 and ($i + 1 == ($ms | length) or $ms[$i + 1].offset > .offset + .length) "#,
+            r#"then (.offset + .length) as $e | first($s[$e - 1:] | _pf_match0("\\A(?s:.)(?:" + $re + ")"; $m1) "#,
+            r#"| select(.length == 1) | {offset: $e, length: 0, string: "", "#,
+            r#"captures: (.captures | map(.offset += $e - 1))})? // empty else empty end); "#,
+            r#"def _pf_rawg($r; $mode): if $mode == null then _pf_match01($r.re) "#,
+            r#"elif ($mode | contains("g")) then (if $r.nullable == false then _pf_match0($r.re; $mode) "#,
+            r#"elif ($mode | contains("n")) then _pf_match0($r.re; $mode) "#,
+            r#"elif $r.nullable then _pf_gaps($r.re; $mode) "#,
+            r#"elif (first($r.re | _pf_match01("\\\\[bBAzZ]|[$^]")) | true) "#,
+            r#"// ([("" | _pf_match0("\\A(?:" + $r.re + ")\\z"; ""))] | length > 0) "#,
+            r#"then _pf_gaps($r.re; $mode) else _pf_match0($r.re; $mode) end) "#,
+            r#"else _pf_match0($r.re; $mode) end; "#,
+            // Every group takes part: jaq's list is right but for the `name`
+            // of an unnamed group. Otherwise rename where every group matched,
+            // and rebuild the list in group order where some did not.
+            r#"def _pf_match($re; $mode): _pf_regex($re; $mode) as $r | _pf_rawg($r; $mode) "#,
+            r#"| if $r.simple then (if $r.unnamed then .captures |= map(if .name == null then .name = null else . end) "#,
+            r#"else . end) "#,
+            r#"elif (.captures | length) == ($r.groups | length) then .captures |= map(.name = $r.dict[.name]) "#,
+            r#"else (reduce .captures[] as $c ({}; .[$c.name] = $c)) as $by "#,
+            r#"| .captures = [$r.groups[] as [$name, $syn] | $by[$syn] as $m "#,
+            r#"| if $m == null then {offset: -1, string: null, length: 0, name: $name} "#,
+            r#"else {offset: $m.offset, length: $m.length, string: $m.string, name: $name} end] end; "#,
+            // jq's `$`-parameter order: the mode is the outer loop.
+            r#"def match(re; mode): mode as $mode | re as $re | _pf_match($re; $mode); "#,
+            // jq's dispatch on `$val`'s type, with comparisons for `type ==`,
+            // which costs jaq several microseconds a call.
+            r#"def match($val): if $val < [] then (if $val >= "" then _pf_match($val; null) "#,
+            r#"else error("\($val|type) not a string or array") end) "#,
+            r#"elif $val < {} then (if ($val | length) > 1 then _pf_match($val[0]; $val[1]) "#,
+            r#"elif ($val | length) > 0 then _pf_match($val[0]; null) "#,
+            r#"else error("array not a string or array") end) "#,
+            r#"else error("object not a string or array") end;"#,
+        )),
     },
     Def {
         name: "test",
         deps: &[],
-        src: Some(
-            "def _pf_test(re; mode): test(re; mode); def _pf_test1(re): test(re); def test($val): ($val|type) as $vt \
-             | if $vt == \"string\" then _pf_test1($val) \
-             elif $vt == \"array\" and ($val | length) > 1 then _pf_test($val[0]; $val[1]) \
-             elif $vt == \"array\" and ($val | length) > 0 then _pf_test1($val[0]) \
-             else error($vt + \" not a string or array\") end;",
-        ),
+        src: Some(concat!(
+            r#"def _pf_test(re; mode): test(re; mode); def _pf_test1(re): test(re); "#,
+            r#"def test($val): if $val < [] then (if $val >= "" then _pf_test1($val) "#,
+            r#"else error("\($val|type) not a string or array") end) "#,
+            r#"elif $val < {} then (if ($val | length) > 1 then _pf_test($val[0]; $val[1]) "#,
+            r#"elif ($val | length) > 0 then _pf_test1($val[0]) "#,
+            r#"else error("array not a string or array") end) "#,
+            r#"else error("object not a string or array") end;"#,
+        )),
     },
+    // jq 1.8.1's `capture`, `sub` and `gsub`, verbatim, over the repaired
+    // `match`: an unmatched named group is `null` in `capture` (jaq leaves the
+    // key out), and `sub`/`gsub` follow jq on empty matches and on a
+    // replacement with several outputs, where jaq's own differ. One change to
+    // `sub`: jq grows `.result` with `.result[$ix] += …`, which jaq's `+=`
+    // refuses past the end, so the array is extended explicitly.
     Def {
         name: "capture",
-        deps: &[],
+        deps: &["match"],
+        src: Some(concat!(
+            // Where every group takes part, jaq's own `capture` is jq's.
+            r#"def _pf_capture0(re; mods): capture(re; mods); def _pf_capture01(re): capture(re); "#,
+            r#"def _pf_jqcapture($re; $mods): match($re; $mods) | reduce (.captures | .[] | select(.name != null) "#,
+            r#"| { (.name) : .string }) as $pair ({}; . + $pair); "#,
+            r#"def capture(re; mods): mods as $mods | re as $re | if $re < "" then _pf_jqcapture($re; $mods) "#,
+            r#"elif _pf_regex($re; $mods).simple then (if $mods == null then _pf_capture01($re) "#,
+            r#"else _pf_capture0($re; $mods) end) else _pf_jqcapture($re; $mods) end; "#,
+            r#"def capture($val): if $val < [] then (if $val >= "" then capture($val; null) "#,
+            r#"else error("\($val|type) not a string or array") end) "#,
+            r#"elif $val < {} then (if ($val | length) > 1 then capture($val[0]; $val[1]) "#,
+            r#"elif ($val | length) > 0 then capture($val[0]; null) "#,
+            r#"else error("array not a string or array") end) "#,
+            r#"else error("object not a string or array") end;"#,
+        )),
+    },
+    // jq's `sub` is slow in the jq language; jaq's builtin gives jq's
+    // answer whenever every group takes part, the regex cannot match empty,
+    // and the replacement yields exactly one value per match. The first two
+    // are known for a literal regex; the third is checked as it runs, and a
+    // replacement with several outputs (or none) restarts on jq's definition.
+    Def {
+        name: "sub",
+        deps: &["match"],
+        src: Some(concat!(
+            r#"def _pf_sub0(re; s; flags): sub(re; s; flags); "#,
+            r#"def _pf_jqsub($re; s; $flags): . as $in | (reduce match($re; $flags) as $edit "#,
+            r#"({result: [], previous: 0}; $in[ .previous: ($edit | .offset) ] as $gap "#,
+            r#"| [reduce ( $edit | .captures | .[] | select(.name != null) | { (.name) : .string } ) as $pair "#,
+            r#"({}; . + $pair) | s ] as $inserts "#,
+            r#"| reduce range(0; $inserts|length) as $ix (.; .result |= (if length > $ix "#,
+            r#"then .[$ix] += $gap + $inserts[$ix] else . + [range(length; $ix) | null] + [$gap + $inserts[$ix]] end)) "#,
+            r#"| .previous = ($edit | .offset + .length ) ) | .result[] + $in[.previous:] ) // $in; "#,
+            r#"def sub($re; s; $flags): if $re < "" then _pf_jqsub($re; s; $flags) "#,
+            r#"elif _pf_regex($re; $flags) | .simple and .nullable == false then . as $__pf_in "#,
+            r#"| try _pf_sub0($re; [s] | if length == 1 then .[0] else error("__pf_multi") end; $flags) "#,
+            r#"catch (if . == "__pf_multi" then $__pf_in | _pf_jqsub($re; s; $flags) else error end) "#,
+            r#"else _pf_jqsub($re; s; $flags) end; "#,
+            r#"def sub($re; s): sub($re; s; "");"#,
+        )),
+    },
+    Def {
+        name: "gsub",
+        deps: &["sub"],
         src: Some(
-            "def _pf_capture(re; mods): capture(re; mods); def _pf_capture1(re): capture(re); def capture($val): ($val|type) as $vt \
-             | if $vt == \"string\" then _pf_capture1($val) \
-             elif $vt == \"array\" and ($val | length) > 1 then _pf_capture($val[0]; $val[1]) \
-             elif $vt == \"array\" and ($val | length) > 0 then _pf_capture1($val[0]) \
-             else error($vt + \" not a string or array\") end;",
+            r#"def gsub($re; s; flags): sub($re; s; flags + "g"); def gsub($re; s): sub($re; s; "g");"#,
         ),
+    },
+    // Builtins whose jq error names the builtin, so no translation of jaq's
+    // generic message can produce it. jaq's builtin runs first; only an error
+    // with an input of the wrong type is re-raised with jq's text.
+    Def {
+        name: "utf8bytelength",
+        deps: &["_pf_dump"],
+        src: Some(concat!(
+            r#"def _pf_utf8bytelength0: utf8bytelength; def utf8bytelength: . as $__pf_v "#,
+            r#"| try _pf_utf8bytelength0 catch (if $__pf_v < "" or $__pf_v >= [] "#,
+            r#"then $__pf_v | error("\(type) (\(_pf_dump)) only strings have UTF-8 byte length") "#,
+            r#"else error end);"#,
+        )),
+    },
+    Def {
+        name: "trim",
+        deps: &[],
+        src: Some(concat!(
+            r#"def _pf_trim0: trim; def trim: . as $__pf_v | try _pf_trim0 "#,
+            r#"catch (if $__pf_v < "" or $__pf_v >= [] then error("trim input must be a string") else error end);"#,
+        )),
+    },
+    Def {
+        name: "ltrim",
+        deps: &[],
+        src: Some(concat!(
+            r#"def _pf_ltrim0: ltrim; def ltrim: . as $__pf_v | try _pf_ltrim0 "#,
+            r#"catch (if $__pf_v < "" or $__pf_v >= [] then error("trim input must be a string") else error end);"#,
+        )),
+    },
+    Def {
+        name: "rtrim",
+        deps: &[],
+        src: Some(concat!(
+            r#"def _pf_rtrim0: rtrim; def rtrim: . as $__pf_v | try _pf_rtrim0 "#,
+            r#"catch (if $__pf_v < "" or $__pf_v >= [] then error("trim input must be a string") else error end);"#,
+        )),
+    },
+    Def {
+        name: "bsearch",
+        deps: &["_pf_dump"],
+        src: Some(concat!(
+            r#"def _pf_bsearch0($t): bsearch($t); def bsearch($t): . as $__pf_v | try _pf_bsearch0($t) "#,
+            r#"catch (if $__pf_v < [] or $__pf_v >= {} "#,
+            r#"then $__pf_v | error("\(type) (\(_pf_dump)) cannot be searched from") else error end);"#,
+        )),
     },
     // --- dates --------------------------------------------------------------
     // jq accepts a broken-down time shorter than eight fields and treats the
@@ -462,22 +712,36 @@ static REPAIRS: &[Def] = &[
     Def {
         name: "mktime",
         deps: &["_pf_pad_tm"],
-        src: Some("def _pf_mktime: mktime; def mktime: _pf_pad_tm | _pf_mktime;"),
+        src: Some(concat!(
+            r#"def _pf_mktime: mktime; def mktime: . as $__pf_a | try (_pf_pad_tm | _pf_mktime) "#,
+            r#"catch (if $__pf_a < [] or $__pf_a >= {} then error("mktime requires array inputs") "#,
+            r#"elif any($__pf_a[]; type != "number") then error("mktime requires parsed datetime inputs") "#,
+            r#"else error end);"#,
+        )),
     },
     Def {
         name: "strftime",
         deps: &["_pf_pad_tm"],
-        src: Some(
-            "def _pf_strftime($f): strftime($f); def strftime($f): _pf_pad_tm | _pf_strftime($f);",
-        ),
+        src: Some(concat!(
+            r#"def _pf_strftime($f): strftime($f); def strftime($f): . as $__pf_a | try (_pf_pad_tm | _pf_strftime($f)) "#,
+            r#"catch (($__pf_a | type) as $t | if $t != "number" and $t != "array" "#,
+            r#"then error("strftime/1 requires parsed datetime inputs") "#,
+            r#"elif ($f | type) != "string" then error("strftime/1 requires a string format") "#,
+            r#"elif $t == "array" and any($__pf_a[]; type != "number") "#,
+            r#"then error("strftime/1 requires parsed datetime inputs") else error end);"#,
+        )),
     },
     Def {
         name: "strflocaltime",
         deps: &["_pf_pad_tm"],
-        src: Some(
-            "def _pf_strflocaltime($f): strflocaltime($f); \
-             def strflocaltime($f): _pf_pad_tm | _pf_strflocaltime($f);",
-        ),
+        src: Some(concat!(
+            r#"def _pf_strflocaltime($f): strflocaltime($f); def strflocaltime($f): . as $__pf_a | try (_pf_pad_tm | _pf_strflocaltime($f)) "#,
+            r#"catch (($__pf_a | type) as $t | if $t != "number" and $t != "array" "#,
+            r#"then error("strflocaltime/1 requires parsed datetime inputs") "#,
+            r#"elif ($f | type) != "string" then error("strflocaltime/1 requires a string format") "#,
+            r#"elif $t == "array" and any($__pf_a[]; type != "number") "#,
+            r#"then error("strflocaltime/1 requires parsed datetime inputs") else error end);"#,
+        )),
     },
 ];
 
@@ -649,6 +913,7 @@ static INTERNAL: &[Def] = &[
              else error(\"Cannot index null with \\($kt)\") end) \
              elif $ct == \"object\" then (if $kt == \"string\" then . else error(\"Cannot index object with \\($kt)\") end) \
              elif $ct == \"array\" then (if $kt == \"object\" then . else error(\"Cannot update field at \\($kt) index of array\") end) \
+             elif $ct == \"string\" and $kt == \"object\" then error(\"Cannot update string slices\") \
              else error(\"Cannot index \\($ct) with \\($kt)\") end); \
              def _pf_vivify(paths): reduce path(paths) as $p (.; \
              if ($p|length) > 0 and (try (($p[-1]) as $k | getpath($p[:-1]) \
@@ -684,6 +949,117 @@ static INTERNAL: &[Def] = &[
              | . as $__pf_dot | $__pf_dot[0] | _pf_delpaths($__pf_dot[1]);",
         ),
     },
+    // The literal regexes of this filter with their groups named, built per
+    // run by `dynamic` from `src/regex.rs`.
+    Def {
+        name: "_pf_regex_lit",
+        deps: &[],
+        src: None,
+    },
+    // jq 1.8.1's `jv_dump_string_trunc` with its 15-byte buffer, which every
+    // `type (value)` error message uses: the JSON text, cut to 11 bytes plus
+    // `...` when it does not fit in 14 — backing off to a character boundary
+    // rather than splitting UTF-8 (`"☆☆☆...`, not 11 bytes of it).
+    Def {
+        name: "_pf_dump",
+        deps: &[],
+        src: Some(
+            "def _pf_dump: tojson | if utf8bytelength <= 14 then . else explode as $__pf_cs \
+             | ([foreach $__pf_cs[] as $c (0; . + (if $c < 128 then 1 elif $c < 2048 then 2 \
+             elif $c < 65536 then 3 else 4 end)) | select(. <= 11)] | length) as $__pf_n \
+             | ($__pf_cs[:$__pf_n] | implode) + \"...\" end;",
+        ),
+    },
+    // jq's `@base64d` decodes up to the first `=` and ignores the rest,
+    // accepts missing padding, and rejects only a character outside the
+    // standard alphabet or a single leftover character. jaq's requires exact
+    // padding, and its errors differ. jq also ignores the unused low bits of
+    // the last character (`"QR"` is `"A"`), which jaq rejects; they are
+    // cleared before decoding. jaq runs first; what it rejects is
+    // re-decoded the way jq reads it, with jq's errors. Both read `tostring`.
+    Def {
+        name: "_pf_base64d",
+        deps: &["_pf_dump"],
+        src: Some(
+            "def _pf_base64d: tostring | . as $__pf_s | try @base64d catch ($__pf_s \
+             | (split(\"=\")[0]) as $__pf_t \
+             | if ($__pf_t | test(\"^[A-Za-z0-9+/]*$\") | not) \
+             then error(\"string (\\($__pf_s|_pf_dump)) is not valid base64 data\") \
+             elif ($__pf_t | length) % 4 == 1 \
+             then error(\"string (\\($__pf_s|_pf_dump)) trailing base64 byte found\") \
+             else (($__pf_t | length) % 4) as $__pf_r \
+             | \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\" as $__pf_a \
+             | (if $__pf_r == 0 then $__pf_t else ($__pf_a | index($__pf_t[-1:])) as $__pf_v \
+             | $__pf_t[:-1] + $__pf_a[$__pf_v - $__pf_v % (if $__pf_r == 2 then 16 else 4 end):][:1] end) \
+             + (\"==\" | .[:(4 - $__pf_r) % 4]) | @base64d end);",
+        ),
+    },
+    // jq's `@urid` rejects a `%` not followed by two hex digits, and decoded
+    // bytes that are not UTF-8; jaq keeps the first as text and replaces the
+    // second with U+FFFD. Decoding added a U+FFFD the input did not spell —
+    // literally or as `%EF%BF%BD` — exactly when the bytes were invalid.
+    Def {
+        name: "_pf_urid",
+        deps: &["_pf_dump"],
+        src: Some(
+            "def _pf_urid: tostring | if index(\"%\") == null then . \
+             else . as $__pf_s | if test(\"^([^%]|%[0-9A-Fa-f]{2})*$\") | not \
+             then error(\"string (\\($__pf_s|_pf_dump)) is not a valid uri encoding\") \
+             else @urid as $__pf_d \
+             | if ([$__pf_d | match(\"\\uFFFD\"; \"g\")] | length) \
+             > ([$__pf_s | match(\"\\uFFFD|%[Ee][Ff]%[Bb][Ff]%[Bb][Dd]\"; \"g\")] | length) \
+             then error(\"string (\\($__pf_s|_pf_dump)) is not a valid uri encoding\") \
+             else $__pf_d end end end;",
+        ),
+    },
+    // jq's wording for the errors jaq raises with its own, applied to what a
+    // `catch` handler receives. Each of jaq's templates carries the values
+    // involved as JSON, so they are parsed back out and re-described the way
+    // jq's `type_error` and `jv_get` describe them. Anything else, and any
+    // non-string error value, passes through unchanged. Only the error path
+    // pays for it.
+    Def {
+        name: "_pf_err",
+        deps: &["_pf_dump"],
+        src: Some(concat!(
+            r#"def _pf_err1: [try fromjson catch empty] | if length == 1 then .[0] else empty end; "#,
+            r#"def _pf_err: if type != "string" then . "#,
+            r#"elif (startswith("cannot ") or endswith(" has no length")) | not then . else . as $m | first("#,
+            r#"(if startswith("cannot use ") and endswith(" as iterable (array or object)") "#,
+            r#"then $m[11:-30] | _pf_err1 | "Cannot iterate over \(type) (\(_pf_dump))" else empty end), "#,
+            r#"(if startswith("cannot use ") and endswith(" as number") "#,
+            r#"then $m[11:-10] | _pf_err1 | "\(type) (\(_pf_dump)) number required" else empty end), "#,
+            r#"(if startswith("cannot use ") and endswith(" as rangeable (array or string)") "#,
+            r#"then $m[11:-31] | _pf_err1 | "Cannot index \(type) with object" else empty end), "#,
+            r#"(if endswith(" has no length") "#,
+            r#"then $m[:-14] | _pf_err1 | "\(type) (\(_pf_dump)) has no length" else empty end), "#,
+            // jq's `jv_get`: a short string key is spelled out, raw.
+            r#"(if startswith("cannot index ") then $m[13:] | indices(" with ")[] as $i "#,
+            r#"| (.[:$i] | _pf_err1) as $v | (.[$i + 6:] | _pf_err1) as $k "#,
+            r#"| if ($k | type) == "string" and ($k | utf8bytelength) < 30 "#,
+            r#"then "Cannot index \($v | type) with string \"" + $k + "\"" "#,
+            r#"else "Cannot index \($v | type) with \($k | type)" end else empty end), "#,
+            r#"(if startswith("cannot calculate ") then $m[17:] | (" + ", " - ", " * ", " / ", " % ") as $op "#,
+            r#"| indices($op)[] as $i | (.[:$i] | _pf_err1) as $a | (.[$i + 3:] | _pf_err1) as $b "#,
+            r#"| (($a | type) == "number" and ($b | type) == "number" and $b > -1 and $b < 1) as $zero "#,
+            r#"| {"+": "cannot be added", "-": "cannot be subtracted", "*": "cannot be multiplied", "#,
+            r#""/": "cannot be divided", "%": "cannot be divided (remainder)"}[$op[1:2]] "#,
+            r#"+ (if $zero and ($op == " / " or $op == " % ") then " because the divisor is zero" else "" end) "#,
+            r#"| "\($a | type) (\($a | _pf_dump)) and \($b | type) (\($b | _pf_dump)) \(.)" else empty end), "#,
+            r#"$m) end;"#,
+        )),
+    },
+    // jq's unary minus raises `cannot be negated`; jaq's says `cannot use …
+    // as number`, which `catch` would translate to the math functions'
+    // wording. The rewriter sends a non-literal negation here.
+    Def {
+        name: "_pf_neg",
+        deps: &["_pf_dump"],
+        src: Some(
+            "def _pf_neg: . as $__pf_v | try (- $__pf_v) \
+             catch ($__pf_v | error(\"\\(type) (\\(_pf_dump)) cannot be negated\"));",
+        ),
+    },
     // Pad a short broken-down-time array to jq's eight fields with zeros.
     Def {
         name: "_pf_pad_tm",
@@ -707,6 +1083,9 @@ pub struct Context {
     /// Set when more than one input file was given, making `input_filename`
     /// unanswerable rather than merely absent.
     pub ambiguous_filename: bool,
+    /// The filter's plain string literals that contain `(`: candidate regexes
+    /// whose groups are named ahead of time (see `crate::regex`).
+    pub regex_literals: Vec<String>,
 }
 
 fn find<'a>(name: &str, table: &'a [Def]) -> Option<&'a Def> {
@@ -724,6 +1103,9 @@ fn dynamic(name: &str, ctx: &Context) -> String {
     match name {
         "_pf_setpath" => format!("def _pf_setpath($p; $v): {SETPATH_BODY};"),
         "builtins" => format!("def builtins: {};", JQ_BUILTINS.trim()),
+        // Bound once rather than defined: a definition would rebuild the
+        // table on every call (5 µs a call, measured).
+        "_pf_regex_lit" => format!("{} as $__pf_rl |", regex_table(&ctx.regex_literals)),
         "input_filename" => match (&ctx.input_filename, ctx.ambiguous_filename) {
             // jq reports the file currently being read; with one input that is
             // a constant, so the polyfill is exact.
@@ -736,6 +1118,48 @@ fn dynamic(name: &str, ctx: &Context) -> String {
         },
         other => unreachable!("no dynamic source for {other}"),
     }
+}
+
+/// The `_pf_regex_lit` table: each literal regex with what the prelude may
+/// assume about it ([`crate::regex::shape`]) and, where a group can go
+/// unmatched, its groups named. A jq object keyed by the regex.
+fn regex_table(literals: &[String]) -> String {
+    let mut out = String::from("{");
+    for re in literals {
+        let shape = crate::regex::shape(re);
+        let named = crate::regex::name_groups(re);
+        let unnamed = named
+            .as_ref()
+            .is_some_and(|n| n.groups.iter().any(|(name, _)| name.is_none()));
+        let (regex, groups) = match named {
+            Some(n) if !shape.simple => (n.regex, n.groups),
+            _ => (re.clone(), Vec::new()),
+        };
+        if out.len() > 1 {
+            out.push_str(", ");
+        }
+        let name = |n: &Option<String>| n.as_deref().map_or_else(|| "null".to_owned(), json_string);
+        let list: Vec<String> = groups
+            .iter()
+            .map(|(n, syn)| format!("[{}, {}]", name(n), json_string(syn)))
+            .collect();
+        let dict: Vec<String> = groups
+            .iter()
+            .map(|(n, syn)| format!("{}: {}", json_string(syn), name(n)))
+            .collect();
+        let _ = write!(
+            out,
+            "{}: {{re: {}, simple: {}, unnamed: {unnamed}, nullable: {}, groups: [{}], dict: {{{}}}}}",
+            json_string(re),
+            json_string(&regex),
+            shape.simple,
+            shape.nullable,
+            list.join(", "),
+            dict.join(", ")
+        );
+    }
+    out.push('}');
+    out
 }
 
 /// Encode a Rust string as a JSON string literal.
@@ -875,6 +1299,7 @@ mod tests {
             &Context {
                 input_filename: Some("a.json".to_owned()),
                 ambiguous_filename: false,
+                regex_literals: Vec::new(),
             },
         );
         assert!(one.contains(r#"def input_filename: "a.json";"#));
@@ -884,6 +1309,7 @@ mod tests {
             &Context {
                 input_filename: None,
                 ambiguous_filename: true,
+                regex_literals: Vec::new(),
             },
         );
         // Wrong-but-quiet is the one thing this must not do.
@@ -927,7 +1353,7 @@ mod tests {
         for (alias, shadow) in [
             ("def _pf_mktime:", "def mktime:"),
             ("def _pf_strftime(", "def strftime("),
-            ("def _pf_match1(", "def match($val)"),
+            ("def _pf_match01(", "def match($val)"),
             ("def _pf_startswith(", "def startswith("),
         ] {
             let name = shadow
@@ -973,10 +1399,34 @@ mod tests {
     #[test]
     fn regex_one_argument_forms_never_pass_null_flags_to_jaq() {
         // jaq's two-argument regex builtins reject null flags; jq accepts them.
-        for name in ["match", "test", "capture"] {
+        // Only the repaired `match` may receive `null`; it routes that case to
+        // jaq's one-argument builtin.
+        for name in ["match", "test", "capture", "sub", "scan"] {
             let out = render(&want(&[name]), &Context::default());
-            assert!(!out.contains("; null)"), "{name} passes null flags: {out}");
+            for builtin in ["_pf_match0(", "_pf_test(", "_pf_capture("] {
+                for (at, _) in out.match_indices(builtin) {
+                    let call = &out[at..out[at..].find(')').map_or(out.len(), |e| at + e)];
+                    assert!(!call.contains("null"), "{name} passes null flags: {call}");
+                }
+            }
+            if out.contains("def _pf_raw(") {
+                assert!(out.contains("if $mode == null then _pf_match01($re)"));
+            }
         }
+    }
+
+    #[test]
+    fn literal_regexes_are_bound_once_ahead_of_the_regex_repairs() {
+        let ctx = Context {
+            regex_literals: vec!["(a)?b".to_owned(), "x+".to_owned()],
+            ..Context::default()
+        };
+        let out = render(&want(&["match"]), &ctx);
+        let table = out.find("as $__pf_rl |").expect("table bound");
+        assert!(table < out.find("def _pf_regex(").expect("lookup defined"));
+        // A skippable group is renamed; a regex without groups is not.
+        assert!(out.contains(r#""(a)?b": {re: "(?<__pf_g0>a)?b", simple: false"#));
+        assert!(out.contains(r#""x+": {re: "x+", simple: true, unnamed: false, nullable: false"#));
     }
 
     #[test]

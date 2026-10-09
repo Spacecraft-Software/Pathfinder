@@ -233,6 +233,191 @@ static CASES: &[Case] = &[
         &["-c", "[.[] | try tonumber catch .]"],
     ),
     c("[null, true, [1]]", &["-c", "[.[] | try tonumber catch .]"]),
+    // --- rejecting what jq rejects, accepting what it accepts (M13) ---
+    c(
+        r#"["", "=", "cWl4YmF6Cg", "Not base64 data", "QUJDa", "QU=JD", "QR==", "_-", "Q"]"#,
+        &["-c", "[.[] | try @base64d catch .]"],
+    ),
+    c(
+        r#"["a%20b", "%", "%2", "%F0%93%81", "%C3%28", "%EF%BF%BD", "%FX"]"#,
+        &["-c", "[.[] | try @urid catch .]"],
+    ),
+    c(r#""QQ""#, &["-c", r#"[format("base64d"), format("urid")]"#]),
+    c(
+        r#"[{"key":"a","value":1},{"Key":"b","Value":2},{"name":"c","value":3},{"Name":"d","Value":4}]"#,
+        &["-c", "from_entries"],
+    ),
+    c(
+        r#"[[{"key":null,"value":1}],[{"key":1,"value":2}],[{"key":false,"name":"x","value":2}],[]]"#,
+        &["-c", "[.[] | try from_entries catch .]"],
+    ),
+    c(
+        r#"{"a":1}"#,
+        &["-c", "try with_entries(.key = null) catch ."],
+    ),
+    c(
+        "[0,1,2]",
+        &[
+            "-c",
+            r#"[(nan, 1.5, -1, 5, "a", [0]) as $k | try has($k) catch .]"#,
+        ],
+    ),
+    c(
+        r#"{"a":1}"#,
+        &["-c", r#"[(0, "a", "b", []) as $k | try has($k) catch .]"#],
+    ),
+    c("null", &["-c", r#"[has(0), has("a")]"#]),
+    c(
+        "[-1,0,1,1114112,55296,1.9,65]",
+        &["-c", "implode | explode"],
+    ),
+    c(
+        r#"[123,["a"],[null]]"#,
+        &["-c", "[.[] | try implode catch .]"],
+    ),
+    c(
+        r#"["true","false",true," true",null,0]"#,
+        &["-c", "[.[] | try toboolean catch .]"],
+    ),
+    // --- fractional, NaN and null indices (M11) ---
+    c(
+        "[0,1,2,3,4,5,6,7,8,9]",
+        &["-c", "[.[1.5], .[-1.5], .[nan], .[2.0], .[length/2]]"],
+    ),
+    c(r#"{"a":[5,6,7],"i":1.0}"#, &["-c", ".a[.i]"]),
+    c(
+        "[0,1,2,3,4,5,6,7,8,9]",
+        &[
+            "-c",
+            "[.[1.2:3.5], .[1.7:-4294967296], .[nan:2], .[7:nan], .[:-1.5]]",
+        ],
+    ),
+    c(
+        "[0,1,2,3,4]",
+        &["-c", ".[1.1] = 5, del(.[1.5]), (.[1.5:3.5] = [\"x\"])"],
+    ),
+    c(
+        "[-1, 1, 2, 3, 1000000000000000000]",
+        &["-c", "map([1,2][0:.])"],
+    ),
+    c("[0,1,2,3,4]", &["-c", "[.[0,1:2,3]]"]),
+    c(
+        r#"[1,null,"abcdef",[],[1,2,3,4,5]]"#,
+        &[
+            "-c",
+            "[.[] | .[1:3]?], [.[] | .[1:3]?] == [.[] | try .[1:3] catch empty]",
+        ],
+    ),
+    c("null", &["-c", ".[1:3], .a[1:2], (.[1:3] = [\"x\"])"]),
+    // --- regex results (M12) ---
+    c(
+        r#""b""#,
+        &["-c", r#"[match("(?<x>a)?b?")], capture("(?<x>a)?b?")"#],
+    ),
+    c(r#""ac""#, &["-c", r#"[match("(a)(b)?(c)") | .captures]"#]),
+    c(
+        r#""ab""#,
+        &["-c", r#"[match("(?<x>a)|(b)"; "g") | .captures]"#],
+    ),
+    c(
+        r#""(x(yz""#,
+        &["-c", r#"[match("[(]x\\(y(z)") | .captures]"#],
+    ),
+    c(
+        r#"["(a)(x)?", "(b)", "c"]"#,
+        &["-c", r#"[.[] as $r | "abc" | [match($r) | .captures]]"#],
+    ),
+    c(
+        r#""ab1c""#,
+        &["-c", r#"[match("[a-z]*"; "g") | [.offset, .length]]"#],
+    ),
+    c(
+        r#""123foo456bar""#,
+        &["-c", r#"gsub("[^a-z]*(?<x>[a-z]*)"; "Z\(.x)")"#],
+    ),
+    c(
+        r#""aB""#,
+        &[
+            "-c",
+            r#"[gsub("(?<x>.)"; "\(.x|ascii_upcase)", "\(.x|ascii_downcase)", "c")]"#,
+        ],
+    ),
+    c(
+        r#""abc""#,
+        &[
+            "-c",
+            r#"gsub(""; "-"), [sub("a","b"; "X","Y")], [sub("a"; empty)]"#,
+        ],
+    ),
+    c(
+        r#""a, b ,c""#,
+        &[
+            "-c",
+            r#"gsub("\\s*,\\s*"; ";"), sub("(?<x>[a-z])"; "<\(.x)>")"#,
+        ],
+    ),
+    c(
+        r#""ab""#,
+        &["-c", r#"[scan("(a)|(b)")], [capture("(?<x>[a-z])"; "g")]"#],
+    ),
+    // --- jq's error messages (M10) ---
+    c(
+        r#"[{"a":[1,2]}, {"a":123}]"#,
+        &["-c", "map(try .a[] catch ., .a[]?)"],
+    ),
+    c(
+        r#"[0, 1, true, "foobar"]"#,
+        &[
+            "-c",
+            r"[.[] | try .a catch ., try .[0] catch ., try length catch .]",
+        ],
+    ),
+    c(
+        r#"["very-long-string", "x☆☆☆☆☆", [1], null]"#,
+        &["-c", "[.[] | try -. catch ., try (. - .) catch .]"],
+    ),
+    c(
+        "[1,2,{\"a\":{\"b\":{\"c\":33}}}]",
+        &["-c", r#"try join(",") catch ."#],
+    ),
+    c(
+        "0",
+        &[
+            "-c",
+            r#"[try (1 % .) catch ., try ({} * 2) catch ., try ("a" | floor) catch .]"#,
+        ],
+    ),
+    c(
+        r"[[], {}, 55, true]",
+        &[
+            "-c",
+            "[.[] | try utf8bytelength catch ., try trim catch ., try bsearch(0) catch .]",
+        ],
+    ),
+    c(
+        r#"["a",1,2,3,4,5,6,7]"#,
+        &[
+            "-c",
+            r#"[try strftime("%Y") catch ., try mktime catch ., try (0 | strftime([])) catch ., try ("x" | mktime) catch .]"#,
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            r#"[try error("x") catch ., try error({"a":1}) catch ., try error(null) catch .]"#,
+        ],
+    ),
+    c(
+        r#"["", "abc", "N/A", "infin", "1a", ".5", "+5", null]"#,
+        &["-c", "[.[] | try tonumber catch .]"],
+    ),
+    c(
+        "null",
+        &["-c", r#"try ("foobar" | .[1.5:3.5] = "xyz") catch ."#],
+    ),
+    // `.a.[0]` is jq 1.7+ syntax that jaq 3.0 cannot parse; it is rewritten.
+    c(r#"{"a":[1,2]}"#, &["-c", ".a.[0], [.a.[]], (.a.[1] = 9)"]),
     // --- date repair ---
     c("1.5", &["-c", "todate"]),
     c("0", &["-c", "todate"]),
