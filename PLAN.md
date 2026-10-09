@@ -64,10 +64,10 @@ jaq leaves unmatched groups out of `captures` and omits `"name": null`, so
 empty matches and on a replacement with several outputs. Groups are given
 synthetic names before matching, so every group can be reported in place.
 
-- [ ] P-009 `match` reports every group: `name`, and `offset: -1` when unmatched
-- [ ] P-010 `capture` reports unmatched named groups as `null`
-- [ ] P-011 `sub`/`gsub` are jq 1.8.1's definitions over the repaired `match`
-- [ ] P-012 Regex benchmark before and after
+- [x] P-009 `match` reports every group: `name`, and `offset: -1` when unmatched
+- [x] P-010 `capture` reports unmatched named groups as `null`
+- [x] P-011 `sub`/`gsub` are jq 1.8.1's definitions over the repaired `match`
+- [x] P-012 Regex benchmark before and after
 - [ ] ~~P-018 Lookaround and Unicode `\b`~~ (dropped) — regex engine, phase 2
 
 ## M13 — Reject what jq rejects

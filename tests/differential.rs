@@ -309,6 +309,57 @@ static CASES: &[Case] = &[
         ],
     ),
     c("null", &["-c", ".[1:3], .a[1:2], (.[1:3] = [\"x\"])"]),
+    // --- regex results (M12) ---
+    c(
+        r#""b""#,
+        &["-c", r#"[match("(?<x>a)?b?")], capture("(?<x>a)?b?")"#],
+    ),
+    c(r#""ac""#, &["-c", r#"[match("(a)(b)?(c)") | .captures]"#]),
+    c(
+        r#""ab""#,
+        &["-c", r#"[match("(?<x>a)|(b)"; "g") | .captures]"#],
+    ),
+    c(
+        r#""(x(yz""#,
+        &["-c", r#"[match("[(]x\\(y(z)") | .captures]"#],
+    ),
+    c(
+        r#"["(a)(x)?", "(b)", "c"]"#,
+        &["-c", r#"[.[] as $r | "abc" | [match($r) | .captures]]"#],
+    ),
+    c(
+        r#""ab1c""#,
+        &["-c", r#"[match("[a-z]*"; "g") | [.offset, .length]]"#],
+    ),
+    c(
+        r#""123foo456bar""#,
+        &["-c", r#"gsub("[^a-z]*(?<x>[a-z]*)"; "Z\(.x)")"#],
+    ),
+    c(
+        r#""aB""#,
+        &[
+            "-c",
+            r#"[gsub("(?<x>.)"; "\(.x|ascii_upcase)", "\(.x|ascii_downcase)", "c")]"#,
+        ],
+    ),
+    c(
+        r#""abc""#,
+        &[
+            "-c",
+            r#"gsub(""; "-"), [sub("a","b"; "X","Y")], [sub("a"; empty)]"#,
+        ],
+    ),
+    c(
+        r#""a, b ,c""#,
+        &[
+            "-c",
+            r#"gsub("\\s*,\\s*"; ";"), sub("(?<x>[a-z])"; "<\(.x)>")"#,
+        ],
+    ),
+    c(
+        r#""ab""#,
+        &["-c", r#"[scan("(a)|(b)")], [capture("(?<x>[a-z])"; "g")]"#],
+    ),
     // --- date repair ---
     c("1.5", &["-c", "todate"]),
     c("0", &["-c", "todate"]),

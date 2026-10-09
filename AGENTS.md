@@ -112,6 +112,11 @@ hand-written golden.
   base.** `[1,2][0:.]` slices with the outer `.`; a rewrite that pipes the base
   first must bind the bounds before it. A non-literal key is rounded inline
   (`INDEX_NORM`) so it stays a path expression; never guard with `type ==`.
+- **`src/regex.rs` and the prelude's `_pf_scanre` must name groups
+  identically.** The Rust side precomputes literal regexes, the jq side scans
+  computed ones; the two are transcriptions of one tokenising regex. Change
+  both or neither. The literal table is *bound*, not defined
+  (`{…} as $__pf_rl | def …`): a definition rebuilds it on every call.
 - **Measure the cost of a jq-level definition before adding one per element.**
   A filter-parameter call, `first`, and `if type == …` each cost hundreds of
   milliseconds per 100k calls under jaq; inline text and `label`/`break` were
@@ -143,6 +148,7 @@ pass rates; `V=1` lists every failure.
 | `src/post.rs` | `-a` and `--seq` byte transforms. |
 | `src/native.rs` | `--explain` / `--install-shim`, reachable only under the native name. |
 | `src/syntax/lex.rs`, `parse.rs` | jq's lexer and grammar, transcribed. Every node keeps its span. |
+| `src/regex.rs` | Facts about literal regexes for the regex repairs: group naming (mirrors the prelude's run-time scan), whether a group can be skipped, whether the regex can match empty. |
 | `src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
 | `src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
 | `src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |

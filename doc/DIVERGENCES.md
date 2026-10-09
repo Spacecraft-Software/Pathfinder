@@ -169,6 +169,11 @@ jq 1.8.1's own definition, or wraps jaq's builtin, only when the filter uses it:
 | `join(",")` with `null` items | writes `null` | writes nothing |
 | `pick(.[1])` | `{1:2}` — not JSON | `[null,2]` |
 | `match`/`test`/`capture` with `[re, flags]` | error | accepted |
+| `match` on a group that did not take part, `"b" \| match("(a)?b")` | leaves the group out of `captures` | lists it: `{"offset":-1,"string":null,"length":0,"name":null}` |
+| `match` on an unnamed group | no `name` key | `"name": null` |
+| `capture("(?<x>a)?b")` on `"b"` | `{}` | `{"x":null}` |
+| `match("[a-z]*"; "g")` on `"ab1"` | skips the empty match at 2 | reports it, as Oniguruma does |
+| `gsub("(?<x>.)"; "\(.x)", "-")` (several outputs) | the cartesian product | jq's one string per output |
 | `ltrimstr`/`rtrimstr`/`startswith`/`endswith` on a non-string | generic error | jq's own message |
 | `setpath` past an array's start / at a huge index | pads or errors oddly | `Out of bounds negative array index` / `Array index too large` |
 | `delpaths` | deletes in the order given; reorders object keys | jq's simultaneous deletion, keys in order |
@@ -180,6 +185,17 @@ jq 1.8.1's own definition, or wraps jaq's builtin, only when the filter uses it:
 | `toboolean` | parses JSON: `" true"` → `true` | exactly `true`, `false`, `"true"`, `"false"` |
 | `@base64d` | exact padding only; rejects unused low bits (`"QR=="`) | decodes up to the first `=`, padding optional, low bits ignored; jq's two errors |
 | `@urid` | keeps `%`-garbage as text; invalid UTF-8 becomes U+FFFD | both are errors |
+
+The regex repairs need to know which capture groups can go unmatched and
+whether a regex can match empty. For regexes written as literals in the filter
+that is worked out once, in `src/regex.rs`; a regex computed at run time is
+scanned on every call. Measured on 100,000 lines (pre-repair time in brackets,
+jq 1.8.1 in parentheses): `match` with a group 2.6 s [2.1 s] (0.8 s), `capture`
+2.9 s [2.5 s] (1.4 s), `sub` 2.8 s [2.1 s] (2.5 s), `gsub("[0-9]"; "#")`
+13.2 s [16.2 s] (24.6 s), `scan` 3.6 s [1.8 s] (1.0 s). A group that can go
+unmatched takes the slower general path (`capture` with an optional group:
+5.7 s). Lookaround and `\b`'s Unicode word rules belong to the regex engine and
+stay jaq's.
 
 One deliberate exception: jq 1.8.1's `@urid` turns every non-ASCII character
 of its input into U+FFFD (`"é%41" | @urid` is `"��A"`), a bug jq 1.8.2 fixed
