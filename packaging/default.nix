@@ -12,6 +12,8 @@
   # prints and reads numbers, and repeats strings, as jq 1.8.1 does. The
   # patches are carried here and never sent upstream (Standard sections 4.2,
   # 6.4). Pathfinder works on a stock jaq too; this only raises fidelity.
+  # Cut against jaq 3.1.1; they also apply to 3.1.0, which Bravais builds
+  # (its nixpkgs is followed), and pass the check phase there.
   withPatchedJaq ? true,
 }:
 

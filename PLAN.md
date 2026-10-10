@@ -113,3 +113,14 @@ working on a stock jaq; the patched one is what the package pins.
 - [ ] ~~P-032 Path-expression error wording~~ (dropped) — jaq's path tracking
 - [ ] ~~P-033 decNumber literal canonicalisation~~ (dropped) — needs decNumber
 
+## M16 — Native surface and the CLI Standard
+
+Found by auditing step 3 against `spacecraft-cli-standard` and
+`spacecraft-agentic-cli`; outside proposals 1–6, so not part of the MVP.
+Only the native `pathfinder` name is in scope: under the name `jq` the
+command line must stay jq's, byte for byte (see AGENTS.md).
+
+- [ ] P-034 `pathfinder --explain --json`: the plan as one JSON document on stdout
+- [ ] P-035 `pathfinder --version`: Pathfinder's version, maintainer and URL
+- [ ] P-036 A root `SKILL.md` describing the shim for agents
+
