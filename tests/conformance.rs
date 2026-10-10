@@ -232,6 +232,21 @@ fn exe_under_test(scratch: &Path) -> PathBuf {
     link
 }
 
+/// Whether the shim runs Pathfinder's patched jaq (`packaging/jaq/`), found
+/// the way the shim finds it: `PATHFINDER_JAQ`, the build-time pin, `PATH`.
+///
+/// The patched engine passes more of the suite, so it has its own ratchet,
+/// `FLOOR-patched`; a stock jaq is held to `FLOOR`.
+fn engine_is_patched() -> bool {
+    let jaq = std::env::var_os("PATHFINDER_JAQ")
+        .or_else(|| option_env!("PATHFINDER_DEFAULT_JAQ").map(Into::into))
+        .unwrap_or_else(|| "jaq".into());
+    Command::new(jaq)
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("+pathfinder"))
+}
+
 fn read_list(name: &str) -> String {
     std::fs::read_to_string(suite_dir().join(name)).unwrap_or_default()
 }
@@ -356,17 +371,24 @@ fn jq_suite_conformance() {
         eprintln!("failures:\n{}", failures.join("\n"));
     }
 
-    let floor: usize = read_list("FLOOR")
+    let floor_file = if engine_is_patched() {
+        "FLOOR-patched"
+    } else {
+        "FLOOR"
+    };
+    let floor: usize = read_list(floor_file)
         .lines()
         .find(|l| !l.starts_with('#') && !l.trim().is_empty())
         .and_then(|l| l.trim().parse().ok())
-        .expect("tests/jq-suite/FLOOR holds a pass count");
+        .unwrap_or_else(|| panic!("tests/jq-suite/{floor_file} holds a pass count"));
     assert!(
         pass >= floor,
         "conformance regressed: {pass} passing, floor is {floor}. \
          Run with PATHFINDER_CONFORMANCE_VERBOSE=1 to list failures."
     );
     if pass > floor {
-        eprintln!("  conformance rose above FLOOR ({floor}); raise it to {pass} in this change.");
+        eprintln!(
+            "  conformance rose above {floor_file} ({floor}); raise it to {pass} in this change."
+        );
     }
 }

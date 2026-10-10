@@ -1,0 +1,90 @@
+Pathfinder patch for jaq 3.1.1: Read jq's NaN and infinity spellings and skip a leading BOM.
+
+Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
+
+diff --git a/jaq-json/src/read.rs b/jaq-json/src/read.rs
+index 64ce847..fbbe866 100644
+--- a/jaq-json/src/read.rs
++++ b/jaq-json/src/read.rs
+@@ -18,6 +18,32 @@ fn ws_tk<L: Lex>(lexer: &mut L) -> Option<u8> {
+     }
+ }
+ 
++/// Pathfinder: jq reads `nan` and `infinity`/`inf` in any case, signed or
++/// not; jaq reads only `NaN` and `Infinity`. The word is read whole, because
++/// a streaming lexer cannot step back after a failed prefix (`null`/`nan`).
++fn word<L: Lex>(lexer: &mut L) -> Vec<u8> {
++    let mut w = Vec::new();
++    while let Some(c) = lexer.peek_next().filter(u8::is_ascii_alphabetic) {
++        if w.len() == 9 {
++            break;
++        }
++        lexer.take_next();
++        w.push(c);
++    }
++    w
++}
++
++fn special(w: &[u8]) -> Option<f64> {
++    match w.to_ascii_lowercase().as_slice() {
++        b"nan" => Some(f64::NAN),
++        b"inf" | b"infinity" => Some(f64::INFINITY),
++        _ => None,
++    }
++}
++
++/// Pathfinder: the UTF-8 byte order mark jq skips at the start of its input.
++const BOM: &[u8] = b"\xEF\xBB\xBF";
++
+ /// Parse error.
+ #[derive(Debug)]
+ pub struct Error(usize, hifijson::Error);
+@@ -42,6 +68,7 @@ pub fn parse_single(slice: &[u8]) -> Result<Val, Error> {
+ 
+ /// Parse a sequence of JSON values.
+ pub fn parse_many(slice: &[u8]) -> impl Iterator<Item = Result<Val, Error>> + '_ {
++    let slice = slice.strip_prefix(BOM).unwrap_or(slice);
+     let offset = |rest: &[u8]| rest.as_ptr() as usize - slice.as_ptr() as usize;
+     let mut lexer = SliceLexer::new(slice);
+     core::iter::from_fn(move || {
+@@ -51,7 +78,10 @@ pub fn parse_many(slice: &[u8]) -> impl Iterator<Item = Result<Val, Error>> + '_
+ 
+ #[cfg(feature = "std")]
+ /// Read a sequence of JSON values.
+-pub fn read_many<'a>(read: impl io::BufRead + 'a) -> impl Iterator<Item = io::Result<Val>> + 'a {
++pub fn read_many<'a>(mut read: impl io::BufRead + 'a) -> impl Iterator<Item = io::Result<Val>> + 'a {
++    if read.fill_buf().is_ok_and(|b| b.starts_with(BOM)) {
++        read.consume(BOM.len());
++    }
+     let invalid_data = |e| io::Error::new(io::ErrorKind::InvalidData, e);
+     let mut lexer = hifijson::IterLexer::new(read.bytes());
+     core::iter::from_fn(move || {
+@@ -98,8 +128,8 @@ fn parse_num<L: LexAlloc>(lexer: &mut L) -> Result<Num, hifijson::Error> {
+     let (num, parts) = lexer.num_string_with(num).unvalidated();
+     let num = num.as_ref();
+     Ok(match num {
+-        "+" if lexer.strip_prefix(b"Infinity") => Num::Float(f64::INFINITY),
+-        "-" if lexer.strip_prefix(b"Infinity") => Num::Float(f64::NEG_INFINITY),
++        "+" => Num::Float(special(&word(lexer)).ok_or(hifijson::num::Error::ExpectedDigit)?),
++        "-" => Num::Float(-special(&word(lexer)).ok_or(hifijson::num::Error::ExpectedDigit)?),
+         _ if num.ends_with(|c: char| c.is_ascii_digit()) => {
+             // Pathfinder: jq keeps `-0` as written; an integer would lose the sign.
+             if num == "-0" {
+@@ -121,12 +151,14 @@ fn parse_num<L: LexAlloc>(lexer: &mut L) -> Result<Num, hifijson::Error> {
+ /// In that case, always check whether the lexer contains an error.
+ fn parse<L: LexAlloc>(next: u8, lexer: &mut L) -> Result<Val, hifijson::Error> {
+     Ok(match next {
+-        b'n' if lexer.strip_prefix(b"null") => Val::Null,
++
+         b't' if lexer.strip_prefix(b"true") => Val::Bool(true),
+         b'f' if lexer.strip_prefix(b"false") => Val::Bool(false),
+         b'b' if lexer.strip_prefix(b"b\"") => Val::byte_str(parse_string(lexer, true)?),
+-        b'N' if lexer.strip_prefix(b"NaN") => Val::Num(Num::Float(f64::NAN)),
+-        b'I' if lexer.strip_prefix(b"Infinity") => Val::Num(Num::Float(f64::INFINITY)),
++        b'n' | b'N' | b'i' | b'I' => match word(lexer) {
++            w if w == b"null" => Val::Null,
++            w => Val::Num(Num::Float(special(&w).ok_or(Expect::Value)?)),
++        },
+         b'0'..=b'9' | b'+' | b'-' => Val::Num(parse_num(lexer)?),
+         b'"' => Val::utf8_str(parse_string(lexer.discarded(), false)?),
+         b'[' => Val::Arr({

@@ -36,9 +36,9 @@ the gap where it can and says so precisely where it cannot.
 | | |
 |---|---|
 | Baseline | jq **1.8.1** |
-| Engine | jaq **3.0.0, 3.1.0, 3.1.1** (CI pins 3.1.0) |
-| Differential suite | **197 invocations**, byte-identical stdout and exit code |
-| jq's own test suite | **95.7%** (785/820); **98.7%** of the manual's examples — `make conformance` |
+| Engine | jaq **3.0.0, 3.1.0, 3.1.1** (CI pins 3.1.0); the Nix package pins jaq 3.1.1 with [Pathfinder's patches](packaging/jaq/) |
+| Differential suite | **203 invocations**, byte-identical stdout and exit code |
+| jq's own test suite | **96.5%** (791/820) on a stock jaq; **98.2%** (805/820) on the packaged one; **100%** of the manual's examples there — `make conformance` |
 | Known unrepaired divergences | All in [`doc/DIVERGENCES.md`](doc/DIVERGENCES.md), measured |
 
 ## Install
