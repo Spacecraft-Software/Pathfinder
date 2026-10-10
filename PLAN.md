@@ -88,10 +88,10 @@ Both are operators, so the rewriter replaces them with an inline check that
 evaluates the right-hand side first, as jq does. jaq also cannot read a
 number literal with a leading point (`.5`), which jq accepts.
 
-- [ ] P-019 `/` by zero raises jq's error; strings still split
-- [ ] P-020 `%` truncates operands, raises on a zero divisor, as jq 1.8.1
-- [ ] P-021 Leading-point number literals (`.5`) are rewritten to `0.5`
-- [ ] P-022 Division-heavy benchmark before and after, recorded
+- [x] P-019 `/` by zero raises jq's error; strings still split
+- [x] P-020 `%` truncates operands, raises on a zero divisor, as jq 1.8.1
+- [x] P-021 Leading-point number literals (`.5`) are rewritten to `0.5`
+- [x] P-022 Division-heavy benchmark before and after, recorded
 
 ## M15 — A patched jaq
 
@@ -101,15 +101,25 @@ to the pinned jaq by the Nix package (Standard §4.2, §6.4: nothing is sent
 upstream), makes jaq print and read numbers as jq 1.8.1 does. Pathfinder keeps
 working on a stock jaq; the patched one is what the package pins.
 
-- [ ] P-023 Patch set applied to the pinned jaq; version marked `+pathfinder`
-- [ ] P-024 Numbers print with jq's `jvp_dtoa_fmt`: `2`, not `2.0`; `1e+17`
-- [ ] P-025 NaN prints `null`; ±Infinity prints ±1.7976931348623157e+308
-- [ ] P-026 Integer arithmetic beyond 2^53 rounds to a double, as jq's does
-- [ ] P-027 Input accepts `nan`/`NaN`/`Infinity` literals and a leading BOM
-- [ ] P-028 String repetition: `n * "s"`, fractional and non-positive counts
-- [ ] P-029 Conformance and differential measured against the patched jaq
-- [ ] P-030 Output-heavy benchmark: the patched printer is not slower
+- [x] P-023 Patch set applied to the pinned jaq; version marked `+pathfinder`
+- [x] P-024 Numbers print with jq's `jvp_dtoa_fmt`: `2`, not `2.0`; `1e+17`
+- [x] P-025 NaN prints `null`; ±Infinity prints ±1.7976931348623157e+308
+- [x] P-026 Integer arithmetic beyond 2^53 rounds to a double, as jq's does
+- [x] P-027 Input accepts `nan`/`NaN`/`Infinity` literals and a leading BOM
+- [x] P-028 String repetition: `n * "s"`, fractional and non-positive counts
+- [x] P-029 Conformance and differential measured against the patched jaq
+- [x] P-030 Output-heavy benchmark: the patched printer is not slower
 - [ ] P-031 Operand evaluation order of binary operators (optional)
 - [ ] ~~P-032 Path-expression error wording~~ (dropped) — jaq's path tracking
 - [ ] ~~P-033 decNumber literal canonicalisation~~ (dropped) — needs decNumber
 
+## M16 — Native surface and the CLI Standard
+
+Found by auditing step 3 against `spacecraft-cli-standard` and
+`spacecraft-agentic-cli`; outside proposals 1–6, so not part of the MVP.
+Only the native `pathfinder` name is in scope: under the name `jq` the
+command line must stay jq's, byte for byte (see AGENTS.md).
+
+- [ ] P-034 `pathfinder --explain --json`: the plan as one JSON document on stdout
+- [ ] P-035 `pathfinder --version`: Pathfinder's version, maintainer and URL
+- [ ] P-036 A root `SKILL.md` describing the shim for agents

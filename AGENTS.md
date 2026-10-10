@@ -47,6 +47,16 @@ shipped as a bug.
 Any behavioural change belongs in `tests/differential.rs` as a case, not in a
 hand-written golden.
 
+## The CLI Standard applies to the native name only
+
+Under the name `jq` the command line, output, exit codes and diagnostics are
+jq 1.8.1's — that compatibility is the product, and the Spacecraft CLI
+Standard's global flags (`--json`, `--format`, `--quiet`, …) would collide
+with jq's own. Agent detection (`AI_AGENT`, `AGENT`, `CI`) must not change
+anything a `jq` call prints; the differential suite runs under a live agent
+environment and proves it. The Standard governs the native `pathfinder`
+surface (`--explain`, `--install-shim`); its open gaps are PLAN.md M16.
+
 ## Architectural invariants
 
 - **Whitelist, never pass through.** Every flag reaching jaq is named explicitly
@@ -137,7 +147,14 @@ differential suite's statement of intent. `make conformance` prints per-file
 pass rates; `V=1` lists every failure.
 
 - `FLOOR` is a ratchet. Raise it in the change that raises the score; never
-  lower it to make a change pass.
+  lower it to make a change pass. `FLOOR-patched` is the same ratchet for the
+  packaged, patched jaq; the test picks it when the engine's `--version`
+  contains `+pathfinder`.
+- **The patches are developed against jaq's source, not edited by hand.**
+  Unpack the pinned jaq's `src`, commit it, make one commit per patch, and
+  regenerate `packaging/jaq/*.patch` with `git diff`. Never touch jaq's
+  `Cargo.toml`/`Cargo.lock`: the Nix build reuses the upstream vendored
+  dependencies.
 - `EXCLUDED` is generated from real jq 1.8.1, never hand-edited.
 - A rising total can hide regressions: compare the failing-case lists before and
   after (`V=1`), not just the count. The first `match`/`test`/`capture` repair
@@ -159,6 +176,7 @@ pass rates; `V=1` lists every failure.
 | `src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
 | `src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
 | `src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
+| `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); verified to apply and pass on 3.1.0, which Bravais builds by making this flake follow its stable nixpkgs. MIT, like jaq; never sent upstream. |
 | `tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
 | `tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
 

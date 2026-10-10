@@ -1,0 +1,91 @@
+Pathfinder patch for jaq 3.1.1: Integer arithmetic beyond 2^53 in doubles, as jq 1.8.1.
+
+Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
+
+diff --git a/jaq-json/src/num.rs b/jaq-json/src/num.rs
+index bfa4f63..5d5d96b 100644
+--- a/jaq-json/src/num.rs
++++ b/jaq-json/src/num.rs
+@@ -127,6 +127,20 @@ fn wrap_test() {
+     assert_eq!(neg(8).wrap(len), None);
+ }
+ 
++/// Pathfinder: the largest integer every double represents exactly. jq does
++/// all arithmetic in doubles; within this bound an integer result is the same
++/// either way, beyond it jq's rounding is reproduced by computing in `f64`.
++const EXACT: isize = 1 << 53;
++
++/// An integer operation as jq computes it: exact while the operands and the
++/// result stay within [`EXACT`], in doubles otherwise.
++fn int_as_jq(r: Option<isize>, x: isize, y: isize, op: fn(f64, f64) -> f64) -> Num {
++    match r {
++        Some(r) if x.abs() <= EXACT && y.abs() <= EXACT && r.abs() <= EXACT => Num::Int(r),
++        _ => Num::Float(op(x as f64, y as f64)),
++    }
++}
++
+ fn int_or_big<const N: usize>(
+     i: Option<isize>,
+     x: [isize; N],
+@@ -166,13 +180,12 @@ fn biguint_from_str_radix(s: &str, radix: u32) -> Option<BigUint> {
+ impl core::ops::Add for Num {
+     type Output = Num;
+     fn add(self, rhs: Self) -> Self::Output {
+-        use num_bigint::BigInt;
+         use Num::*;
+         match (self, rhs) {
+-            (Int(x), Int(y)) => int_or_big(x.checked_add(y), [x, y], |[x, y]| x + y),
+-            (Int(i), BigInt(b)) | (BigInt(b), Int(i)) => Self::big_int(&BigInt::from(i) + &*b),
++            (Int(x), Int(y)) => int_as_jq(x.checked_add(y), x, y, |x, y| x + y),
++            (Int(i), BigInt(b)) | (BigInt(b), Int(i)) => Float(b.to_f64().unwrap() + i as f64),
+             (Int(i), Float(f)) | (Float(f), Int(i)) => Float(f + i as f64),
+-            (BigInt(x), BigInt(y)) => Self::big_int(&*x + &*y),
++            (BigInt(x), BigInt(y)) => Float(x.to_f64().unwrap() + y.to_f64().unwrap()),
+             (BigInt(i), Float(f)) | (Float(f), BigInt(i)) => Float(f + i.to_f64().unwrap()),
+             (Float(x), Float(y)) => Float(x + y),
+             (Dec(n), r) => Self::from_dec_str(&n) + r,
+@@ -184,13 +197,12 @@ impl core::ops::Add for Num {
+ impl core::ops::Sub for Num {
+     type Output = Self;
+     fn sub(self, rhs: Self) -> Self::Output {
+-        use num_bigint::BigInt;
+         use Num::*;
+         match (self, rhs) {
+-            (Int(x), Int(y)) => int_or_big(x.checked_sub(y), [x, y], |[x, y]| x - y),
+-            (Int(i), BigInt(b)) => Self::big_int(&BigInt::from(i) - &*b),
+-            (BigInt(b), Int(i)) => Self::big_int(&*b - &BigInt::from(i)),
+-            (BigInt(x), BigInt(y)) => Self::big_int(&*x - &*y),
++            (Int(x), Int(y)) => int_as_jq(x.checked_sub(y), x, y, |x, y| x - y),
++            (Int(i), BigInt(b)) => Float(i as f64 - b.to_f64().unwrap()),
++            (BigInt(b), Int(i)) => Float(b.to_f64().unwrap() - i as f64),
++            (BigInt(x), BigInt(y)) => Float(x.to_f64().unwrap() - y.to_f64().unwrap()),
+             (Float(f), Int(i)) => Float(f - i as f64),
+             (Int(i), Float(f)) => Float(i as f64 - f),
+             (Float(f), BigInt(i)) => Float(f - i.to_f64().unwrap()),
+@@ -205,13 +217,14 @@ impl core::ops::Sub for Num {
+ impl core::ops::Mul for Num {
+     type Output = Self;
+     fn mul(self, rhs: Self) -> Self::Output {
+-        use num_bigint::BigInt;
+         use Num::*;
+         match (self, rhs) {
+-            (Int(x), Int(y)) => int_or_big(x.checked_mul(y), [x, y], |[x, y]| x * y),
++            // A zero product with one negative factor is -0 in doubles.
++            (Int(x), Int(y)) if (x == 0 || y == 0) && (x < 0) != (y < 0) => Float(-0.0),
++            (Int(x), Int(y)) => int_as_jq(x.checked_mul(y), x, y, |x, y| x * y),
+ 
+-            (Int(i), BigInt(b)) | (BigInt(b), Int(i)) => Self::big_int(&BigInt::from(i) * &*b),
+-            (BigInt(x), BigInt(y)) => Self::big_int(&*x * &*y),
++            (Int(i), BigInt(b)) | (BigInt(b), Int(i)) => Float(b.to_f64().unwrap() * i as f64),
++            (BigInt(x), BigInt(y)) => Float(x.to_f64().unwrap() * y.to_f64().unwrap()),
+             (BigInt(i), Float(f)) | (Float(f), BigInt(i)) => Float(f * i.to_f64().unwrap()),
+             (Float(f), Int(i)) | (Int(i), Float(f)) => Float(f * i as f64),
+             (Float(x), Float(y)) => Float(x * y),
+@@ -266,6 +279,7 @@ impl core::ops::Neg for Num {
+     type Output = Self;
+     fn neg(self) -> Self::Output {
+         match self {
++            // jq negates a literal exactly, so negation stays exact here.
+             Self::Int(x) => int_or_big(x.checked_neg(), [x], |[x]| -x),
+             Self::BigInt(x) => Self::big_int(-&*x),
+             Self::Float(x) => Self::Float(-x),

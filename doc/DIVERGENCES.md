@@ -35,10 +35,21 @@ copied byte for byte; a filter that needs nothing is passed through unchanged.
 | `.[1.5]`, `.[length/2]`, `.[.i]` with `"i": 1.0` | truncates the index | error | jq's result |
 | `.[nan]`, `.[1.2:3.5]`, `.[nan:2]` | `null`; bounds rounded outwards | error | jq's result |
 | `null \| .[1:3]`, `[.[] \| .[1:3]?]` over nulls | `null` | error | `null` |
+| `1 / 0`, `0 / 0`, `.a /= 0` | error: `… cannot be divided because the divisor is zero` | `Infinity`, `NaN` — **not JSON** | jq's error |
+| `5.9 % 2.9`, `5 % 0.4`, `.a %= 3` | on integers: `1`; divisor truncates to 0, error | `0.1`; `NaN` | jq's integer remainder and error |
+| `select(. > .5)` | `.5` is `0.5` | parse error | `0.5` |
 
 Measured at 100,000 elements, the rewritten assignments take between 0.1× and
 3.6× jq's time (the slow end is building nested fields, `.[].w.x = 1`); `del`
 takes between 0.6× and 2.9×.
+
+Division and remainder are checked inline, with the right operand evaluated in
+the outer loop as in jq: `1 / $i` over 300,000 values took 0.17 s (jaq 0.07 s,
+jq 0.11 s), `100 % $i` 0.40 s (jaq 0.07 s); a divisor written as a non-zero
+literal (`. / 7`, `. % 7`) costs nothing for `/` and 0.1 s for `%`. Only `/`
+and `%` take jq's operand order; `+`, `-` and `*` keep jaq's (see the number
+model below). `infinite % 1` is `NaN` here and `0` in jq, which clamps to a
+64-bit integer first.
 
 An index whose key is not a literal (`.[$i]`, `.[.k]`) is rounded inline, which
 costs about 0.5 µs per indexing: 300,000 of them took 0.49 s, against 0.30 s
@@ -66,9 +77,7 @@ What is still not quite jq:
 
 | Case | jq 1.8.1 | jaq 3.0.0 | Why not |
 |---|---|---|---|
-| `"a" * 0` | `""` | `null` | Repairing it means rewriting every `*`. |
-| `"a" * 0.5` | `""` | error | Same. |
-| `1 / 0` | error | `Infinity` — **invalid JSON on stdout** | Same, for `/`. Worth knowing about: the output will not parse. |
+| `"a" * 0`, `"a" * 0.5` | `""` | `null`, error | Fixed by the packaged jaq (see the number model); the rewriter leaves `*` alone. |
 | `debug` output | `["DEBUG:",1]` | `["DEBUG:", 1]` | Stderr only. Fixing it means capturing stderr, which costs more than the space it saves. |
 | Error text on stderr | `jq: error (at <stdin>:0): …` | `Error: …` | Same reason. stderr is passed through untouched so `debug`, colour, and interleaving stay correct. What a `catch` handler sees *is* jq's text; see below. |
 
@@ -107,25 +116,36 @@ Limits:
 ## The number model
 
 jq holds every number as a double, keeping a literal's text until it is
-computed on; jaq has integers, floats and literals. Most of the time the output
-is the same. Where it is not, the difference is in how a number is printed, not
-in what was computed — except for the last row.
+computed on; jaq has integers, floats and literals. The Nix package of
+Pathfinder pins a jaq patched to close this gap (`packaging/jaq/`, five small
+patches applied to jaq 3.1.1). The table shows both: what a stock jaq gives,
+and what the packaged one gives.
 
-| Filter | jq 1.8.1 | jaq |
-|---|---|---|
-| `4 / 2`, `[1,2,3] \| add / length`, `1.5 * 2`, `9 \| sqrt` | `2`, `2`, `3`, `3` | `2.0`, `2.0`, `3.0`, `3.0` — also inside `tostring` and `tojson` |
-| `1e3`, `"1e3" \| tonumber` | `1E+3` | `1e3` |
-| `1e17 * 1`, `1e-7 * 1` | `1e+17`, `1e-07` | `1e17`, `1e-7` |
-| `nan`, `infinite` | `null`, `1.7976931348623157e+308` | `NaN`, `Infinity` — **not JSON** |
-| `0 * -1` | `-0` | `0` |
-| `9007199254740993 * 1` | `9007199254740992` (a double) | `9007199254740993` (exact) |
-| `[(1,2) + (10,20)]` | `[11,12,21,22]` | `[11,21,12,22]` |
+| Filter | jq 1.8.1 | stock jaq | packaged jaq |
+|---|---|---|---|
+| `4 / 2`, `[1,2,3] \| add / length`, `1.5 * 2`, `9 \| sqrt` | `2`, `2`, `3`, `3` | `2.0`, `2.0`, `3.0`, `3.0` — also in `tostring`, `tojson` | as jq |
+| `1e3`, `"1e3" \| tonumber` | `1E+3` | `1e3` | as jq |
+| `1e17 * 1`, `1e-7 * 1` | `1e+17`, `1e-07` | `1e17`, `1e-7` | as jq |
+| `nan`, `infinite` | `null`, `1.7976931348623157e+308` | `NaN`, `Infinity` — **not JSON** | as jq |
+| `0 * -1` | `-0` | `0` | as jq |
+| `9007199254740993 * 1` | `9007199254740992` (a double) | `9007199254740993` (exact) | as jq |
+| input `[nan, -Infinity, inf]`, a leading byte-order mark | read | error | as jq |
+| `"a" * 0`, `"a" * 0.5`, `3.7 * "a"`, `"a" * 1e9` | `""`, `""`, `"aaa"`, error | `null`, error, error, an allocation | as jq |
+| `[(1,2) + (10,20)]` | `[11,12,21,22]` | `[11,21,12,22]` | as stock jaq |
 
-The last row is semantic: when both operands of an arithmetic or ordering
-operator produce several values, jq iterates the right-hand side in the outer
-loop and jaq the left. `==` and `!=` give the same set either way. Each would
-mean rewriting every arithmetic operator in every filter, which costs every
-user for a difference few filters can observe; they are documented instead.
+The packaged jaq prints a decimal literal the way jq's decNumber does (`1E+3`,
+`1.000`, `1E-7`), computes integers beyond 2^53 in doubles as jq does, and is
+no slower: printing 500,000 objects took 2.8–3.1 s against stock jaq's
+3.3 s (jq: 4.2 s), measured interleaved on a loaded host. Its `--version`
+reads `jaq 3.1.1+pathfinder.1`, and the conformance suite holds it to its own
+ratchet, `tests/jq-suite/FLOOR-patched`.
+
+The last row is semantic: when both operands of `+`, `-`, `*` or a comparison
+produce several values, jq iterates the right-hand side in the outer loop and
+jaq the left. `/` and `%` are rewritten and follow jq; `==` and `!=` give the
+same set either way. Repairing the rest would mean rewriting every arithmetic
+operator in every filter, which costs every user for a difference few filters
+can observe.
 
 ## Unsupported, with a diagnostic
 
