@@ -123,4 +123,3 @@ command line must stay jq's, byte for byte (see AGENTS.md).
 - [ ] P-034 `pathfinder --explain --json`: the plan as one JSON document on stdout
 - [ ] P-035 `pathfinder --version`: Pathfinder's version, maintainer and URL
 - [ ] P-036 A root `SKILL.md` describing the shim for agents
-
