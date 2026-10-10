@@ -1,0 +1,76 @@
+Pathfinder patch for jaq 3.1.1: Repeat strings as jq 1.8.1 does.
+
+Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
+
+diff --git a/jaq-json/src/lib.rs b/jaq-json/src/lib.rs
+index 0cc8190..4918e62 100644
+--- a/jaq-json/src/lib.rs
++++ b/jaq-json/src/lib.rs
+@@ -25,8 +25,6 @@ use core::fmt;
+ use core::hash::{Hash, Hasher};
+ use jaq_core::box_iter::box_once;
+ use jaq_core::{load, ops, path, val, Exn};
+-use num_bigint::BigInt;
+-use num_traits::{cast::ToPrimitive, Signed};
+ 
+ pub use funs::{bytes_valrs, funs};
+ pub use num::Num;
+@@ -553,12 +551,6 @@ impl FromIterator<Self> for Val {
+     }
+ }
+ 
+-fn bigint_to_int_saturated(i: &BigInt) -> isize {
+-    let (min, max) = (isize::MIN, isize::MAX);
+-    i.to_isize()
+-        .unwrap_or_else(|| if i.is_negative() { min } else { max })
+-}
+-
+ impl core::ops::Add for Val {
+     type Output = ValR;
+     fn add(self, rhs: Self) -> Self::Output {
+@@ -618,23 +610,32 @@ fn obj_merge(l: &mut Rc<Map>, r: Rc<Map>) {
+ impl core::ops::Mul for Val {
+     type Output = ValR;
+     fn mul(self, rhs: Self) -> Self::Output {
+-        use crate::Num::{BigInt, Int};
+         use Val::*;
+         match (self, rhs) {
+             (Num(x), Num(y)) => Ok(Num(x * y)),
+-            (s @ (BStr(_) | TStr(_)), Num(BigInt(i)))
+-            | (Num(BigInt(i)), s @ (BStr(_) | TStr(_))) => {
+-                s * Num(Int(bigint_to_int_saturated(&i)))
+-            }
+-            (BStr(s), Num(Int(i))) | (Num(Int(i)), BStr(s)) if i > 0 => {
+-                Ok(Self::byte_str(s.repeat(i as usize)))
+-            }
+-            (TStr(s), Num(Int(i))) | (Num(Int(i)), TStr(s)) if i > 0 => {
+-                Ok(Self::utf8_str(s.repeat(i as usize)))
++            // Pathfinder: jq 1.8.1's `binop_multiply` and `jv_string_repeat`.
++            // The count is truncated (`"ab" * 1.5` is `"ab"`, `* 0.5` is `""`),
++            // a negative or NaN count is `null`, and a result of 2 GiB or more
++            // is an error rather than an allocation.
++            (s @ (BStr(_) | TStr(_)), Num(n)) | (Num(n), s @ (BStr(_) | TStr(_))) => {
++                let d = n.as_f64();
++                if d < 0.0 || d.is_nan() {
++                    return Ok(Null);
++                }
++                let count = if d > f64::from(i32::MAX) { i32::MAX as usize } else { d as usize };
++                let len = match &s {
++                    BStr(b) | TStr(b) => b.len(),
++                    _ => unreachable!(),
++                };
++                if (len as u64).saturating_mul(count as u64) >= (i32::MAX as u64 - 8) {
++                    return Err(Error::str("Repeat string result too long"));
++                }
++                match s {
++                    BStr(b) => Ok(Self::byte_str(b.repeat(count))),
++                    TStr(b) => Ok(Self::utf8_str(b.repeat(count))),
++                    _ => unreachable!(),
++                }
+             }
+-            // string multiplication with negatives or 0 results in null
+-            // <https://jqlang.github.io/jq/manual/#Builtinoperatorsandfunctions>
+-            (BStr(_) | TStr(_), Num(Int(_))) | (Num(Int(_)), BStr(_) | TStr(_)) => Ok(Null),
+             (Obj(mut l), Obj(r)) => {
+                 obj_merge(&mut l, r);
+                 Ok(Obj(l))

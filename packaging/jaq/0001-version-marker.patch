@@ -1,0 +1,19 @@
+Pathfinder patch for jaq 3.1.1: Mark the version as patched by Pathfinder.
+
+Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
+
+diff --git a/jaq/src/main.rs b/jaq/src/main.rs
+index 5d85e15..d708723 100644
+--- a/jaq/src/main.rs
++++ b/jaq/src/main.rs
+@@ -57,7 +57,9 @@ fn main_io(
+ 
+     if cli.version {
+         let name = env!("CARGO_PKG_NAME");
+-        let version = env!("CARGO_PKG_VERSION");
++        // Pathfinder's patch set: number output, arithmetic precision, input
++        // literals and string repetition as jq 1.8.1 has them.
++        let version = concat!(env!("CARGO_PKG_VERSION"), "+pathfinder.1");
+         writeln!(out, "{name} {version}")?;
+         Ok(ExitCode::SUCCESS)
+     } else if cli.help {

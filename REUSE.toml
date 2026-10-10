@@ -37,3 +37,16 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 path = ["src/embed/jq-help.txt", "src/embed/jq-builtins.json", "tests/jq-suite/*.test"]
 SPDX-FileCopyrightText = "2012 Stephen Dolan and jq contributors"
 SPDX-License-Identifier = "MIT"
+
+# Patches to jaq's source (packaging/jaq/), applied by packaging/default.nix.
+# Derived from jaq, which is MIT; they keep its licence (Standard §4.2).
+[[annotations]]
+path = ["packaging/jaq/*.patch"]
+SPDX-FileCopyrightText = ["Michael Färber <michael.faerber@gedenkt.at> and jaq contributors", "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
+SPDX-License-Identifier = "MIT"
+
+# The pass-count ratchet for the patched engine.
+[[annotations]]
+path = ["tests/jq-suite/FLOOR-patched"]
+SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
+SPDX-License-Identifier = "GPL-3.0-or-later"

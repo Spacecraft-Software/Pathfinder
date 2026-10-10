@@ -1,0 +1,156 @@
+Pathfinder patch for jaq 3.1.1: Print numbers as jq 1.8.1 does.
+
+Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
+
+diff --git a/jaq-json/src/num.rs b/jaq-json/src/num.rs
+index 92ee3c6..bfa4f63 100644
+--- a/jaq-json/src/num.rs
++++ b/jaq-json/src/num.rs
+@@ -393,16 +393,126 @@ fn float_cmp(left: f64, right: f64) -> Ordering {
+     }
+ }
+ 
++// Pathfinder: numbers are printed as jq 1.8.1 prints them. A float goes
++// through jq's `jvp_dtoa_fmt` layout (shortest round-trip digits; `1e+17`,
++// `1e-05`, no `.0` on an integral value); NaN is `null` and an infinity is
++// the largest finite double, which keeps the output JSON. A decimal literal
++// keeps its digits but is spelled the way jq's decNumber spells it (`1E+3`
++// for `1e3`, `1.000` stays `1.000`).
+ impl fmt::Display for Num {
+     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+         match self {
+             Self::Int(i) => write!(f, "{i}"),
+             Self::BigInt(i) => write!(f, "{i}"),
+-            Self::Float(x) if x.is_nan() => write!(f, "NaN"),
+-            Self::Float(f64::INFINITY) => write!(f, "Infinity"),
+-            Self::Float(f64::NEG_INFINITY) => write!(f, "-Infinity"),
+-            Self::Float(x) => ryu::Buffer::new().format_finite(*x).fmt(f),
+-            Self::Dec(n) => write!(f, "{n}"),
++            Self::Float(x) if x.is_nan() => write!(f, "null"),
++            Self::Float(x) => f.write_str(&jq_float(x.clamp(f64::MIN, f64::MAX))),
++            // Most literals are already canonical: no exponent, and no
++            // leading zero to fold. Those are written through unchanged.
++            Self::Dec(n) if dec_is_canonical(n) => f.write_str(n),
++            Self::Dec(n) => f.write_str(&jq_dec(n).unwrap_or_else(|| n.to_string())),
+         }
+     }
+ }
++
++/// jq's `jvp_dtoa_fmt`: David Gay's `g_fmt` over the shortest digits.
++fn jq_float(x: f64) -> String {
++    // `{:e}` is the shortest round-trip representation, like `dtoa` mode 0.
++    let sci = alloc::format!("{x:e}");
++    let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
++    let (sign, mantissa) = match mantissa.strip_prefix('-') {
++        Some(m) => ("-", m),
++        None => ("", mantissa),
++    };
++    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
++    let decpt = exp.parse::<i32>().unwrap_or(0) + 1;
++    let n = digits.len() as i32;
++    let mut out = String::from(sign);
++    if decpt <= -4 || decpt > n + 15 {
++        out.push_str(&digits[..1]);
++        if n > 1 {
++            out.push('.');
++            out.push_str(&digits[1..]);
++        }
++        let e = decpt - 1;
++        out.push_str(&alloc::format!("e{}{:02}", if e < 0 { '-' } else { '+' }, e.abs()));
++    } else if decpt <= 0 {
++        out.push_str("0.");
++        out.extend(core::iter::repeat_n('0', (-decpt) as usize));
++        out.push_str(&digits);
++    } else if decpt >= n {
++        out.push_str(&digits);
++        out.extend(core::iter::repeat_n('0', (decpt - n) as usize));
++    } else {
++        out.push_str(&digits[..decpt as usize]);
++        out.push('.');
++        out.push_str(&digits[decpt as usize..]);
++    }
++    out
++}
++
++/// Whether decNumber would print the literal `n` exactly as written: plain
++/// notation (no exponent) whose integer part is non-zero and has no leading
++/// zero, or `0.` followed by fewer than six zeros before the first digit.
++fn dec_is_canonical(n: &str) -> bool {
++    let n = n.strip_prefix('-').unwrap_or(n);
++    let b = n.as_bytes();
++    if b.iter().any(|c| matches!(c, b'e' | b'E' | b'+')) || b.is_empty() {
++        return false;
++    }
++    match b {
++        [b'0', b'.', frac @ ..] => {
++            let zeros = frac.iter().take_while(|c| **c == b'0').count();
++            zeros < 6 && zeros < frac.len()
++        }
++        [b'1'..=b'9', ..] => true,
++        _ => false,
++    }
++}
++
++/// decNumber's to-scientific-string for a decimal literal, or `None` if the
++/// text is not one.
++fn jq_dec(n: &str) -> Option<String> {
++    let (sign, n) = match n.strip_prefix('-') {
++        Some(rest) => ("-", rest),
++        None => ("", n.strip_prefix('+').unwrap_or(n)),
++    };
++    let (mantissa, exp) = match n.find(['e', 'E']) {
++        Some(i) => (&n[..i], n[i + 1..].parse::<i64>().ok()?),
++        None => (n, 0),
++    };
++    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
++    if int.is_empty() && frac.is_empty() || !(int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit())) {
++        return None;
++    }
++    let all: String = alloc::format!("{int}{frac}");
++    let coeff = match all.trim_start_matches('0') {
++        "" => "0",
++        c => c,
++    };
++    let e = exp.checked_sub(i64::try_from(frac.len()).ok()?)?;
++    let len = coeff.len() as i64;
++    let adjusted = e + len - 1;
++    let mut out = String::from(sign);
++    if e <= 0 && adjusted >= -6 {
++        if e == 0 {
++            out.push_str(coeff);
++        } else if len > -e {
++            let point = (len + e) as usize;
++            out.push_str(&coeff[..point]);
++            out.push('.');
++            out.push_str(&coeff[point..]);
++        } else {
++            out.push_str("0.");
++            out.extend(core::iter::repeat_n('0', (-e - len) as usize));
++            out.push_str(coeff);
++        }
++    } else {
++        out.push_str(&coeff[..1]);
++        if len > 1 {
++            out.push('.');
++            out.push_str(&coeff[1..]);
++        }
++        out.push_str(&alloc::format!("E{}{}", if adjusted < 0 { '-' } else { '+' }, adjusted.abs()));
++    }
++    Some(out)
++}
+diff --git a/jaq-json/src/read.rs b/jaq-json/src/read.rs
+index aeba642..64ce847 100644
+--- a/jaq-json/src/read.rs
++++ b/jaq-json/src/read.rs
+@@ -101,7 +101,10 @@ fn parse_num<L: LexAlloc>(lexer: &mut L) -> Result<Num, hifijson::Error> {
+         "+" if lexer.strip_prefix(b"Infinity") => Num::Float(f64::INFINITY),
+         "-" if lexer.strip_prefix(b"Infinity") => Num::Float(f64::NEG_INFINITY),
+         _ if num.ends_with(|c: char| c.is_ascii_digit()) => {
+-            if parts.is_int() {
++            // Pathfinder: jq keeps `-0` as written; an integer would lose the sign.
++            if num == "-0" {
++                Num::Dec(num.to_string().into())
++            } else if parts.is_int() {
+                 Num::from_str_radix(num, 10).unwrap()
+             } else {
+                 Num::Dec(num.to_string().into())

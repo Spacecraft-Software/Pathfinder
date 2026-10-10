@@ -484,6 +484,41 @@ static CASES: &[Case] = &[
     c("null", &["-nc", "[1,2]-[1]"]),
 ];
 
+/// Cases only the packaged, patched jaq (`packaging/jaq/`) answers as jq does:
+/// number output, double-precision integers, input literals, string
+/// repetition. They run when the engine's `--version` says `+pathfinder`.
+static PATCHED_CASES: &[Case] = &[
+    c(
+        "null",
+        &[
+            "-c",
+            "[4 / 2, ([1,2,3] | add / length), 1.5 * 2, (9 | sqrt)]",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "[1e3, 1e17 * 1, 1e-7 * 1, nan, infinite, -infinite, 0 * -1]",
+        ],
+    ),
+    c(
+        "[1E+1000, 1.000, -0, 0.0000001, 12345678901234567890]",
+        &["-c", "., map(. + 0), map(tostring)"],
+    ),
+    c("13911860366432393", &["-c", ". - 10, (. + 0 | tostring)"]),
+    c("[nan, -NaN, Infinity, -infinity, inf]", &["-c", "."]),
+    c("\u{feff}{\"bom\": true}", &["-c", "."]),
+    c(
+        "[-1, -0.5, 0, 0.5, 1.5, 3.7]",
+        &["-c", r#"[.[] * "ab"], [try ("abc" * 1000000000) catch .]"#],
+    ),
+    c(
+        "[1, 2.5]",
+        &["-c", "map(tostring), (.[1] * 2), (. | tojson)"],
+    ),
+];
+
 /// Cases needing input files, which are created in a temp dir at run time.
 static FILE_CASES: &[Case] = &[
     c("", &["-c", ".", "f1.json"]),
@@ -527,6 +562,17 @@ fn real_jq() -> Option<PathBuf> {
         path.display()
     );
     None
+}
+
+/// Whether the shim runs Pathfinder's patched jaq, found as the shim finds it.
+fn engine_is_patched() -> bool {
+    let jaq = std::env::var_os("PATHFINDER_JAQ")
+        .or_else(|| option_env!("PATHFINDER_DEFAULT_JAQ").map(Into::into))
+        .unwrap_or_else(|| "jaq".into());
+    Command::new(jaq)
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("+pathfinder"))
 }
 
 /// Find a jq binary, without checking which version it is.
@@ -611,8 +657,13 @@ fn shim_matches_real_jq() {
     std::fs::write(dir.join("-5"), "[5]").expect("fixture");
     let shim = shim(&dir);
 
+    let patched: &[Case] = if engine_is_patched() {
+        PATCHED_CASES
+    } else {
+        &[]
+    };
     let mut failures: Vec<String> = Vec::new();
-    for case in CASES.iter().chain(FILE_CASES) {
+    for case in CASES.iter().chain(FILE_CASES).chain(patched) {
         let expected = run(&jq, &dir, case);
         let actual = run(&shim, &dir, case);
         if expected != actual {
@@ -628,7 +679,7 @@ fn shim_matches_real_jq() {
         }
     }
 
-    let total = CASES.len() + FILE_CASES.len();
+    let total = CASES.len() + FILE_CASES.len() + patched.len();
     let _ = std::fs::remove_dir_all(&dir);
     assert!(
         failures.is_empty(),
@@ -654,14 +705,16 @@ fn documented_divergences_still_diverge() {
     std::fs::create_dir_all(&dir).expect("temp dir");
     let shim = shim(&dir);
 
-    // `"a" * 0` is `""` in jq 1.8.1 and `null` in jaq. `*` is an operator, not a
-    // builtin, so no definition can shadow it — repairing this needs a real
-    // expression rewriter. Documented in doc/DIVERGENCES.md.
+    // `"a" * 0` is `""` in jq 1.8.1 and `null` in a stock jaq. `*` is an
+    // operator the rewriter leaves alone; Pathfinder's patched jaq
+    // (`packaging/jaq/0005-string-repeat.patch`) repairs it, so there the
+    // case must agree with jq instead. Documented in doc/DIVERGENCES.md.
     let case = c("null", &["-nc", r#""a"*0"#]);
     let expected = run(&jq, &dir, &case);
     let actual = run(&shim, &dir, &case);
     let _ = std::fs::remove_dir_all(&dir);
 
     assert_eq!(String::from_utf8_lossy(&expected.1).trim(), r#""""#);
-    assert_eq!(String::from_utf8_lossy(&actual.1).trim(), "null");
+    let repaired = if engine_is_patched() { r#""""# } else { "null" };
+    assert_eq!(String::from_utf8_lossy(&actual.1).trim(), repaired);
 }
