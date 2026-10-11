@@ -1,23 +1,8 @@
-//! Read values in different formats.
-#[cfg(feature = "cbor")]
-pub mod cbor;
-pub mod tabular;
-#[cfg(feature = "toml")]
-pub mod toml;
-#[cfg(feature = "xml")]
-pub mod xml;
-#[cfg(feature = "yaml")]
-pub mod yaml;
+//! Read values as JSON or raw text.
 pub use jaq_json::read as json;
 
-#[cfg(feature = "all")]
 mod formats;
-#[cfg(feature = "all")]
-mod funs;
-#[cfg(feature = "all")]
 pub use formats::*;
-#[cfg(feature = "all")]
-pub use funs::funs;
 
 use bytes::Bytes;
 use jaq_json::Val;

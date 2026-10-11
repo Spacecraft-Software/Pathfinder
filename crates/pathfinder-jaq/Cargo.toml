@@ -27,9 +27,10 @@ path = "src/jaq-all/lib.rs"
 name = "pathfinder-jaq"
 path = "src/jaq/main.rs"
 
+# Pathfinder (TODO T-004): `jaq-all`'s `formats` feature went with the
+# non-jq formats.
 [features]
-default = ["formats", "std-all", "mimalloc"]
-formats = ["jaq-fmts/all"]
+default = ["std-all", "mimalloc"]
 std-all = ["jaq-std/default"]
 
 [dependencies]
@@ -42,10 +43,8 @@ jaq-fmts = { workspace = true }
 codesnake = { version = "0.3" }
 unicode-width = "0.1.13"
 
-# jaq
-dirs = { version = "6.0" }
+# jaq. Pathfinder (TODO T-004): `rustyline` and `dirs` (the REPL) and
+# `tempfile` (`--in-place`) are gone.
 env_logger = { version = "0.10.0", default-features = false }
 log = { version = "0.4.17" }
 mimalloc = { version = "0.1.29", default-features = false, optional = true }
-rustyline = { version = "13.0.0", default-features = false, features = ["with-file-history"] }
-tempfile = "3.3.0"

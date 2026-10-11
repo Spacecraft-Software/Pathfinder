@@ -1,23 +1,10 @@
-//! Write values in different formats.
-#[cfg(feature = "cbor")]
-pub mod cbor;
-#[cfg(feature = "tabular")]
+//! Write values as JSON or raw text, and `@csv`/`@tsv` rows.
 pub mod tabular;
-#[cfg(feature = "toml")]
-pub mod toml;
-#[cfg(feature = "xml")]
-pub mod xml;
-#[cfg(feature = "yaml")]
-pub mod yaml;
 pub use jaq_json::write as json;
 
-#[cfg(feature = "all")]
 mod formats;
-#[cfg(feature = "all")]
 mod funs;
-#[cfg(feature = "all")]
 pub use formats::write;
-#[cfg(feature = "all")]
 pub use funs::funs;
 
 use std::io::{self, IsTerminal, Write};

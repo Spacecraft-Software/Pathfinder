@@ -1,7 +1,11 @@
 //! Multi-format support for jaq.
 //!
-//! This crate contains functions to load and write various data formats,
-//! such as JSON, CBOR, YAML, TOML, XML.
+//! This crate contains functions to load and write the formats jq reads and
+//! writes: JSON and raw text.
+//!
+//! Pathfinder (TODO T-004): jaq's CBOR, YAML, TOML, XML and CSV/TSV readers
+//! and writers are removed, with the `from…`/`to…` filters for them. `@csv`
+//! and `@tsv`, which jq defines, stay.
 #![warn(missing_docs)]
 
 extern crate alloc;
@@ -10,15 +14,11 @@ extern crate std;
 pub mod read;
 pub mod write;
 
-#[cfg(feature = "all")]
 use jaq_core::native::{run, Fun};
 
-#[cfg(feature = "all")]
-/// (De-)Serialisation filters, such as `fromyaml`, `toxml`.
+/// Serialisation filters: `@csv` and `@tsv`.
 pub fn funs<D: for<'a> jaq_core::DataT<V<'a> = jaq_json::Val>>() -> impl Iterator<Item = Fun<D>> {
-    [read::funs::<D>(), write::funs::<D>()]
-        .into_iter()
-        .flat_map(move |funs| funs.into_vec().into_iter().map(run::<D>))
+    write::funs::<D>().into_vec().into_iter().map(run::<D>)
 }
 
 /// Input/Output format.
@@ -35,50 +35,18 @@ pub enum Format {
     /// JavaScript Object Notation
     #[default]
     Json,
-    /// Concise Binary Object Representation
-    Cbor,
-    /// Tom's Obvious, Minimal Language
-    Toml,
-    /// Extensible Markup Language
-    Xml,
-    /// YAML Ain't Markup Language™
-    Yaml,
-    /// Comma-Separated Values
-    Csv,
-    /// Tab-Separated Values
-    Tsv,
 }
 
 impl Format {
     /// List of all currently supported formats.
-    pub const ALL: &str = "raw, raw0, json, cbor, yaml, toml, xml, csv, tsv";
-
-    /// Determine a file format from a path.
-    pub fn determine(path: &std::path::Path) -> Option<Self> {
-        match path.extension()?.to_str()? {
-            "cbor" => Some(Format::Cbor),
-            "toml" => Some(Format::Toml),
-            "xml" | "xhtml" => Some(Format::Xml),
-            "yml" | "yaml" => Some(Format::Yaml),
-            "json" => Some(Format::Json),
-            "csv" => Some(Format::Csv),
-            "tsv" => Some(Format::Tsv),
-            _ => None,
-        }
-    }
+    pub const ALL: &str = "raw, raw0, json";
 
     /// Parse a format name.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "cbor" => Some(Format::Cbor),
             "raw" => Some(Format::Raw),
             "raw0" => Some(Format::Raw0),
             "json" => Some(Format::Json),
-            "toml" => Some(Format::Toml),
-            "xml" => Some(Format::Xml),
-            "yaml" => Some(Format::Yaml),
-            "csv" => Some(Format::Csv),
-            "tsv" => Some(Format::Tsv),
             _ => None,
         }
     }

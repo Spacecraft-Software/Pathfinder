@@ -1,5 +1,5 @@
 //! Filter parsing, compilation, and execution.
-use crate::{funs, read, Error, Runner, Val};
+use crate::{read, Error, Runner, Val};
 use jaq_all::data::Filter;
 use jaq_all::jaq_core::{compile, load, Exn, ValT, Vars};
 use jaq_all::load::{compile_errors, load_errors, FileReports};
@@ -35,32 +35,13 @@ pub fn parse_compile(
     .map_err(load_errors)?;
 
     let compiler = Compiler::default()
-        .with_funs(funs::funs())
+        .with_funs(jaq_all::data::funs())
         .with_global_vars(vars.iter().map(|v| &**v));
     let filter = compiler.compile(modules).map_err(compile_errors)?;
     Ok((vals, filter))
 }
 
-/// Run a filter with given input values and run `f` for every value output.
-pub(crate) fn run(
-    runner: &Runner,
-    filter: &Filter,
-    vars: Vars<Val>,
-    inputs: impl Iterator<Item = io::Result<Val>>,
-    mut f: impl FnMut(Val) -> io::Result<()>,
-) -> Result<Option<bool>, Error> {
-    let mut last = None;
-    jaq_all::data::run(runner, filter, vars, inputs, Error::Parse, |v| {
-        let halt = |e: Exn<_>| Error::Halt(e.get_halt().ok().unwrap());
-        let v = v.map_err(|e| e.get_err().map_or_else(halt, Error::Jaq))?;
-
-        last = Some(v.as_bool());
-        f(v).map_err(Into::into)
-    })?;
-    Ok(last)
-}
-
-/// Pathfinder: [`run`] as jq 1.8.1's `main` runs a filter.
+/// Pathfinder: a filter run as jq 1.8.1's `main` runs it.
 ///
 /// An uncaught error is reported on stderr with `location`, ends only that
 /// input's outputs, and is recorded in `status`, which decides the exit code.

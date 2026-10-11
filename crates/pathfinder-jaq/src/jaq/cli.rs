@@ -21,7 +21,6 @@ pub struct Cli {
     pub compact_output: bool,
     /// This flag enables `--raw-output`.
     pub join_output: bool,
-    pub in_place: bool,
     pub sort_keys: bool,
     pub color_output: bool,
     pub monochrome_output: bool,
@@ -99,7 +98,6 @@ impl Cli {
             "raw-output" => self.short('r', args)?,
             "raw-output0" => self.to = Some(Format::Raw0),
             "join-output" => self.short('j', args)?,
-            "in-place" => self.short('i', args)?,
             "sort-keys" => self.short('S', args)?,
             "color-output" => self.short('C', args)?,
             "monochrome-output" => self.short('M', args)?,
@@ -144,7 +142,6 @@ impl Cli {
                 self.join_output = true;
                 self.to.get_or_insert(Format::Raw);
             }
-            'i' => self.in_place = true,
             'S' => self.sort_keys = true,
             'C' => self.color_output = true,
             'M' => self.monochrome_output = true,
@@ -186,17 +183,12 @@ impl Cli {
     }
 
     fn color_if(&self, f: impl Fn() -> bool) -> bool {
-        #[cfg(not(target_os = "windows"))]
-        let enabled = || true;
-        #[cfg(target_os = "windows")]
-        let enabled = || crate::windows::enable_ansi_support();
-
         let no_color = || std::env::var("NO_COLOR").is_ok_and(|v| !v.is_empty());
-        !self.monochrome_output && (self.color_output || (!no_color() && f())) && enabled()
+        !self.monochrome_output && (self.color_output || (!no_color() && f()))
     }
 
     pub fn color_output(&self) -> bool {
-        self.color_if(|| io::stdout().is_terminal() && !self.in_place)
+        self.color_if(|| io::stdout().is_terminal())
     }
 
     pub fn color_errors(&self) -> bool {

@@ -53,8 +53,8 @@ functions jaq's CLI reads and writes with (`read::read`, `read::parse`,
 `read/formats.rs` and `write/formats.rs`, behind the `all` feature, and
 dispatch over every format at once. There is no JSON-and-raw subset to copy
 without editing those files, so it is copied whole and stays diffable against
-upstream; the YAML, TOML, CBOR, XML and CSV/TSV code and their dependencies go
-in T-004.
+upstream; the YAML, TOML, CBOR, XML and CSV/TSV code and their dependencies
+went in T-004 (below).
 
 The only differences from upstream are in the manifests:
 
@@ -74,6 +74,34 @@ the two: `bstr` 1.13.1 (jaq 1.13.0), `serde`/`serde_core`/`serde_derive`
 1.0.229 (1.0.228), `serde_json` 1.0.151 (1.0.149), `proc-macro2` 1.0.107
 (1.0.106), `quote` 1.0.47 (1.0.41), `unicode-ident` 1.0.24 (1.0.18). No
 dependency is new; none comes from git.
+
+## Removed after the import
+
+What jq does not have left the crates after the import, each removal a commit
+of its own, so the import and patch commits stay diffable against upstream.
+
+T-004 (PLAN P-050):
+
+- `pathfinder-fmts`: the CBOR, YAML, TOML and XML readers and writers, the
+  CSV/TSV readers, the filters over them (`fromcbor`, `tocbor`, `fromyaml`,
+  `toyaml`, `fromtoml`, `totoml`, `fromxml`, `toxml`, `fromcsv`, `tocsv`,
+  `fromtsv`, `totsv`; none is a jq 1.8.1 builtin, measured), and the
+  features they hung off (`all`, `cbor`, `toml`, `xml`, `yaml`, `tabular`).
+  `Format` keeps `Raw`, `Raw0` and `Json`; `read_string` and `bytes_str`,
+  which existed only for the text formats, are gone, and `read`/`parse`
+  lost their `&str` argument. `write/tabular.rs` stays: it is jq's `@csv`
+  and `@tsv`. `Format::determine` is gone too, so a file is JSON whatever
+  its extension, as in jq (jaq read `x.yaml` as YAML). The crate's tests
+  were all of removed formats and went with them.
+- `pathfinder-jaq`: `-i`/`--in-place`, the REPL (`repl`, `funs.rs`),
+  `windows.rs` and its two `cfg(windows)` arms, `jaq-all`'s `formats`
+  feature, and the help text for them.
+- Dependencies gone from `Cargo.lock`: `ciborium-io`, `ciborium-ll`, `half`,
+  `crunchy`, `saphyr-parser`, `arraydeque`, `smallvec`, `toml-span`,
+  `xmlparser`, `cfg-if`, and the CLI's `rustyline`, `dirs`, `tempfile` and
+  their trees. `aho-corasick` and `base64` stay: `pathfinder-std`'s `format`
+  feature (`@base64`, `@html`, …) needs them, and `@tsv` uses
+  `aho-corasick`.
 
 ## Patches applied
 

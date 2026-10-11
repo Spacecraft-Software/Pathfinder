@@ -1,14 +1,10 @@
 mod cli;
 mod filter;
-mod funs;
 mod jq;
 mod tests;
-#[cfg(target_os = "windows")]
-mod windows;
 
 use cli::{Cli, Format};
 use core::fmt::{self, Display, Formatter};
-use filter::run;
 use jaq_all::data::{Filter, Runner};
 use jaq_all::fmts::read;
 use jaq_all::fmts::write::{with_stdout, write, Writer};
@@ -104,7 +100,7 @@ impl Cli {
             indent: (!self.compact_output).then(|| self.indent()),
             sort_keys: self.sort_keys,
             styles: self.styles(),
-            sep_space: !self.compact_output || matches!(self.to, Some(Format::Yaml)),
+            sep_space: !self.compact_output,
         }
     }
 
@@ -153,7 +149,6 @@ fn real_main(cli: &Cli, inp: &mut io::Stdin, out: &mut io::Stdout) -> Result<Exi
         let vars = Vars::new(vars);
 
         let format = unwrap_or_json(cli.from);
-        let s = read::read_string(format, inp.lock())?;
         let pos = jq::Position::with_segments(segments);
         let lines = jq::Lines::new(inp.lock(), &pos);
         // Pathfinder: JSON is read as jq reads it, with jq's parse errors.
@@ -161,7 +156,7 @@ fn real_main(cli: &Cli, inp: &mut io::Stdin, out: &mut io::Stdout) -> Result<Exi
             Format::Json => {
                 read::collect_if(cli.slurp, jaq_all::json::read::read_many_jq(lines, &pos))
             }
-            _ => read::read(format, lines, &s, cli.slurp),
+            _ => read::read(format, lines, cli.slurp),
         };
         let location = || pos.location("<stdin>", None);
         let failed = || pos.failed();
@@ -197,62 +192,38 @@ fn real_main(cli: &Cli, inp: &mut io::Stdin, out: &mut io::Stdout) -> Result<Exi
             let path = Path::new(file);
             let bytes = read::load_file(path)
                 .map_err(|e| Error::Io(Some(path.display().to_string()), e))?;
-            let format = unwrap_or_json(cli.from.or_else(|| Format::determine(path)));
-            let s = read::bytes_str(format, &bytes)?;
+            // Pathfinder: JSON whatever the file's extension, as jq reads it.
+            let format = unwrap_or_json(cli.from);
 
-            if cli.in_place {
-                let inputs = read::parse(format, &bytes, s, cli.slurp);
-                // create a temporary file where output is written to
-                let location = path.parent().unwrap();
-                let mut tmp = tempfile::Builder::new()
-                    .prefix("jaq")
-                    .tempfile_in(location)?;
-
-                let last = run(runner, &filter, vars.clone(), inputs, |output| {
-                    write(tmp.as_file_mut(), writer, &output)
-                })?;
-                status.end(match last {
-                    None => jq::Ret::NoOutput,
-                    Some(b) if b || !cli.exit_status => jq::Ret::Ok,
-                    Some(_) => jq::Ret::NullKind,
-                });
-
-                // replace the input file with the temporary file
-                std::mem::drop(bytes);
-                let perms = std::fs::metadata(path)?.permissions();
-                tmp.persist(path).map_err(|e| Error::Io(None, e.into()))?;
-                std::fs::set_permissions(path, perms)?;
-            } else {
-                // Pathfinder: JSON is parsed in place, recording how far it
-                // has been read; other formats are read a line at a time.
-                let pos = jq::Position::default();
-                let inputs = match format {
-                    Format::Json => read::collect_if(
-                        cli.slurp,
-                        jaq_all::json::read::parse_many_at(&bytes, pos.at())
-                            .map(|r| r.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))),
-                    ),
-                    _ => read::read(format, jq::Lines::new(&bytes[..], &pos), s, cli.slurp),
-                };
-                let name = file.as_os_str().to_string_lossy();
-                let in_memory = matches!(format, Format::Json).then_some(&bytes[..]);
-                let location = || pos.location(&name, in_memory);
-                let (es, st) = (cli.exit_status, &mut status);
-                let failed = || false;
-                with_stdout(out, |out| {
-                    filter::run_jq(
-                        runner,
-                        &filter,
-                        vars.clone(),
-                        inputs,
-                        es,
-                        st,
-                        &location,
-                        &failed,
-                        |v| write(out, writer, &v),
-                    )
-                })?;
-            }
+            // Pathfinder: JSON is parsed in place, recording how far it
+            // has been read; raw text is read a line at a time.
+            let pos = jq::Position::default();
+            let inputs = match format {
+                Format::Json => read::collect_if(
+                    cli.slurp,
+                    jaq_all::json::read::parse_many_at(&bytes, pos.at())
+                        .map(|r| r.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))),
+                ),
+                _ => read::read(format, jq::Lines::new(&bytes[..], &pos), cli.slurp),
+            };
+            let name = file.as_os_str().to_string_lossy();
+            let in_memory = matches!(format, Format::Json).then_some(&bytes[..]);
+            let location = || pos.location(&name, in_memory);
+            let (es, st) = (cli.exit_status, &mut status);
+            let failed = || false;
+            with_stdout(out, |out| {
+                filter::run_jq(
+                    runner,
+                    &filter,
+                    vars.clone(),
+                    inputs,
+                    es,
+                    st,
+                    &location,
+                    &failed,
+                    |v| write(out, writer, &v),
+                )
+            })?;
         }
     }
 
