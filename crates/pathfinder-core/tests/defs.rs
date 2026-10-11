@@ -89,6 +89,7 @@ fn repeat() {
     give(json!([0, 1]), "[limit(4; repeat(.[]))]", y);
 }
 
-yields!(tostring_zero, "1.0 - 1.0 | tostring", "0.0");
+// Pathfinder: jq prints a zero result as `0` (patch 0002); measured from jq 1.8.1.
+yields!(tostring_zero, "1.0 - 1.0 | tostring", "0");
 yields!(tostring_str, r#""\n" | tostring"#, "\n");
 yields!(tostring_arr_str, r#"["\n"] | tostring"#, "[\"\\n\"]");

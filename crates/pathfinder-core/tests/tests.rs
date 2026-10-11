@@ -54,7 +54,9 @@ fn mul() {
     give(json!("Hello"), "2 * .", json!("HelloHello"));
     give(json!(2), ". * \"Hello\"", json!("HelloHello"));
 
-    give(json!("Hello"), "0 * .", json!(null));
+    // Pathfinder: jq repeats a string zero times to `""` (patch 0005);
+    // measured from jq 1.8.1.
+    give(json!("Hello"), "0 * .", json!(""));
     give(json!(-1), ". * \"Hello\"", json!(null));
     give(
         json!({"k": {"a": 1, "b": 2}}),

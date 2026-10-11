@@ -170,13 +170,63 @@ nix shell nixpkgs#cargo-audit -c cargo audit
 
 ## Upstream unit tests after the patches
 
-`cargo test --workspace --exclude pathfinder-jq`: before the patches all 361
-pass; after them 252 pass and 111 fail (363 tests: 0013 adds two to
-`pathfinder-json`'s unit tests). Fixing them is T-009.
+`cargo test -p pathfinder-core -p pathfinder-std -p pathfinder-json -p
+pathfinder-fmts` (unit, integration and doc tests). Before the patches all 361
+pass. After them 111 of 363 failed (0013 adds two to `pathfinder-json`'s unit
+tests); T-009 brought that to 2, both listed below.
 
-| Crate | Fail / total | Why |
+Every changed expectation names its patch in a comment and was measured with
+jq 1.8.1. Where the original program is an error in jq, the program changed
+too, to the nearest one jq answers:
+
+| Crate | Test | Was | Now (jq 1.8.1) | Patch |
+|---|---|---|---|---|
+| `pathfinder-core` | `defs::tostring_zero` | `"0.0"` | `"0"` | 0002 |
+| `pathfinder-core` | `path::index_access` | `{"a":1} \| .[0]` gives `null` | jq errors (`Cannot index object with number`); the test now asserts `.[0]?` gives nothing, since the engine's error text is still jaq's | 0006 |
+| `pathfinder-core` | `tests::mul` | `"Hello" \| 0 * .` gives `null` | `""` | 0005 |
+| `pathfinder-std` | all 102 | harness | `tests/common/mod.rs` loads `pathfinder-json`'s definitions and natives: 0009's `halt_error` calls `tojson`, which that crate defines | 0009 |
+| `pathfinder-std` | `defs::recurse_fib_100` | `"354224848179261915075"` | `"354224848179262000000"` | 0002, 0003 |
+| `pathfinder-json` | `funs::fromjson_inf` | `"Infinity +Infinity -Infinity" \| [fromjson \| tostring]` | jq rejects several values in one `fromjson`; `[("Infinity", "+Infinity", "-Infinity") \| fromjson \| tostring]` gives `["1.7976931348623157e+308", "1.7976931348623157e+308", "-1.7976931348623157e+308"]` | 0002, 0004, 0013 |
+| `pathfinder-json` | `funs::tojson_nan`, `tojson_inf`, `tojson_ninf` | `0.0 / 0.0 \| tojson` gives `"NaN"`, … | jq rejects division by zero; `nan`, `infinite`, `-infinite \| tojson` give `"null"`, `"1.7976931348623157e+308"`, `"-1.7976931348623157e+308"` | 0002 |
+| `pathfinder-json` | `funs::math_rem` | jaq's float remainder | jq's: both operands truncated to integers, e.g. `-2 % 2.1` is `0`, `2.1 % 3` is `2`; `2.1 % 0` is an error, not NaN | 0012 |
+
+`math_rem` still asserts jaq's wording for `% 0` (`cannot calculate -2 % 0`;
+jq says `number (-2) and number (0) cannot be divided (remainder) because the
+divisor is zero`). The patches did not change it; the engine takes jq's
+wording in M20 (P-062).
+
+### Still failing
+
+| Test | Kind | Why |
 |---|---|---|
-| `pathfinder-core` | 3 / 181 | `defs::tostring_zero` (jaq's `0.0`; 0002), `path::index_access` (`{"a":1} \| .[0]` gives `null` in jaq; 0006), `tests::mul` (`0 * "Hello"`; 0005) |
-| `pathfinder-std` | 102 / 102 | test harness, not behaviour: 0009's `halt_error` calls `tojson`, which `jaq-json` defines, and `tests/common/mod.rs` loads only core and std, so no filter compiles |
-| `pathfinder-json` | 5 / 50 integration, 0 / 4 unit | `tojson_inf`, `tojson_nan`, `tojson_ninf`, `fromjson_inf` (jaq's NaN/infinity spellings, changed by 0002/0004) and `math_rem` (`%`, changed by 0012) |
-| `pathfinder-fmts` | 1 / 26 | `formats::cbor` parses JSON with a non-string object key, which 0013 makes a parse error |
+| `pathfinder-fmts` `formats::cbor` | Removed feature | A CBOR round trip whose JSON side has a non-string object key, a parse error since 0013. CBOR goes in T-004, and the test with it. |
+| `pathfinder-std` `defs::significand_range` | **Bug from patch 0003** | See below. |
+
+**Patch 0003 makes `-1 * 0` a float, and integer arguments reject it.** In
+`pathfinder-json/src/num.rs`, `impl Mul for Num`, 0003 adds the arm
+`(Int(x), Int(y)) if (x == 0 || y == 0) && (x < 0) != (y < 0) => Float(-0.0)`,
+so that the product prints as jq's `-0`. A builtin that wants an integer
+(`try_as_isize` in `pathfinder-std/src/lib.rs`, over `Num::as_isize` in
+`num.rs`, which accepts only `Int` and `BigInt`) then rejects that value with
+`cannot use -0 as integer`, where jq, which has no
+integers, takes it as 0. `significand` is defined as
+`scalbln(.; ilogb | -1 * .)`, so it fails on every input whose exponent is 0.
+Measured on the packaged engine (`jaq 3.1.1+pathfinder.3`) and on the shim with
+it as `PATHFINDER_JAQ`, against jq 1.8.1 and stock jaq 3.1.1:
+
+| Program (`-n`) | jq 1.8.1 | stock jaq | packaged jaq | shim (`jq`) |
+|---|---|---|---|---|
+| `1 \| significand` | `1` | `1.0` | error | error |
+| `ldexp(1; 0 * -1)` | `1` | | error | error |
+| `scalbln(1; 0 * -1)` | `1` | `1.0` | error | |
+| `"abc" \| .[0 * -1:]` | `"abc"` | | error | `"abc"` |
+| `[1, 2] \| .[0 * -1]` | `1` | | error (`Cannot index array with number`) | `1` |
+| `[1, 2] \| del(.[0 * -1])` | `[2]` | | error | `[2]` |
+| `[0 * -1] \| implode` | `"\u0000"` | | error | `"\u0000"` |
+
+Empty cells were not measured. The rewriter's index normalisation hides the
+index cases from `jq` calls, but `significand` and `ldexp` fail through the
+shim today with the engine main pins. Minimal reproduction:
+`jaq -nc '1 | significand'` with the packaged engine. The repair belongs in
+the engine (T-004/T-006 own the crate sources on the parallel branch) and its
+cases in `tests/differential.rs`.

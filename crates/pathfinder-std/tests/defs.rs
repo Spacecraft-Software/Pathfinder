@@ -144,10 +144,12 @@ fn recurse_arr() {
     give(x.clone(), f, y);
 }
 
+// Pathfinder: jq computes integers beyond 2^53 in doubles (patch 0003) and
+// prints them with 17 significant digits (patch 0002); measured from jq 1.8.1.
 yields!(
     recurse_fib_100,
     "def fib: recurse([.[1], add])[0]; nth(100; [0, 1] | fib) | tostring",
-    "354224848179261915075"
+    "354224848179262000000"
 );
 
 // the implementation of scalb in jq (or the libm.a library) doesn't
