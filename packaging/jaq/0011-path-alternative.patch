@@ -1,0 +1,48 @@
+Pathfinder patch for jaq 3.1.1: Take only the true outputs of l in path(l // r) and l // r |= f.
+
+Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
+
+diff --git a/jaq-core/src/filter.rs b/jaq-core/src/filter.rs
+index 343afaa..a40aab2 100644
+--- a/jaq-core/src/filter.rs
++++ b/jaq-core/src/filter.rs
+@@ -438,7 +438,7 @@ fn at_path<V: Clone>((v, p): &(V, RcList<V>)) -> (V, RcList<V>) {
+ fn lost<'a, V: ValT + 'a>(ys: ValXs<'a, V>, at: V, p: RcList<V>) -> ValPathXs<'a, V> {
+     Box::new(ys.map(move |y| {
+         let y = y?;
+-        let same = y == at && (!y.as_bool() || y == V::from(true));
++        let same = (!y.as_bool() || y == V::from(true)) && y == at;
+         Ok(if same {
+             (y, p.clone())
+         } else {
+@@ -667,7 +667,14 @@ impl Id {
+                 let any_true = l
+                     .run(proj_cv(&cv))
+                     .any(|v| v.as_ref().map_or(true, ValT::as_bool));
+-                if any_true { l } else { r }.paths(cv)
++                // Pathfinder: only the true outputs of `l`, as in `run` and in
++                // jq 1.8.1, where `path(.[] // 0)` on `[false, 1]` is `[1]`.
++                if any_true {
++                    let true_ = |vp: &(D::V<'a>, _)| vp.0.as_bool();
++                    Box::new(l.paths(cv).filter(move |r| r.as_ref().map_or(true, true_)))
++                } else {
++                    r.paths(cv)
++                }
+             }
+             Ast::Ite(if_, then_, else_) => {
+                 flat_map_then_with(if_.run(proj_cv(&cv)), cv, move |v, cv| {
+@@ -775,7 +782,13 @@ impl Id {
+             }),
+             Ast::Alt(l, r) => {
+                 let some_true = l.run(cv.clone()).any(|y| y.map_or(true, |y| y.as_bool()));
+-                if some_true { l } else { r }.update(cv, f)
++                // Pathfinder: update only where `l` is true, as `paths` yields.
++                if some_true {
++                    let f = move |v: D::V<'a>| if v.as_bool() { f(v) } else { box_once(Ok(v)) };
++                    l.update(cv, Box::new(f))
++                } else {
++                    r.update(cv, f)
++                }
+             }
+             Ast::Fold(xs, pat, init, update, fold_type) => {
+                 let xs = rc_lazy_list::List::from_iter(run_and_bind(xs, cv.clone(), pat));

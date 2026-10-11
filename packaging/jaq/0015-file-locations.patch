@@ -1,0 +1,428 @@
+Pathfinder patch for jaq 3.1.1: Name the file being read in an error location, as jq 1.8.1.
+
+Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
+
+diff --git a/jaq/src/filter.rs b/jaq/src/filter.rs
+index 50a5db1..75f77e6 100644
+--- a/jaq/src/filter.rs
++++ b/jaq/src/filter.rs
+@@ -64,6 +64,7 @@ pub(crate) fn run(
+ ///
+ /// An uncaught error is reported on stderr with `location`, ends only that
+ /// input's outputs, and is recorded in `status`, which decides the exit code.
++/// No input is taken once `failed`: an input file could not be read.
+ pub(crate) fn run_jq(
+     runner: &Runner,
+     filter: &Filter,
+@@ -72,6 +73,7 @@ pub(crate) fn run_jq(
+     exit_status: bool,
+     status: &mut crate::jq::Status,
+     location: &dyn Fn() -> String,
++    failed: &dyn Fn() -> bool,
+     mut f: impl FnMut(Val) -> io::Result<()>,
+ ) -> Result<(), Error> {
+     use crate::jq::Ret;
+@@ -88,8 +90,10 @@ pub(crate) fn run_jq(
+         inputs: &RcIter::new(inputs),
+     };
+     let ctx = Ctx::new(&data, vars);
+-    let inputs = if runner.null_input { null } else { data.inputs };
+-    for x in inputs {
++    let mut inputs = if runner.null_input { null } else { data.inputs };
++    // Pathfinder: once a file could not be read, jq takes no further input.
++    while !failed() {
++        let Some(x) = inputs.next() else { break };
+         let x = x.map_err(Error::Parse)?;
+         let mut ret = Ret::NoOutput;
+         for y in filter.id.run((ctx.clone(), x)) {
+diff --git a/jaq/src/jq.rs b/jaq/src/jq.rs
+index 772928a..daccd0a 100644
+--- a/jaq/src/jq.rs
++++ b/jaq/src/jq.rs
+@@ -67,6 +67,62 @@ impl Status {
+ /// The most jq's `fgets` fetches at once.
+ const CHUNK: usize = 4095;
+ 
++/// Pathfinder: the variable in which Pathfinder describes the files it has
++/// concatenated onto stdin, so that their names and lines are reported as jq
++/// reports them. A stock jaq ignores it.
++///
++/// One record per file, in order: `<bytes>:<name length>:<name><message
++/// length>:<message>`, lengths in bytes. A non-empty message means the file
++/// could not be read; it holds no bytes, and jq's `jq: error: <message>` is
++/// written when the reader reaches it. The last file's byte count is not
++/// used: it extends to the end of stdin.
++pub const INPUTS_ENV: &str = "PATHFINDER_INPUTS";
++
++/// Pathfinder: one of the files concatenated onto stdin.
++#[derive(Debug, PartialEq, Eq)]
++pub struct Segment {
++    name: String,
++    len: u64,
++    failure: Option<String>,
++}
++
++impl Segment {
++    /// The files described by [`INPUTS_ENV`], which is removed so that
++    /// neither `$ENV` nor `env` shows it. Malformed, it is ignored.
++    pub fn take_env() -> Vec<Self> {
++        let Some(v) = std::env::var_os(INPUTS_ENV) else {
++            return Vec::new();
++        };
++        std::env::remove_var(INPUTS_ENV);
++        // Pathfinder writes it in UTF-8.
++        let v = v.into_string().unwrap_or_default();
++        Self::parse(v.as_bytes()).unwrap_or_default()
++    }
++
++    fn parse(mut s: &[u8]) -> Option<Vec<Self>> {
++        fn number(s: &mut &[u8]) -> Option<u64> {
++            let i = s.iter().position(|&b| b == b':')?;
++            let n = core::str::from_utf8(&s[..i]).ok()?.parse().ok()?;
++            *s = &s[i + 1..];
++            Some(n)
++        }
++        fn text(s: &mut &[u8]) -> Option<String> {
++            let n = usize::try_from(number(s)?).ok()?;
++            let t = String::from_utf8_lossy(s.get(..n)?).into_owned();
++            *s = &s[n..];
++            Some(t)
++        }
++        let mut segments = Vec::new();
++        while !s.is_empty() {
++            let len = number(&mut s)?;
++            let name = text(&mut s)?;
++            let failure = Some(text(&mut s)?).filter(|m| !m.is_empty());
++            segments.push(Self { name, len, failure });
++        }
++        Some(segments)
++    }
++}
++
+ /// How far the input has been read, for the location of an error.
+ #[derive(Default)]
+ pub struct Position {
+@@ -95,6 +151,14 @@ pub struct Position {
+     flush: Cell<bool>,
+     /// How often [`Lines`] has handed out a chunk or found the end.
+     refills: Cell<usize>,
++    /// Pathfinder: the files a stream is made of, if it is several, the one
++    /// being read, and how many could not be read so far.
++    segments: Vec<Segment>,
++    segment: Cell<usize>,
++    failures: Cell<usize>,
++    /// The lines of the files before the one being read: jq's parser counts
++    /// on across files, where its location starts again.
++    lines_before: Cell<usize>,
+ }
+ 
+ /// Pathfinder: what jq's message for a parse error in a stream needs.
+@@ -128,13 +192,32 @@ impl jaq_all::json::read::Recall for Position {
+ }
+ 
+ impl Position {
++    /// A stream made of `segments`, as jq reads several files.
++    pub fn with_segments(segments: Vec<Segment>) -> Self {
++        Self {
++            segments,
++            ..Self::default()
++        }
++    }
++
+     /// The offset read up to in an in-memory file, set by its parser.
+     pub fn at(&self) -> &Cell<Option<usize>> {
+         &self.at
+     }
+ 
++    /// Whether a file of the stream could not be read. jq then stops after
++    /// the input being read, and exits with 2.
++    pub fn failed(&self) -> bool {
++        self.failures.get() > 0
++    }
++
+     /// jq's `<name>:<line>`, or `<unknown>` before any input has been read.
++    /// In a stream of several files, `name` is the file being read.
+     pub fn location(&self, name: &str, bytes: Option<&[u8]>) -> String {
++        let name = match self.segments.get(self.segment.get()) {
++            Some(s) => &s.name,
++            None => name,
++        };
+         let lines = match (bytes, self.at.get()) {
+             (Some(bytes), Some(at)) => Some(self.file_lines(bytes, at)),
+             _ => self.lines.get(),
+@@ -142,6 +225,20 @@ impl Position {
+         lines.map_or_else(|| "<unknown>".into(), |n| format!("{name}:{n}"))
+     }
+ 
++    /// Start reading segment `i`, as jq opens the next file: an unreadable
++    /// one is reported then. Returns the offset at which it ends, if that is
++    /// before the end of the stream.
++    fn enter(&self, i: usize, from: u64) -> Option<u64> {
++        let s = self.segments.get(i)?;
++        self.segment.set(i);
++        if let Some(m) = &s.failure {
++            let _ = io::Write::write_all(&mut io::stderr(), format!("jq: error: {m}\n").as_bytes());
++            self.failures.set(self.failures.get() + 1);
++        }
++        let len = if s.failure.is_some() { 0 } else { s.len };
++        (i + 1 < self.segments.len()).then(|| from.saturating_add(len))
++    }
++
+     /// The lines jq has fetched when its parser has read up to offset `at`.
+     fn file_lines(&self, bytes: &[u8], at: usize) -> usize {
+         let at = at.min(bytes.len());
+@@ -184,6 +281,9 @@ pub struct Lines<'a, R> {
+     at: &'a Position,
+     /// Pathfinder: whether the chunk handed out ends a line.
+     ends_line: bool,
++    /// Pathfinder: where the file being read ends, in a stream of several
++    /// files (the stream offset of `buf[0]` is `Position::base`).
++    end: u64,
+ }
+ 
+ impl<'a, R> Lines<'a, R> {
+@@ -195,6 +295,7 @@ impl<'a, R> Lines<'a, R> {
+             filled: 0,
+             at,
+             ends_line: true,
++            end: 0,
+         }
+     }
+ }
+@@ -226,6 +327,27 @@ impl<R: Read> Lines<'_, R> {
+     }
+ }
+ 
++impl<R> Lines<'_, R> {
++    /// Pathfinder: past the end of a file, go on to the next one, as jq does
++    /// when more is wanted, and say whether one was entered: its line count
++    /// starts again. The first read enters the first file. Out of line, so
++    /// that the per-chunk path stays as small as it was.
++    #[cold]
++    #[inline(never)]
++    fn cross(&mut self, from: u64) -> bool {
++        if self.at.lines.get().is_none() {
++            self.end = self.at.enter(0, 0).unwrap_or(u64::MAX);
++        }
++        let mut crossed = false;
++        while from >= self.end {
++            let next = self.at.segment.get() + 1;
++            self.end = self.at.enter(next, from).unwrap_or(u64::MAX);
++            crossed = true;
++        }
++        crossed
++    }
++}
++
+ impl<R: Read> BufRead for Lines<'_, R> {
+     /// The next chunk as `fgets` fetches it: up to a newline or [`CHUNK`]
+     /// bytes, reading on until one of them, or the end, is there.
+@@ -239,16 +361,24 @@ impl<R: Read> BufRead for Lines<'_, R> {
+             }
+             self.at.refills.set(self.at.refills.get() + 1);
+             let mut lines = self.at.lines.get().unwrap_or(0);
+-            let before = lines;
++            // Pathfinder: in a stream of several files, `fgets` never reads
++            // across the end of one.
++            let from = self.at.base.get() + pos as u64;
++            if from >= self.end && self.cross(from) {
++                self.at.lines_before.set(self.at.lines_before.get() + lines);
++                lines = 0;
++            }
++            let chunk = (self.end - from).min(CHUNK as u64) as usize;
++            let before = self.at.lines_before.get() + lines;
+             loop {
+                 let rest = &self.buf[pos..self.filled];
+-                if let Some(i) = newline(&rest[..rest.len().min(CHUNK)]) {
++                if let Some(i) = newline(&rest[..rest.len().min(chunk)]) {
+                     self.line_end = pos + i + 1;
+                     lines += 1;
+                     break;
+                 }
+-                if rest.len() >= CHUNK {
+-                    self.line_end = pos + CHUNK;
++                if rest.len() >= chunk {
++                    self.line_end = pos + chunk;
+                     break;
+                 }
+                 // Keep the partial chunk and read on behind it.
+@@ -425,3 +555,83 @@ fn dump(v: &Val) -> String {
+     }
+     format!("{}...", &s[..end])
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::{Lines, Position, Segment};
++    use std::io::BufRead;
++
++    fn segments(s: &str) -> Vec<Segment> {
++        Segment::parse(s.as_bytes()).unwrap()
++    }
++
++    /// The chunks a stream of several files is fetched in, each with the
++    /// location after fetching it.
++    fn chunks(input: &[u8], desc: &str) -> Vec<(String, String)> {
++        let pos = Position::with_segments(segments(desc));
++        let mut lines = Lines::new(input, &pos);
++        let mut out = Vec::new();
++        loop {
++            let chunk = lines.fill_buf().unwrap().to_vec();
++            if chunk.is_empty() {
++                return out;
++            }
++            lines.consume(chunk.len());
++            let chunk = String::from_utf8(chunk).unwrap();
++            out.push((chunk, pos.location("<stdin>", None)));
++        }
++    }
++
++    fn pairs(want: &[(&str, &str)]) -> Vec<(String, String)> {
++        want.iter()
++            .map(|(c, l)| (c.to_string(), l.to_string()))
++            .collect()
++    }
++
++    #[test]
++    fn parses_the_description() {
++        let s = segments("4:6:a.json0:0:2:b:7:no such0:7:<stdin>0:");
++        assert_eq!(s.len(), 3);
++        assert_eq!(
++            (s[0].name.as_str(), s[0].len, s[0].failure.as_deref()),
++            ("a.json", 4, None)
++        );
++        assert_eq!(
++            (s[1].name.as_str(), s[1].failure.as_deref()),
++            ("b:", Some("no such"))
++        );
++        assert_eq!(s[2].name, "<stdin>");
++        assert!(Segment::parse(b"4:6:a.js").is_none());
++    }
++
++    #[test]
++    fn files_are_chunk_boundaries_and_restart_the_count() {
++        let got = chunks(b"1\n2\n1 2\"z\"", "4:1:a0:3:1:b0:0:1:c0:");
++        let want = [
++            ("1\n", "a:1"),
++            ("2\n", "a:2"),
++            ("1 2", "b:0"),
++            ("\"z\"", "c:0"),
++        ];
++        assert_eq!(got, pairs(&want));
++    }
++
++    #[test]
++    fn empty_and_unreadable_files_are_passed_through() {
++        let desc = "2:1:a0:0:1:e0:0:1:m3:err";
++        assert_eq!(chunks(b"12", desc), pairs(&[("12", "a:0")]));
++        let pos = Position::with_segments(segments(desc));
++        let mut lines = Lines::new(&b"12"[..], &pos);
++        let n = lines.fill_buf().unwrap().len();
++        lines.consume(n);
++        assert!(lines.fill_buf().unwrap().is_empty());
++        assert_eq!(pos.location("<stdin>", None), "m:0");
++        assert!(pos.failed());
++    }
++
++    #[test]
++    fn a_single_stream_is_unchanged() {
++        let got = chunks(b"1\n2", "");
++        assert_eq!(got, pairs(&[("1\n", "<stdin>:1"), ("2", "<stdin>:1")]));
++    }
++}
+diff --git a/jaq/src/main.rs b/jaq/src/main.rs
+index 831a28a..417ee47 100644
+--- a/jaq/src/main.rs
++++ b/jaq/src/main.rs
+@@ -60,9 +60,10 @@ fn main_io(
+     if cli.version {
+         let name = env!("CARGO_PKG_NAME");
+         // Pathfinder's patch set: number output, arithmetic precision, input
+-        // literals, string repetition, object keys, `debug`, uncaught errors
+-        // and `halt_error` as jq 1.8.1 has them.
+-        let version = concat!(env!("CARGO_PKG_VERSION"), "+pathfinder.2");
++        // literals, string repetition, object keys, `debug`, uncaught errors,
++        // `halt_error`, lazy input and file names in error locations as jq
++        // 1.8.1 has them.
++        let version = concat!(env!("CARGO_PKG_VERSION"), "+pathfinder.3");
+         writeln!(out, "{name} {version}")?;
+         Ok(ExitCode::SUCCESS)
+     } else if cli.help {
+@@ -119,6 +120,9 @@ impl Cli {
+ }
+ 
+ fn real_main(cli: &Cli, inp: &mut io::Stdin, out: &mut io::Stdout) -> Result<ExitCode, Error> {
++    // Pathfinder: the files Pathfinder concatenated onto stdin, taken out of
++    // the environment before `$ENV` is made from it.
++    let segments = jq::Segment::take_env();
+     let mut var_val = binds(cli)?;
+     let input_filename_idx = var_val.len();
+     var_val.push(("!input_filename".to_string(), Val::Null));
+@@ -150,7 +154,7 @@ fn real_main(cli: &Cli, inp: &mut io::Stdin, out: &mut io::Stdout) -> Result<Exi
+ 
+         let format = unwrap_or_json(cli.from);
+         let s = read::read_string(format, inp.lock())?;
+-        let pos = jq::Position::default();
++        let pos = jq::Position::with_segments(segments);
+         let lines = jq::Lines::new(inp.lock(), &pos);
+         // Pathfinder: JSON is read as jq reads it, with jq's parse errors.
+         let inputs = match format {
+@@ -160,12 +164,30 @@ fn real_main(cli: &Cli, inp: &mut io::Stdin, out: &mut io::Stdout) -> Result<Exi
+             _ => read::read(format, lines, &s, cli.slurp),
+         };
+         let location = || pos.location("<stdin>", None);
++        let failed = || pos.failed();
+         let (es, st) = (cli.exit_status, &mut status);
+-        with_stdout(out, |out| {
+-            filter::run_jq(runner, &filter, vars, inputs, es, st, &location, |v| {
+-                write(out, writer, &v)
+-            })
+-        })?;
++        let ran = with_stdout(out, |out| {
++            filter::run_jq(
++                runner,
++                &filter,
++                vars,
++                inputs,
++                es,
++                st,
++                &location,
++                &failed,
++                |v| write(out, writer, &v),
++            )
++        });
++        // Pathfinder: a file that could not be read makes jq exit with 2,
++        // whatever else happened, `halt_error` included.
++        if pos.failed() {
++            if let Err(e) = ran {
++                eprint!("{}", ErrorColor::new(&e, cli.color_errors()));
++            }
++            return Ok(ExitCode::from(2));
++        }
++        ran?;
+     } else {
+         for file in &cli.files {
+             vars[input_filename_idx] =
+@@ -216,10 +238,19 @@ fn real_main(cli: &Cli, inp: &mut io::Stdin, out: &mut io::Stdout) -> Result<Exi
+                 let in_memory = matches!(format, Format::Json).then_some(&bytes[..]);
+                 let location = || pos.location(&name, in_memory);
+                 let (es, st) = (cli.exit_status, &mut status);
++                let failed = || false;
+                 with_stdout(out, |out| {
+-                    filter::run_jq(runner, &filter, vars.clone(), inputs, es, st, &location, |v| {
+-                        write(out, writer, &v)
+-                    })
++                    filter::run_jq(
++                        runner,
++                        &filter,
++                        vars.clone(),
++                        inputs,
++                        es,
++                        st,
++                        &location,
++                        &failed,
++                        |v| write(out, writer, &v),
++                    )
+                 })?;
+             }
+         }

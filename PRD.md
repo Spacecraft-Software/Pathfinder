@@ -14,7 +14,7 @@ MVP: M18–M20 — Pathfinder engine v0.2: jaq's engine in-tree, in-process, at 
 
 Pathfinder is a shim: it translates jq's command line, rewrites the filter
 where jaq would run it differently, and execs jaq. Steps 1–3 took jq 1.8.1's
-own test suite from 77% (stock jaq) to 98.2% (805/820) on a patched jaq, and
+own test suite from 77% (stock jaq) to 99.4% (815/820) on a patched jaq, and
 the rest is out of a shim's reach:
 
 - **The rewriter can only add text.** Every repair costs filter-level work at
@@ -57,8 +57,9 @@ fork; **optional** is welcome but never gates a milestone.
 - R-001 (mandatory) Under the name `jq`, stdout, stderr and exit status are
   jq 1.8.1's, byte for byte, on every differential case.
 - R-002 (mandatory) jq 1.8.1's own test suite: no regression at any
-  milestone (ratchet), and at least 805/820 when the engine goes in-process.
-- R-003 (expected) At least 812/820 (99%) at the end of the fork.
+  milestone (ratchet), and at least 815/820 when the engine goes in-process.
+- R-003 (expected) At least 818/820 at the end of the fork: the regex and
+  number milestones (M22, M23) own four of the five cases left.
 - R-004 (mandatory) Never more permissive than jq: builtins and syntax jq
   1.8.1 does not define are removed from the engine, not kept as extras.
 - R-005 (expected) jq's error wording is produced natively, including
@@ -140,11 +141,11 @@ crates/
 | Upstream fixes are missed | Record the base commit; review jaq's releases each quarter (TODO) |
 | Regex fidelity needs Oniguruma itself | Prefer a pure-Rust engine (`fancy-regex`); a C binding is a §3.1 exemption and needs ASLR/CFI and a filed justification |
 | Decimal numbers slow arithmetic | Keep literals as text until first computed on, as jq does; measure |
-| The fork stalls half-way | MVP is parity, not perfection: in-process at 805/820 already pays for itself |
+| The fork stalls half-way | MVP is parity, not perfection: in-process at 815/820 already pays for itself |
 
 ## 8. Success metrics
 
-- jq 1.8.1 suite: 805/820 at the MVP, 812/820 or better at M23.
+- jq 1.8.1 suite: 815/820 at the MVP, 818/820 or better at M23.
 - Differential suite (stdout, stderr, exit status): 100% on both engines
   until the jaq path is retired.
 - Benchmarks: R-011 holds at every milestone.

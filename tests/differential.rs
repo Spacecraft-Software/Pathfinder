@@ -622,6 +622,140 @@ static PATCHED_STDERR_CASES: &[Case] = &[
     c("null", &["-c", r#"{"a": [1, 2]} | halt_error(3)"#]),
     c("null", &["-c", "halt_error"]),
     c("null", &["-c", r#""x\n" | halt_error"#]),
+    // A path expression that lost its path fails where and as jq's does
+    // (`packaging/jaq/0010`, `0011`).
+    c(
+        r#"[{"b":0}]"#,
+        &["-c", "try path(map(select(.b == 0))) catch ."],
+    ),
+    c(
+        "[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]",
+        &["-c", "try path(reverse) catch ."],
+    ),
+    c(
+        "[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]",
+        &[
+            "-c",
+            r#"try path(reverse | .["abcdefghijklmnopqrstuvwxyz"]) catch ."#,
+        ],
+    ),
+    c(
+        "[1,2]",
+        &["-c", "[.[] as $x | try path(reverse | .[$x]) catch .]"],
+    ),
+    c("[1,2]", &["-c", "try path(reverse | .[]?) catch ."]),
+    c("[1,2]", &["-c", "try path(reverse | .a?) catch ."]),
+    c("[1,2]", &["-c", "try path(reverse | .[1:]) catch ."]),
+    c("[1,2]", &["-c", "try path(reverse | ..) catch ."]),
+    c("[1,2]", &["-c", "try path(reverse | map(.)) catch ."]),
+    c("[1,2]", &["-c", "try path([1 | .a]) catch ."]),
+    c(r#"{"a":1}"#, &["-c", "try path({a: 1} | .a) catch ."]),
+    c(
+        "[1,2]",
+        &["-c", r#"try path(try error("x") catch .a) catch ."#],
+    ),
+    c("[1,2]", &["-c", "try path(-(1 | .a)) catch ."]),
+    c(
+        "null",
+        &[
+            "-c",
+            r#"try path("aaaaaaaaaaaaaaaaaaaaaaaaéaaaaaaaaa") catch ."#,
+        ],
+    ),
+    c(
+        "null",
+        &["-c", r#"try path(1 | .["aaaaaaaaéaaaaaa"]) catch ."#],
+    ),
+    c("null", &["-c", "[path(null), path(1 | null | .b)]"]),
+    c(
+        r#"{"a":null}"#,
+        &["-c", "[path(.a | null), (try path(.a // null) catch .)]"],
+    ),
+    c("true", &["-c", "[path(true), (try path(false) catch .)]"]),
+    c(
+        r#"[{"a":0},{"a":1}]"#,
+        &["-c", "try ((map(select(.a == 1))[].b) = 10) catch ."],
+    ),
+    c("[0,1,2]", &["-c", "try (def x: reverse; x = 10) catch ."]),
+    c("[1,2]", &["-c", "try del(reverse) catch ."]),
+    c(
+        r#"{"a":[false,1,null,2]}"#,
+        &["-c", "[path(.a[] // .b)], ((.a[] // .b) |= 7)"],
+    ),
+    c(
+        r#"{"a":[false,1]}"#,
+        &["-c", "try path([.a[] // 0]) catch ."],
+    ),
+    c("[1,2]", &["-c", "path(.[0] | tostring)"]),
+    c("[1,2]", &["-c", "path(reverse | .[0])"]),
+    c(r#"{"a":[1,2]}"#, &["-c", "del(.a | map(.) | .[0])"]),
+    c("[1,2]\n[]\n[5]", &["-c", "path(reverse|.[0])"]),
+    c("[1,2] [[3]]", &["-c", ".[0], path(.[0] | tostring)"]),
+    // Malformed input, `fromjson` and bad JSON arguments: jq's parse errors
+    // (`packaging/jaq/0013`); `%` with both sides clamped to integers (0012).
+    c("{", &["-c", "."]),
+    c("1 2 }", &["-c", "."]),
+    c("{'a': 123}", &["-c", "."]),
+    c(r#""\x""#, &["-c", "."]),
+    c("[1,\n2,\n x", &["-c", "."]),
+    c("1}", &["-c", "."]),
+    c("truex 1", &["-c", "."]),
+    c("[1,]", &["-c", "."]),
+    c(r#"{"a" 1}"#, &["-c", "."]),
+    c("{1:2}", &["-c", "."]),
+    c("\"a\nb\"", &["-c", "."]),
+    c("1 2 }", &["-nc", "[inputs]"]),
+    c("1 2 }", &["-nc", "[try (input,input,input) catch .]"]),
+    c("1 2 }", &["-sc", "."]),
+    c(r#""{\"a\":}""#, &["-c", "try fromjson catch ."]),
+    c(r#""1 2""#, &["-c", "try fromjson catch ."]),
+    c(r#""""#, &["-c", "try fromjson catch ."]),
+    c(r#""NaN1""#, &["-c", "try fromjson catch ."]),
+    c("[1]", &["-c", "try fromjson catch ."]),
+    c("null", &["-c", "--argjson", "x", "{", "$x"]),
+    c("null", &["-c", "$ARGS", "--jsonargs", "1", "{"]),
+    c(
+        "null",
+        &["-c", "[(infinite, -infinite) % (1, -1, infinite)]"],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "[5 % 2.5, -5 % 2.5, 1e19 % 7, 9223372036854775807 % 2, 9007199254740993 % 2, (nan % 0 | isnan)]",
+        ],
+    ),
+    c("null", &["-c", "try (5 % 0.5) catch ."]),
+    c("null", &["-c", "5 % 0.5"]),
+    // Several files: the location names the file being read, its line count
+    // starting again in each; a value ended by the next file's first byte is
+    // reported in that file (`n1.json` then `c.json`). Fixtures in
+    // `write_fixtures`.
+    c("", &["-c", ".a", "l1.json", "l2.json"]),
+    c("", &["-c", ".a", "n1.json", "c.json"]),
+    c("", &["-c", ".a", "e.json", "l1.json", "e.json", "c.json"]),
+    c("", &["-c", ".a", "h1.json", "h2.json"]),
+    c("", &["-c", ".a", "g1.json", "g2.json", "e.json"]),
+    c("", &["-c", ".a", "pre.json", "post.json"]),
+    c("", &["-s", ".a", "l1.json", "l2.json"]),
+    c(
+        "",
+        &["-n", "-c", r#"[inputs] | error("x")"#, "l1.json", "l2.json"],
+    ),
+    c("", &["-n", "-c", r#"error("x")"#, "l1.json", "l2.json"]),
+    c("", &["-R", ".a", "r1.txt", "r2.txt"]),
+    c(r#""in""#, &["-c", ".a", "l1.json", "-", "c.json"]),
+    // An unreadable file is reported when the reader reaches it, one more
+    // input is run, and jq exits with 2 whatever else happened.
+    c("", &["-c", ".a", "l1.json", "missing.json", "l2.json"]),
+    c("", &["-c", ".", "missing.json", "l1.json"]),
+    c("", &["-c", ".a", "g1.json", "missing.json"]),
+    c("", &["-s", "-c", ".", "l1.json", "missing.json", "l2.json"]),
+    c("", &["-n", "-c", "[inputs]", "missing.json", "l1.json"]),
+    c("", &["-n", "-c", "1", "missing.json", "l1.json"]),
+    c("", &["-e", ".", "missing.json", "l1.json"]),
+    c("", &["halt_error", "missing.json", "l1.json"]),
+    c("", &["-c", ".", "l1.json", "dir", "l2.json"]),
 ];
 
 /// Cases needing input files, which are created in a temp dir at run time.
@@ -643,7 +777,47 @@ static FILE_CASES: &[Case] = &[
     c("", &["-r", ".a", "f1.json", "f2.json"]),
     // A file whose name starts with `-` (jq: a file; jaq: a flag).
     c("", &["-c", ".", "-5"]),
+    // Nothing comes between two files: a token, a string or a raw line runs
+    // on into the next file.
+    c("", &["-c", ".", "g1.json", "g2.json"]),
+    c("", &["-c", ".", "s1.json", "s2.json"]),
+    c("", &["-R", "-c", ".", "r1.txt", "r2.txt"]),
+    c("", &["-R", "-s", "-c", ".", "r1.txt", "r2.txt"]),
 ];
+
+/// Write the input files the cases name into `dir`.
+fn write_fixtures(dir: &std::path::Path) {
+    let files: &[(&str, &str)] = &[
+        ("f1.json", r#"{"a":1}"#),
+        ("f2.json", r#"{"a":2}"#),
+        ("filt.jq", ".a\n"),
+        ("filt2.jq", "[tostream]\n"),
+        ("-5", "[5]"),
+        ("l1.json", "1\n2\n\"x\"\n"),
+        ("l2.json", "{\"a\":1}\n\n\"y\"\n3\n"),
+        ("n1.json", "1 2"),
+        ("c.json", "\"z\""),
+        ("e.json", ""),
+        ("h1.json", "[1,\n"),
+        ("h2.json", "2]\n\"q\"\n"),
+        ("g1.json", "12"),
+        ("g2.json", "34\n\"w\"\n"),
+        ("s1.json", "\"ab"),
+        ("s2.json", "cd\"\n"),
+        ("r1.txt", "line1\nline2"),
+        ("r2.txt", "line3\nline4\n"),
+    ];
+    for (name, text) in files {
+        std::fs::write(dir.join(name), text).expect("fixture");
+    }
+    // `fgets` restarts its 4095-byte chunks in each file: the array ends in
+    // the first chunk of `post.json`, which holds no newline.
+    let pre = format!("\"{}\"", "a".repeat(2000));
+    let post = format!("[{}1]{}\n7\n", "1,".repeat(1249), " ".repeat(2000));
+    std::fs::write(dir.join("pre.json"), pre).expect("fixture");
+    std::fs::write(dir.join("post.json"), post).expect("fixture");
+    std::fs::create_dir_all(dir.join("dir")).expect("fixture");
+}
 
 /// The jq release this shim is written against.
 const BASELINE: &str = "jq-1.8.1";
@@ -768,6 +942,7 @@ fn patched_engine_reports_errors_as_jq() {
     }
     let dir = std::env::temp_dir().join(format!("pathfinder-err-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
+    write_fixtures(&dir);
     let shim = shim(&dir);
     let mut failures: Vec<String> = Vec::new();
     for case in PATCHED_STDERR_CASES {
@@ -810,11 +985,7 @@ fn shim_matches_real_jq() {
 
     let dir = std::env::temp_dir().join(format!("pathfinder-diff-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
-    std::fs::write(dir.join("f1.json"), r#"{"a":1}"#).expect("fixture");
-    std::fs::write(dir.join("f2.json"), r#"{"a":2}"#).expect("fixture");
-    std::fs::write(dir.join("filt.jq"), ".a\n").expect("fixture");
-    std::fs::write(dir.join("filt2.jq"), "[tostream]\n").expect("fixture");
-    std::fs::write(dir.join("-5"), "[5]").expect("fixture");
+    write_fixtures(&dir);
     let shim = shim(&dir);
 
     let patched: &[Case] = if engine_is_patched() {
