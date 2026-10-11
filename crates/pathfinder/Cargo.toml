@@ -8,7 +8,7 @@ edition = "2024"
 rust-version = "1.88"
 license = "GPL-3.0-or-later"
 readme = "../../README.md"
-description = "jq-compatible shim over jaq: translates jq's command line and filter syntax, then execs jaq"
+description = "A jq 1.8.1-compatible jq on a fork of jaq's engine"
 homepage = "https://Pathfinder.SpacecraftSoftware.org/"
 repository = "https://github.com/Spacecraft-Software/pathfinder"
 authors = ["Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
@@ -19,20 +19,26 @@ keywords = ["jq", "jaq", "json", "shim", "compatibility"]
 name = "pathfinder"
 path = "src/main.rs"
 
-# No runtime dependencies, deliberately.
+# One runtime dependency: the engine (M19). `jaq` is jaq's command line as a
+# library on Pathfinder's engine crates (crates/UPSTREAM.md); the binary
+# evaluates with it in process unless `PATHFINDER_ENGINE=jaq` asks for a jaq
+# binary. Nothing else: jq's command line is hand-parsed, because it is
+# positional and order-sensitive in ways clap cannot express
+# (`src/jqargs.rs`), and the native reports' JSON is written by `src/json.rs`.
 #
-# Pathfinder's whole job is to hand off to `jaq` as fast as possible: the common
-# path is parse-argv-then-execve, which std covers completely. Pulling in clap
-# would also be actively wrong — jq's command line is positional and
-# order-sensitive in ways clap cannot express (see `src/jqargs.rs`). This
-# mirrors `doas-rs/crates/sudo-shim`, which is a shim for the same reason.
-#
-# M-MIMALLOC-APPS is deliberately NOT applied: the process allocates a few
-# hundred bytes of argv strings and then replaces its own image with execve.
-# There is no allocating hot path for mimalloc to improve, and linking it would
-# add startup cost to a binary whose entire value proposition is being
-# unmeasurable next to the jaq run it fronts (Standard §3.2 trade-off note).
+# M-MIMALLOC-APPS is applied (feature `mimalloc`, on by default): measured on
+# 200 000 objects (22 MB NDJSON), `-s 'group_by(.tags[2]) | map(length)'`
+# took 5.1e9 user cycles on the system allocator and 2.4e9 with mimalloc, the
+# allocator jaq ships with (TODO T-018, `bench/`). It is the engine's
+# allocator, not a third crate of ours: jaq's own build uses it, and it was
+# audited with the import (crates/UPSTREAM.md).
+[features]
+default = ["mimalloc"]
+mimalloc = ["dep:mimalloc"]
+
 [dependencies]
+jaq = { workspace = true }
+mimalloc = { version = "0.1.29", default-features = false, optional = true }
 
 [dev-dependencies]
 assert_cmd = "2"

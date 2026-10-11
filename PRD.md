@@ -97,7 +97,9 @@ fork; **optional** is welcome but never gates a milestone.
   justified in the PR that adds it (§3.3).
 - R-016 (mandatory) Licensing: imported jaq files keep MIT and their
   upstream copyright (§4.2), are listed in `REUSE.toml`, and credited in
-  `CREDITS.md` (§15.3); Pathfinder's own files stay GPL-3.0-or-later.
+  `CREDITS.md` (§15.3). Pathfinder's changes to them, and its own files
+  among the engine crates, are GPL-3.0-or-later OR MIT, so each engine file
+  stays usable under MIT; the shim crate stays GPL-3.0-or-later.
 - R-017 (mandatory) Nothing is sent upstream (§6.4). Upstream jaq fixes are
   reviewed and ported by hand; the import records its base commit.
 

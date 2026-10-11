@@ -599,6 +599,12 @@ static PATCHED_CASES: &[Case] = &[
              try has(3) catch ., try path(.[3]) catch ., try .[3:4] catch .]",
         ],
     ),
+    // An unclosed delimiter before a comment that runs to the end of the
+    // program: a compile error, exit 3, where jaq panicked (patch 0016;
+    // found by fuzzing).
+    c("null", &["[1 #"]),
+    c("null", &["(1 #"]),
+    c("null", &["{a #"]),
 ];
 
 /// Patched-engine cases compared on stderr too: an uncaught error is reported
@@ -853,15 +859,32 @@ fn real_jq() -> Option<PathBuf> {
     None
 }
 
-/// Whether the shim runs Pathfinder's patched jaq, found as the shim finds it.
-fn engine_is_patched() -> bool {
-    let jaq = std::env::var_os("PATHFINDER_JAQ")
-        .or_else(|| option_env!("PATHFINDER_DEFAULT_JAQ").map(Into::into))
-        .unwrap_or_else(|| "jaq".into());
-    Command::new(jaq)
+/// The engine the shim runs, as it reports it: `native` (in process),
+/// `patched` (Pathfinder's patched jaq, `packaging/jaq/`) or `stock` (any
+/// other jaq). Asked of `pathfinder --version --json`, so it follows
+/// `PATHFINDER_ENGINE`, the build's default and the jaq lookup exactly.
+fn engine() -> &'static str {
+    let out = Command::new(env!("CARGO_BIN_EXE_pathfinder"))
+        .args(["--version", "--json"])
+        .output()
+        .expect("pathfinder runs");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("a JSON report");
+    let engine = &v["data"]["engine"];
+    if engine["name"] == "native" {
+        return "native";
+    }
+    let jaq = engine["path"].as_str().unwrap_or("jaq");
+    let patched = Command::new(jaq)
         .arg("--version")
         .output()
-        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("+pathfinder"))
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("+pathfinder"));
+    if patched { "patched" } else { "stock" }
+}
+
+/// Whether the engine has Pathfinder's patch set: the patched jaq, or the
+/// native engine, which is built from the same patched sources.
+fn engine_is_patched() -> bool {
+    engine() != "stock"
 }
 
 /// Find a jq binary, without checking which version it is.

@@ -5,15 +5,17 @@ SPDX-License-Identifier: CC-BY-SA-4.0
 
 # Pathfinder
 
-**A `jq`-compatible shim over [`jaq`](https://github.com/01mf02/jaq).**
+**A jq 1.8.1-compatible `jq` on a fork of [`jaq`](https://github.com/01mf02/jaq)'s engine.**
 
-Pathfinder accepts jq's exact command line, translates it into jaq's, rewrites
-the filter where jaq would run it differently, and hands off to jaq. Install it
-as `jq` and existing scripts keep working.
+Pathfinder accepts jq's exact command line, rewrites the filter where its
+engine would run it differently from jq, and evaluates it. Install it as `jq`
+and existing scripts keep working.
 
-Not a jq implementation: it parses jq, so that it can rewrite assignments,
-syntax jaq lacks, and programs jq refuses to compile — but it evaluates nothing.
-jaq does the work; Pathfinder is the translation layer in front of it.
+It began as a shim in front of jaq and is becoming its own jq (`PRD.md`): the
+engine is a hard fork of jaq's, in this repository, and since M19 it runs in
+process (`PATHFINDER_ENGINE=native`). Handing off to a jaq binary
+(`PATHFINDER_ENGINE=jaq`) stays possible until the native engine has replaced
+it; the Nix package still defaults to it.
 
 ## Why
 
@@ -36,9 +38,9 @@ the gap where it can and says so precisely where it cannot.
 | | |
 |---|---|
 | Baseline | jq **1.8.1** |
-| Engine | jaq **3.0.0, 3.1.0, 3.1.1** (CI pins 3.1.0); the Nix package pins jaq 3.1.1 with [Pathfinder's patches](packaging/jaq/) |
+| Engine | `native`: the engine crates (jaq 3.1.1, forked), in process. `jaq`: jaq **3.0.0, 3.1.0, 3.1.1** (CI pins 3.1.0); the Nix package pins jaq 3.1.1 with [Pathfinder's patches](packaging/jaq/) and defaults to it until M24 |
 | Differential suite | **203 invocations**, byte-identical stdout and exit code |
-| jq's own test suite | **96.5%** (791/820) on a stock jaq; **99.4%** (815/820) on the packaged one; **100%** of the manual's examples there — `make conformance` |
+| jq's own test suite | **99.4%** (815/820) on the native engine and on the packaged jaq; **96.5%** (791/820) on a stock jaq; **100%** of the manual's examples on the first two — `make conformance` |
 | Known unrepaired divergences | All in [`doc/DIVERGENCES.md`](doc/DIVERGENCES.md), measured |
 
 ## Install

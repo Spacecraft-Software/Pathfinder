@@ -1,30 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Pathfinder — a `jq`-compatible shim over `jaq`.
+//! Pathfinder — a jq 1.8.1-compatible `jq` on a fork of jaq's engine.
 //!
 //! Installed as `pathfinder` with a `jq` symlink beside it. Under either name it
-//! accepts jq's command line, translates it into jaq's, rewrites the filter when
-//! a polyfill is needed, and hands off to jaq.
+//! accepts jq's command line, rewrites the filter where the engine would run it
+//! differently from jq, and evaluates it.
 //!
-//! The hand-off has two shapes, and which one runs is the design's central
-//! trade-off:
+//! Two engines can do the evaluating (`engine`):
 //!
-//! - **`exec`** — the process image is replaced by jaq's. Nothing is copied, no
-//!   second process exists, and the cost over running jaq directly is one
-//!   `execve`. This is the path for every invocation that needs no output
-//!   transform, which is nearly all of them.
-//! - **spawn and pipe** — only for `-a` and `--seq`, where jq's behaviour cannot
-//!   be expressed in jaq's argv and the bytes have to be reshaped on the way
-//!   out.
+//! - **`native`** — the engine crates linked into this binary, run in process.
+//! - **`jaq`** — a jaq binary, by one of two hand-offs:
+//!   - **`exec`** — the process image is replaced by jaq's: nothing is copied
+//!     and no second process exists. The path for every invocation that needs
+//!     no output transform.
+//!   - **spawn and pipe** — for `-a`, `--seq` and several input files, where
+//!     jq's behaviour cannot be expressed in jaq's argv and the bytes have to
+//!     be reshaped on the way in or out.
 //!
-//! The cost of `exec` is that Pathfinder cannot observe jaq's exit code or
-//! stderr, so it cannot retouch either. That is a deliberate trade: the
-//! divergences it could fix that way are documented in `doc/DIVERGENCES.md`,
-//! and none of them is worth making every invocation pay for a second process.
+//! The jaq path is kept until it is redundant (PLAN M24).
 
 mod compat;
 mod diag;
+mod engine;
 mod inputs;
 mod jqargs;
 mod json;
@@ -43,6 +41,12 @@ use std::ffi::OsString;
 use std::io::{self, IsTerminal as _};
 use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::process::{Command, Stdio};
+
+/// The engine allocates per value; mimalloc halves the cycles of an
+/// allocation-heavy filter against the system allocator (`Cargo.toml`).
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// jq's own `--help` output, reproduced so the shim answers exactly as jq does.
 const JQ_HELP: &str = include_str!("embed/jq-help.txt");
@@ -99,10 +103,13 @@ fn main() {
     }
     if args.flags.version {
         if native {
+            let engine = selected_engine(prog, report.as_ref());
             let (path, source) = jaq_binary();
             let engine = native::Engine {
-                path: &path,
-                source: source.label(),
+                name: engine.0.name(),
+                selected_by: engine.1,
+                jaq: (engine.0 == engine::Engine::Jaq)
+                    .then_some((path.as_os_str(), source.label())),
             };
             native::version(&engine, mode::detect(lifted.json));
         } else {
@@ -112,7 +119,7 @@ fn main() {
     }
     if args.flags.build_configuration {
         println!(
-            "pathfinder-{} (jq-compatible shim over jaq)",
+            "pathfinder-{} (jq-compatible, on a fork of jaq's engine)",
             env!("CARGO_PKG_VERSION")
         );
         return;
@@ -141,6 +148,8 @@ fn main() {
         );
     }
 
+    let (engine, _) = selected_engine(prog, report.as_ref());
+
     let plan = match translate::plan(&args, &read_filter_file) {
         Ok(p) => p,
         Err(translate::Refusal::Unsupported(u)) => {
@@ -159,8 +168,12 @@ fn main() {
     };
 
     if matches!(lifted.verb, Some(native::Verb::Explain)) {
-        native::explain(&plan, mode::detect(lifted.json));
+        native::explain(&plan, engine, mode::detect(lifted.json));
         return;
+    }
+
+    if engine == engine::Engine::Native {
+        std::process::exit(engine::run(&plan));
     }
 
     // `exec` never returns: it replaces this process or exits.
@@ -168,6 +181,22 @@ fn main() {
         exec(prog, &plan.argv);
     }
     std::process::exit(pipe(prog, &plan));
+}
+
+/// The engine to run, or the end of the process if `PATHFINDER_ENGINE` names
+/// none. That is the caller's environment, not jq's command line, so it is
+/// reported in Pathfinder's name, with jq's usage status.
+fn selected_engine(
+    prog: &str,
+    report: Option<&native::JsonReport>,
+) -> (engine::Engine, &'static str) {
+    engine::selected().unwrap_or_else(|e| {
+        if let Some(r) = report {
+            r.fail(&native::Failure::invalid_argument(&e));
+        }
+        eprintln!("{prog}: error: {e}");
+        std::process::exit(diag::EXIT_USAGE);
+    })
 }
 
 /// Write jaq's stdin, with RS stripped if `--seq` asked for it.

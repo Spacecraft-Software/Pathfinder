@@ -5,44 +5,40 @@ authors = ["Michael Färber <michael.faerber@gedenkt.at>"]
 edition = "2021"
 license = "MIT"
 readme = "../../README.md"
-description = "jaq's command line on Pathfinder's engine crates: a test vehicle until M19"
+description = "jaq's command line on Pathfinder's engine crates: the driver the `pathfinder` binary runs in process"
 repository = "https://github.com/01mf02/jaq"
 keywords = ["json", "query", "jq"]
 categories = ["command-line-utilities"]
 # Pathfinder: 1.82, not jaq's 1.70, as `pathfinder-json` needs.
 rust-version = "1.82"
-# Pathfinder (TODO T-010): a temporary test vehicle. The existing suites run
-# against it as `PATHFINDER_JAQ` until M19 evaluates in process; it is never
+# Pathfinder: a library for the `pathfinder` binary and a test binary; never
 # installed or published.
 publish = false
 
-# Pathfinder: jaq's `jaq-all` crate and its `jaq` CLI crate, as one package.
-# The library keeps the name `jaq_all`, so the CLI sources compile as upstream
-# (plus the patch set) wrote them (crates/UPSTREAM.md).
+# Pathfinder (M19): jaq's `jaq` CLI crate. Its library, `jaq`, is the driver
+# the `pathfinder` binary evaluates with in process (`PATHFINDER_ENGINE=native`):
+# run options, input readers, output writer and exit status. `jaq-all` is a
+# package of its own, `pathfinder-all`, so that this one can be a library.
 [lib]
-name = "jaq_all"
-path = "src/jaq-all/lib.rs"
+name = "jaq"
+path = "src/lib.rs"
 
-# Pathfinder: named so that it collides with no installed `jaq`.
+# Pathfinder: named so that it collides with no installed `jaq`. The same
+# driver as a jaq-compatible binary, run as `PATHFINDER_JAQ` to check that the
+# in-tree crates and the packaged jaq agree (AGENTS.md).
 [[bin]]
 name = "pathfinder-jaq"
-path = "src/jaq/main.rs"
+path = "src/main.rs"
 
 # Pathfinder (TODO T-004): `jaq-all`'s `formats` feature went with the
 # non-jq formats.
 [features]
-default = ["std-all", "mimalloc"]
-std-all = ["jaq-std/default"]
+default = ["mimalloc"]
 
 [dependencies]
-jaq-core = { workspace = true }
-jaq-std  = { workspace = true }
-jaq-json = { workspace = true }
-jaq-fmts = { workspace = true }
-
-# jaq-all
-codesnake = { version = "0.3" }
-unicode-width = "0.1.13"
+# Pathfinder: the engine crates are reached through `jaq-all`, as the CLI's
+# sources reach them.
+jaq-all  = { workspace = true }
 
 # jaq. Pathfinder (TODO T-004): `rustyline` and `dirs` (the REPL) and
 # `tempfile` (`--in-place`) are gone.

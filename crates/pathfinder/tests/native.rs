@@ -170,7 +170,11 @@ fn the_invoking_agent_is_named_only_when_announced() {
 
 #[test]
 fn explain_json_for_a_passthrough_filter() {
-    let (code, out, _) = stdout_of(pathfinder(&[]).args(["--explain", "--json", "-c", ".a"]));
+    let explain = |engine| {
+        let vars = [("PATHFINDER_ENGINE", engine)];
+        stdout_of(pathfinder(&vars).args(["--explain", "--json", "-c", ".a"]))
+    };
+    let (code, out, _) = explain("jaq");
     assert_eq!(code, Some(0));
     let v = document(&out);
     assert_metadata(&v, "pathfinder --explain");
@@ -178,6 +182,7 @@ fn explain_json_for_a_passthrough_filter() {
     assert_eq!(
         v["data"],
         serde_json::json!({
+            "engine": "jaq",
             "jaq_argv": ["-c", ".a"],
             "program": {"rewritten": false},
             "execution": "exec",
@@ -185,6 +190,11 @@ fn explain_json_for_a_passthrough_filter() {
             "stdin": {"strip_rs": false},
         })
     );
+    let (code, out, _) = explain("native");
+    assert_eq!(code, Some(0));
+    let data = &document(&out)["data"];
+    assert_eq!(data["engine"], "native");
+    assert_eq!(data["execution"], "in-process");
 }
 
 #[test]
@@ -194,7 +204,7 @@ fn explain_json_for_a_rewritten_filter() {
         std::fs::write(dir.join(f), "{}").expect("writes an input");
     }
     let (code, out, _) = stdout_of(
-        pathfinder(&[("AI_AGENT", AGENT_VALUE)])
+        pathfinder(&[("AI_AGENT", AGENT_VALUE), ("PATHFINDER_ENGINE", "jaq")])
             .current_dir(&dir)
             .args(["--explain", "-a", ".a.b = 1", "a.json", "b.json"]),
     );
@@ -202,7 +212,14 @@ fn explain_json_for_a_rewritten_filter() {
     let data = &document(&out)["data"];
     assert_eq!(
         keys(data),
-        ["execution", "jaq_argv", "program", "stdin", "stdout"]
+        [
+            "engine",
+            "execution",
+            "jaq_argv",
+            "program",
+            "stdin",
+            "stdout"
+        ]
     );
     let program = &data["program"];
     assert_eq!(program["rewritten"], true);
@@ -231,6 +248,7 @@ fn explain_json_for_a_rewritten_filter() {
 fn version_json_names_the_engine() {
     let (code, out, err) = stdout_of(
         pathfinder(&[])
+            .env("PATHFINDER_ENGINE", "jaq")
             .env("PATHFINDER_JAQ", "/opt/x/jaq")
             .args(["--version"]),
     );
@@ -243,9 +261,37 @@ fn version_json_names_the_engine() {
         serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
             "jq_baseline": "jq-1.8.1",
-            "engine": {"path": "/opt/x/jaq", "source": "PATHFINDER_JAQ"},
+            "engine": {
+                "name": "jaq",
+                "selected_by": "PATHFINDER_ENGINE",
+                "path": "/opt/x/jaq",
+                "source": "PATHFINDER_JAQ",
+            },
         })
     );
+    let (_, out, _) = stdout_of(
+        pathfinder(&[])
+            .env("PATHFINDER_ENGINE", "native")
+            .args(["--version"]),
+    );
+    assert_eq!(
+        document(&out)["data"]["engine"],
+        serde_json::json!({"name": "native", "selected_by": "PATHFINDER_ENGINE"})
+    );
+}
+
+#[test]
+fn an_unknown_engine_is_refused_under_either_name() {
+    let (code, out, err) = stdout_of(pathfinder(&[("PATHFINDER_ENGINE", "jq")]).args(["-n", "1"]));
+    assert_eq!((code, out.as_str()), (Some(2), ""));
+    assert_eq!(
+        err,
+        "pathfinder: error: PATHFINDER_ENGINE is \"jq\"; it must be \"native\" or \"jaq\"\n"
+    );
+    let (code, _, err) =
+        stdout_of(pathfinder(&[("PATHFINDER_ENGINE", "jq")]).args(["--version", "--json"]));
+    assert_eq!(code, Some(2));
+    assert!(err.starts_with("{\"error\":"), "{err}");
 }
 
 #[test]
@@ -604,15 +650,19 @@ fn in_tty(args: &str, vars: &[(&str, &str)]) -> Option<(Option<i32>, String)> {
 
 #[test]
 fn a_terminal_gets_the_human_version() {
-    let Some((code, out)) = in_tty("--version", &[("PATHFINDER_JAQ", "/opt/x/jaq")]) else {
+    let vars = [
+        ("PATHFINDER_ENGINE", "jaq"),
+        ("PATHFINDER_JAQ", "/opt/x/jaq"),
+    ];
+    let Some((code, out)) = in_tty("--version", &vars) else {
         return;
     };
     assert_eq!(code, Some(0));
     assert_eq!(
         out,
         format!(
-            "pathfinder {} (jq-1.8.1 compatible, over jaq)\n\
-             engine: /opt/x/jaq (PATHFINDER_JAQ)\n\
+            "pathfinder {} (jq-1.8.1 compatible)\n\
+             engine: jaq (PATHFINDER_ENGINE), /opt/x/jaq (PATHFINDER_JAQ)\n\
              Maintained by Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>\n\
              https://Pathfinder.SpacecraftSoftware.org/\n",
             env!("CARGO_PKG_VERSION")
@@ -632,14 +682,14 @@ fn a_terminal_gets_the_human_version() {
 
 #[test]
 fn a_terminal_gets_the_human_explain_and_refusal() {
-    let Some((code, out)) = in_tty("--explain -c .", &[]) else {
+    let Some((code, out)) = in_tty("--explain -c .", &[("PATHFINDER_ENGINE", "jaq")]) else {
         return;
     };
     assert_eq!(code, Some(0));
     assert_eq!(
         out,
-        "jaq argv:\n  -c\n  .\n\nprogram: passed through unchanged\n\n\
-         execution: exec (no extra process)\n"
+        "engine: jaq\n\njaq argv (the jaq engine's command line):\n  -c\n  .\n\n\
+         program: passed through unchanged\n\nexecution: exec (no extra process)\n"
     );
 
     let dir = temp_dir("tty-install");

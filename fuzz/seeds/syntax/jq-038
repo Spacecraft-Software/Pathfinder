@@ -1,0 +1,1 @@
+-. | tojson == if have_decnum then "-13911860366432393" else "-13911860366432392" end

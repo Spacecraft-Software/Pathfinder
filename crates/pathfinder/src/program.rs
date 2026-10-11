@@ -61,12 +61,48 @@ pub struct Assembly {
 #[derive(Debug, Clone)]
 pub struct Wrap(pub String);
 
+/// Programs longer than this are assembled on a thread of [`DEEP_STACK`].
+///
+/// Lexing, parsing and rewriting recurse on the native stack, and how much a
+/// level costs depends on the build: the depth bounds in `syntax` keep a
+/// release build well inside the main thread's 8 MiB, but CI's debug build
+/// overflowed 8 MiB below them. A program can only be deep if it is long, so
+/// a short one, nearly every program, runs inline and pays nothing.
+const DEEP_SOURCE: usize = 4096;
+
+/// The stack for a long program: address space reserved, not memory used.
+const DEEP_STACK: usize = 256 << 20;
+
 /// Assemble the final program.
 ///
 /// `loc_file` is what `$__loc__.file` should report. jq answers `"<top-level>"`
 /// for the main program whether it came from argv or from `-f`; only a filter
 /// inside an included module reports a path.
 pub fn assemble(
+    src: &str,
+    ctx: &prelude::Context,
+    wrap: Option<&Wrap>,
+    loc_file: &str,
+) -> Assembly {
+    if src.len() <= DEEP_SOURCE {
+        return assemble_here(src, ctx, wrap, loc_file);
+    }
+    std::thread::scope(|scope| {
+        let deep = std::thread::Builder::new()
+            .stack_size(DEEP_STACK)
+            .spawn_scoped(scope, || assemble_here(src, ctx, wrap, loc_file));
+        match deep {
+            Ok(handle) => handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            // No thread to be had: the bounds still keep a release build safe.
+            Err(_) => assemble_here(src, ctx, wrap, loc_file),
+        }
+    })
+}
+
+/// [`assemble`], on the calling thread's stack.
+fn assemble_here(
     src: &str,
     ctx: &prelude::Context,
     wrap: Option<&Wrap>,
@@ -274,6 +310,33 @@ mod tests {
             "no rewrite means the exec fast path stays available"
         );
         assert_eq!(a.injected, Vec::<String>::new());
+    }
+
+    /// The parser's depth bounds (TODO T-019) cost nothing below them: deep
+    /// programs are still rewritten, and every pass over their trees survives
+    /// in a debug build. Past them, a program reaches jaq as written. These
+    /// programs are long, so `assemble` runs them on its deep stack.
+    #[test]
+    fn depth_bounds_rewrite_below_and_pass_through_above() {
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(|| {
+                let nested = |n: usize| format!("{}.a.b = 1{}", "[".repeat(n), "]".repeat(n));
+                let chain = |n: usize| format!(".a.b = (1{})", " + 1".repeat(n));
+                for src in [nested(400), chain(1400)] {
+                    let a = plain(&src);
+                    assert!(a.syntax_rewritten, "{}", &src[..40]);
+                }
+                for src in [nested(5000), chain(5000)] {
+                    let a = plain(&src);
+                    assert!(!a.rewritten, "{}", &src[..40]);
+                    assert_eq!(a.text, src);
+                    assert!(a.compile_error.is_none());
+                }
+            })
+            .expect("spawns")
+            .join()
+            .expect("no overflow, no panic");
     }
 
     #[test]

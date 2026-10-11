@@ -232,19 +232,26 @@ fn exe_under_test(scratch: &Path) -> PathBuf {
     link
 }
 
-/// Whether the shim runs Pathfinder's patched jaq (`packaging/jaq/`), found
-/// the way the shim finds it: `PATHFINDER_JAQ`, the build-time pin, `PATH`.
-///
-/// The patched engine passes more of the suite, so it has its own ratchet,
-/// `FLOOR-patched`; a stock jaq is held to `FLOOR`.
-fn engine_is_patched() -> bool {
-    let jaq = std::env::var_os("PATHFINDER_JAQ")
-        .or_else(|| option_env!("PATHFINDER_DEFAULT_JAQ").map(Into::into))
-        .unwrap_or_else(|| "jaq".into());
-    Command::new(jaq)
+/// The engine the shim runs, as it reports it: `native` (in process),
+/// `patched` (Pathfinder's patched jaq, `packaging/jaq/`) or `stock` (any
+/// other jaq). Asked of `pathfinder --version --json`, so it follows
+/// `PATHFINDER_ENGINE`, the build's default and the jaq lookup exactly.
+fn engine() -> &'static str {
+    let out = Command::new(env!("CARGO_BIN_EXE_pathfinder"))
+        .args(["--version", "--json"])
+        .output()
+        .expect("pathfinder runs");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("a JSON report");
+    let engine = &v["data"]["engine"];
+    if engine["name"] == "native" {
+        return "native";
+    }
+    let jaq = engine["path"].as_str().unwrap_or("jaq");
+    let patched = Command::new(jaq)
         .arg("--version")
         .output()
-        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("+pathfinder"))
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("+pathfinder"));
+    if patched { "patched" } else { "stock" }
 }
 
 fn read_list(name: &str) -> String {
@@ -262,7 +269,8 @@ fn jq_suite_conformance() {
     let exe = exe_under_test(&scratch);
 
     // Can the shim reach jaq at all? A missing engine is an environment
-    // problem, not a conformance result.
+    // problem, not a conformance result. (The native engine is never
+    // missing.)
     if run(&exe, ".", "1").0 == Some(127) {
         assert!(
             std::env::var_os("PATHFINDER_REQUIRE_JAQ").is_none(),
@@ -371,10 +379,12 @@ fn jq_suite_conformance() {
         eprintln!("failures:\n{}", failures.join("\n"));
     }
 
-    let floor_file = if engine_is_patched() {
-        "FLOOR-patched"
-    } else {
-        "FLOOR"
+    // Each engine has its own ratchet: the patched jaq and the native engine
+    // pass more of the suite than a stock jaq.
+    let floor_file = match engine() {
+        "native" => "FLOOR-native",
+        "patched" => "FLOOR-patched",
+        _ => "FLOOR",
     };
     let floor: usize = read_list(floor_file)
         .lines()

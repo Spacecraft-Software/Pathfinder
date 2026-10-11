@@ -4,7 +4,7 @@
 CARGO ?= cargo
 PREFIX ?= $(HOME)/.local
 
-.PHONY: all check fmt lint test diff conformance build install clean reuse
+.PHONY: all check fmt lint test test-jaq diff conformance build install clean reuse
 
 all: build
 
@@ -20,9 +20,14 @@ lint:
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
 # The shim's suites, then the engine crates' own tests (crates/UPSTREAM.md).
+# The suites run on the build's default engine: native for a plain build.
 test:
 	$(CARGO) test
 	$(CARGO) test --workspace --exclude pathfinder-jq
+
+# The shim's suites on the jaq engine: JAQ=<binary>, default the jaq on PATH.
+test-jaq:
+	PATHFINDER_ENGINE=jaq $(if $(JAQ),PATHFINDER_JAQ=$(JAQ)) $(CARGO) test
 
 # The differential suite alone, with verbose output. Fetches jq ephemerally via
 # nix when PATHFINDER_REAL_JQ is unset; nothing is installed on the host.

@@ -24,6 +24,8 @@ jaq-core = { package = "pathfinder-core", version = "3.1.0", path = "crates/path
 jaq-std  = { package = "pathfinder-std",  version = "3.0.1", path = "crates/pathfinder-std",  default-features = false }
 jaq-json = { package = "pathfinder-json", version = "2.0.2", path = "crates/pathfinder-json", default-features = false }
 jaq-fmts = { package = "pathfinder-fmts", version = "0.1.1", path = "crates/pathfinder-fmts", default-features = false }
+jaq-all  = { package = "pathfinder-all",  version = "0.3.0", path = "crates/pathfinder-all" }
+jaq      = { package = "pathfinder-jaq",  version = "3.1.1", path = "crates/pathfinder-jaq", default-features = false }
 
 # Profiles are honoured only at the workspace root.
 [profile.release]

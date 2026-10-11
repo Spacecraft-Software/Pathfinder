@@ -141,9 +141,19 @@ const fn is_ident_char(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
 }
 
+/// How deep string interpolations may nest (`"\("\(…)")"`).
+///
+/// The lexer recurses on the native stack once per level, and overflowed it
+/// between 16000 and 32000 levels, aborting the shim. jq has no such limit of
+/// its own (its parser stops first, at a stack of 10000), so a deeper program
+/// is not jq's error: like any program this lexer cannot read, it reaches jaq
+/// unrewritten. The parser's own bound (`parse::MAX_NESTING`) is of the same
+/// order: each level is a `query` and a `term` there.
+const MAX_INTERP: usize = 500;
+
 /// Tokenize a whole program.
 pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
-    let (mut toks, end) = lex_from(src, 0, false)?;
+    let (mut toks, end) = lex_from(src, 0, 0)?;
     toks.push(Token {
         tok: Tok::Eof,
         span: Span::new(end, end),
@@ -151,13 +161,14 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
     Ok(toks)
 }
 
-/// Tokenize from `pos`. With `interp`, stop at the `)` that closes the
-/// interpolation and return the position just past it.
+/// Tokenize from `pos`, `interp` interpolations deep. Inside one (`interp`
+/// above 0), stop at the `)` that closes it and return the position just past
+/// it.
 #[expect(
     clippy::too_many_lines,
     reason = "one arm per lexer.l rule; splitting would hide the correspondence"
 )]
-fn lex_from(src: &str, mut pos: usize, interp: bool) -> Result<(Vec<Token>, usize), LexError> {
+fn lex_from(src: &str, mut pos: usize, interp: usize) -> Result<(Vec<Token>, usize), LexError> {
     let b = src.as_bytes();
     let mut out = Vec::new();
     let mut depth = 0usize;
@@ -171,7 +182,7 @@ fn lex_from(src: &str, mut pos: usize, interp: bool) -> Result<(Vec<Token>, usiz
             }
         }
         let Some(&c) = b.get(pos) else {
-            if interp {
+            if interp > 0 {
                 return Err(LexError(pos));
             }
             return Ok((out, pos));
@@ -179,7 +190,7 @@ fn lex_from(src: &str, mut pos: usize, interp: bool) -> Result<(Vec<Token>, usiz
         let start = pos;
 
         if c == b'"' {
-            let (parts, end) = lex_string(src, pos + 1)?;
+            let (parts, end) = lex_string(src, pos + 1, interp)?;
             out.push(Token {
                 tok: Tok::Str(parts),
                 span: Span::new(start, end),
@@ -259,7 +270,7 @@ fn lex_from(src: &str, mut pos: usize, interp: bool) -> Result<(Vec<Token>, usiz
         let Some(op) = OPS.iter().copied().find(|op| src[pos..].starts_with(op)) else {
             return Err(LexError(pos));
         };
-        if interp {
+        if interp > 0 {
             match op {
                 "(" => depth += 1,
                 ")" if depth == 0 => return Ok((out, pos + 1)),
@@ -330,9 +341,10 @@ fn scan_number(b: &[u8], mut pos: usize) -> usize {
     pos
 }
 
-/// Lex a string body starting just after the opening quote. Returns the parts
-/// and the position just past the closing quote.
-fn lex_string(src: &str, mut pos: usize) -> Result<(Vec<StrPart>, usize), LexError> {
+/// Lex a string body starting just after the opening quote, `interp`
+/// interpolations deep. Returns the parts and the position just past the
+/// closing quote.
+fn lex_string(src: &str, mut pos: usize, interp: usize) -> Result<(Vec<StrPart>, usize), LexError> {
     let b = src.as_bytes();
     let mut parts = Vec::new();
     let mut text_start = pos;
@@ -349,7 +361,10 @@ fn lex_string(src: &str, mut pos: usize) -> Result<(Vec<StrPart>, usize), LexErr
                 if pos > text_start {
                     parts.push(StrPart::Text(Span::new(text_start, pos)));
                 }
-                let (toks, end) = lex_from(src, pos + 2, true)?;
+                if interp >= MAX_INTERP {
+                    return Err(LexError(pos));
+                }
+                let (toks, end) = lex_from(src, pos + 2, interp + 1)?;
                 parts.push(StrPart::Interp(toks, Span::new(pos, end)));
                 pos = end;
                 text_start = pos;
@@ -441,6 +456,26 @@ mod tests {
     fn unterminated_strings_are_errors() {
         lex("\"abc").unwrap_err();
         lex("\"\\(1\"").unwrap_err();
+    }
+
+    /// Found by fuzzing (TODO T-019): 32000 nested interpolations overflowed
+    /// the stack and aborted the shim. Past the bound it is a lexing failure,
+    /// which passes the program through to jaq.
+    #[test]
+    fn interpolations_nested_past_the_bound_are_an_error_not_an_overflow() {
+        // On a deep stack, as `program::assemble` gives a long program: a
+        // test thread's 2 MiB is too little for the bound in a debug build.
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(|| {
+                let nested = |n: usize| format!("{}1{}", r#""\("#.repeat(n), r#")""#.repeat(n));
+                lex(&nested(super::MAX_INTERP)).expect("at the bound it lexes");
+                lex(&nested(super::MAX_INTERP + 1)).unwrap_err();
+                lex(&nested(100_000)).unwrap_err();
+            })
+            .expect("spawns")
+            .join()
+            .expect("no overflow, no panic");
     }
 
     #[test]

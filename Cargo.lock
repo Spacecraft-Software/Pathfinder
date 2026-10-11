@@ -332,6 +332,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "pathfinder-all"
+version = "0.3.0"
+dependencies = [
+ "codesnake",
+ "pathfinder-core",
+ "pathfinder-fmts",
+ "pathfinder-json",
+ "pathfinder-std",
+ "unicode-width",
+]
+
+[[package]]
 name = "pathfinder-core"
 version = "3.1.0"
 dependencies = [
@@ -360,15 +372,10 @@ dependencies = [
 name = "pathfinder-jaq"
 version = "3.1.1"
 dependencies = [
- "codesnake",
  "env_logger",
  "log",
  "mimalloc",
- "pathfinder-core",
- "pathfinder-fmts",
- "pathfinder-json",
- "pathfinder-std",
- "unicode-width",
+ "pathfinder-all",
 ]
 
 [[package]]
@@ -376,6 +383,8 @@ name = "pathfinder-jq"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "mimalloc",
+ "pathfinder-jaq",
  "predicates",
  "serde_json",
 ]

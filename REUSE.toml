@@ -31,42 +31,55 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 
 # Build/VCS metadata that cannot carry meaningful authorship.
 [[annotations]]
-path = [".gitignore", "Cargo.lock", "flake.lock"]
+path = [".gitignore", "Cargo.lock", "flake.lock", "fuzz/Cargo.lock"]
 SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
 # Data captured from upstream jq 1.8.1 and reproduced verbatim: its `--help`
 # text, so the shim's usage output is byte-identical to the tool it stands in
-# for, and its `builtins` list, so `builtins` answers what jq answers. Upstream
+# for, and its `builtins` list, so `builtins` answers what jq answers; its test
+# suite, and the fuzz seeds lifted from it (programs and inputs). Upstream
 # jq is MIT (Standard §4.2: third-party-derived artifacts keep their upstream
 # license).
 [[annotations]]
-path = ["crates/pathfinder/src/embed/jq-help.txt", "crates/pathfinder/src/embed/jq-builtins.json", "crates/pathfinder/tests/jq-suite/*.test"]
+path = ["crates/pathfinder/src/embed/jq-help.txt", "crates/pathfinder/src/embed/jq-builtins.json", "crates/pathfinder/tests/jq-suite/*.test", "fuzz/seeds/syntax/**", "fuzz/seeds/engine/**"]
 SPDX-FileCopyrightText = "2012 Stephen Dolan and jq contributors"
 SPDX-License-Identifier = "MIT"
 
 # Patches to jaq's source (packaging/jaq/), applied by packaging/default.nix.
-# Derived from jaq, which is MIT; they keep its licence (Standard §4.2).
+# Derived from jaq, which is MIT: the jaq text they carry keeps that licence
+# (Standard §4.2), and Pathfinder's changes are offered under
+# GPL-3.0-or-later or MIT, at the recipient's choice. As a whole each file
+# can therefore always be used under MIT.
 [[annotations]]
 path = ["packaging/jaq/*.patch"]
 SPDX-FileCopyrightText = ["Michael Färber <michael.faerber@gedenkt.at> and jaq contributors", "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
-SPDX-License-Identifier = "MIT"
+SPDX-License-Identifier = "MIT AND (GPL-3.0-or-later OR MIT)"
 
-# The pass-count ratchet for the patched engine.
+# Fuzz seeds for jq's command line: NUL-separated argv, which cannot carry a
+# header.
 [[annotations]]
-path = ["crates/pathfinder/tests/jq-suite/FLOOR-patched"]
+path = ["fuzz/seeds/jqargs/**"]
 SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
-# The engine: jaq 3.1.1's jaq-core, jaq-std, jaq-json, jaq-fmts, and jaq's CLI
-# with jaq-all as pathfinder-jaq, imported
-# as a hard fork (crates/UPSTREAM.md) with packaging/jaq/ applied. jaq is MIT
-# and its files carry no headers; upstream states its copyright only through
-# the crates' `authors` field, quoted here. The imported files keep that
-# licence and that notice (Standard §4.2); Pathfinder's changes to them are
-# MIT too. Named crate by crate so that a new Pathfinder crate is not
+# The pass-count ratchet for the patched engine.
+[[annotations]]
+path = ["crates/pathfinder/tests/jq-suite/FLOOR-patched", "crates/pathfinder/tests/jq-suite/FLOOR-native"]
+SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# The engine: jaq 3.1.1's jaq-core, jaq-std, jaq-json, jaq-fmts, jaq-all (as
+# pathfinder-all) and jaq's CLI (as pathfinder-jaq), imported as a hard fork
+# (crates/UPSTREAM.md) with packaging/jaq/ applied. jaq is MIT and its files
+# carry no headers; upstream states its copyright only through the crates'
+# `authors` field, quoted here. The imported text keeps that licence and that
+# notice (Standard §4.2). Pathfinder's changes to these files, and the files
+# Pathfinder added among them, are offered under GPL-3.0-or-later or MIT, at
+# the recipient's choice; as a whole each file can therefore always be used
+# under MIT. Named crate by crate so that a new Pathfinder crate is not
 # swallowed by a glob.
 [[annotations]]
-path = ["crates/pathfinder-core/**", "crates/pathfinder-std/**", "crates/pathfinder-json/**", "crates/pathfinder-fmts/**", "crates/pathfinder-jaq/**"]
+path = ["crates/pathfinder-core/**", "crates/pathfinder-std/**", "crates/pathfinder-json/**", "crates/pathfinder-fmts/**", "crates/pathfinder-all/**", "crates/pathfinder-jaq/**"]
 SPDX-FileCopyrightText = ["Michael Färber <michael.faerber@gedenkt.at> and jaq contributors", "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
-SPDX-License-Identifier = "MIT"
+SPDX-License-Identifier = "MIT AND (GPL-3.0-or-later OR MIT)"
