@@ -9,7 +9,9 @@ description = "Interpreter for the jaq language"
 repository = "https://github.com/01mf02/jaq"
 keywords = ["json", "query", "jq"]
 categories = ["parser-implementations", "compilers"]
-rust-version = "1.69"
+# Pathfinder: 1.81, not jaq's 1.69: the crate-level `#![expect]`/`#![allow]`
+# with `reason` that T-006 added need it.
+rust-version = "1.81"
 
 # Pathfinder: the package is renamed, the library keeps its upstream name so
 # the imported sources compile unchanged (crates/UPSTREAM.md).
@@ -30,3 +32,8 @@ typed-arena = "2.0.2"
 jaq-std  = { package = "pathfinder-std", path = "../pathfinder-std" }
 jaq-json = { package = "pathfinder-json", path = "../pathfinder-json", features = ["serde"] }
 serde_json = "1.0"
+
+# Pathfinder (TODO T-006): the workspace lint set, `unsafe_code = "forbid"`
+# included.
+[lints]
+workspace = true

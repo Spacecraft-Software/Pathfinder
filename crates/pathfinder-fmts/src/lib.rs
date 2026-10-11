@@ -7,6 +7,15 @@
 //! and writers are removed, with the `from…`/`to…` filters for them. `@csv`
 //! and `@tsv`, which jq defines, stay.
 #![warn(missing_docs)]
+#![expect(
+    clippy::unnecessary_semicolon,
+    reason = "jaq 3.1.1 as imported (crates/UPSTREAM.md): kept textually close to upstream so later upstream fixes port by diff (TODO T-020); restyling it would bury the patch set"
+)]
+#![expect(
+    clippy::must_use_candidate,
+    missing_debug_implementations,
+    reason = "jaq 3.1.1 as imported (crates/UPSTREAM.md): changing the public signatures, derives or attributes of the engine's API ripples through every crate, and M19 reshapes that API"
+)]
 
 extern crate alloc;
 extern crate std;

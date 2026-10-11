@@ -9,7 +9,9 @@ description = "JSON values for jaq"
 repository = "https://github.com/01mf02/jaq"
 keywords = ["json", "query", "jq"]
 categories = ["data-structures"]
-rust-version = "1.70"
+# Pathfinder: 1.82, not jaq's 1.70: the patch set's number output uses
+# `iter::repeat_n` (clippy::incompatible_msrv).
+rust-version = "1.82"
 
 # Pathfinder: the package is renamed, the library keeps its upstream name so
 # the imported sources compile unchanged (crates/UPSTREAM.md).
@@ -39,3 +41,8 @@ serde_core = { version = "1.0.81", default-features = false, features = ["alloc"
 
 [dev-dependencies]
 serde_json = "1.0"
+
+# Pathfinder (TODO T-006): the workspace lint set, `unsafe_code = "forbid"`
+# included.
+[lints]
+workspace = true

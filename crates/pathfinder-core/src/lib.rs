@@ -43,6 +43,49 @@
 #![no_std]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![expect(
+    clippy::allow_attributes_without_reason,
+    clippy::clone_on_ref_ptr,
+    clippy::default_trait_access,
+    clippy::deref_by_slicing,
+    clippy::doc_markdown,
+    clippy::elidable_lifetime_names,
+    clippy::explicit_iter_loop,
+    clippy::ignored_unit_patterns,
+    clippy::inconsistent_struct_constructor,
+    clippy::items_after_statements,
+    clippy::manual_assert_eq,
+    clippy::manual_let_else,
+    clippy::match_same_arms,
+    clippy::match_wildcard_for_single_variants,
+    clippy::needless_continue,
+    clippy::needless_for_each,
+    clippy::redundant_closure_for_method_calls,
+    clippy::redundant_else,
+    clippy::semicolon_if_nothing_returned,
+    clippy::too_many_lines,
+    clippy::unnecessary_semicolon,
+    reason = "jaq 3.1.1 as imported (crates/UPSTREAM.md): kept textually close to upstream so later upstream fixes port by diff (TODO T-020); restyling it would bury the patch set"
+)]
+#![expect(
+    clippy::must_use_candidate,
+    clippy::needless_pass_by_value,
+    clippy::return_self_not_must_use,
+    clippy::trivially_copy_pass_by_ref,
+    missing_debug_implementations,
+    reason = "jaq 3.1.1 as imported (crates/UPSTREAM.md): changing the public signatures, derives or attributes of the engine's API ripples through every crate, and M19 reshapes that API"
+)]
+#![expect(
+    clippy::cast_possible_wrap,
+    reason = "jaq 3.1.1 as imported (crates/UPSTREAM.md): conversions between f64, isize and usize are how jaq models jq's numbers; they are changed one by one with the arithmetic, not wholesale at import"
+)]
+#![allow(
+    clippy::cloned_instead_of_copied,
+    clippy::enum_glob_use,
+    clippy::needless_raw_string_hashes,
+    clippy::unreadable_literal,
+    reason = "jaq 3.1.1 as imported (crates/UPSTREAM.md): fires only in some build configurations (test builds, feature sets), where `expect` would go unfulfilled"
+)]
 
 extern crate alloc;
 #[cfg(feature = "std")]

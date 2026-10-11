@@ -35,8 +35,10 @@ codegen-units = 1
 # -C target-cpu=native intentionally NOT set: release binaries must stay
 # portable across machines. Opt in via RUSTFLAGS for a local-only build.
 
-# Pathfinder's lint set. Members opt in with `[lints] workspace = true`; the
-# imported engine crates do not yet (TODO T-006).
+# Pathfinder's lint set. Every member opts in with `[lints] workspace = true`.
+# The engine crates imported from jaq answer the lints their upstream code
+# trips with crate-level `#![expect(…, reason = …)]` (`#![allow]` where a lint
+# fires only in some build configurations); see crates/UPSTREAM.md.
 [workspace.lints.rust]
 ambiguous_negative_literals = "warn"
 missing_debug_implementations = "warn"

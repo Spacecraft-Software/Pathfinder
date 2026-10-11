@@ -1,4 +1,4 @@
-use super::*;
+use super::Writer;
 use crate::Format;
 use jaq_json::Val;
 use std::io::{self, Write};

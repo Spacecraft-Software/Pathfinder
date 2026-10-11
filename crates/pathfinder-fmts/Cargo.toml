@@ -10,7 +10,8 @@ repository = "https://github.com/01mf02/jaq"
 keywords = ["jq"]
 # Pathfinder: the workspace lints (`clippy::cargo`) require categories.
 categories = ["encoding", "parser-implementations"]
-rust-version = "1.70"
+# Pathfinder: 1.82, not jaq's 1.70, as `pathfinder-json` needs.
+rust-version = "1.82"
 
 # Pathfinder: the package is renamed, the library keeps its upstream name so
 # the imported sources compile unchanged (crates/UPSTREAM.md).
@@ -29,3 +30,8 @@ jaq-json = { workspace = true, features = ["std"] }
 aho-corasick = "1.0"
 bstr = "1"
 bytes = "1.10.1"
+
+# Pathfinder (TODO T-006): the workspace lint set, `unsafe_code = "forbid"`
+# included.
+[lints]
+workspace = true

@@ -1,3 +1,28 @@
+#![expect(
+    clippy::default_trait_access,
+    clippy::deref_by_slicing,
+    clippy::redundant_closure_for_method_calls,
+    clippy::semicolon_if_nothing_returned,
+    clippy::similar_names,
+    clippy::too_many_arguments,
+    redundant_imports,
+    reason = "jaq 3.1.1's CLI with the patch set's CLI hunks (crates/UPSTREAM.md): a test vehicle that M19 retires, kept to the packaged engine's source so it stays a faithful stand-in for it"
+)]
+#![expect(
+    clippy::needless_pass_by_value,
+    clippy::renamed_function_params,
+    clippy::trivially_copy_pass_by_ref,
+    reason = "jaq 3.1.1's CLI with the patch set's CLI hunks (crates/UPSTREAM.md): a test vehicle that M19 retires, kept to the packaged engine's source so it stays a faithful stand-in for it"
+)]
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "jaq 3.1.1's CLI with the patch set's CLI hunks (crates/UPSTREAM.md): a test vehicle that M19 retires, kept to the packaged engine's source so it stays a faithful stand-in for it"
+)]
+#![expect(
+    clippy::multiple_crate_versions,
+    reason = "syn 2 (jiff-static, under jiff) and syn 3 (serde_derive) are both build-time proc-macro dependencies of third-party crates"
+)]
+
 mod cli;
 mod filter;
 mod jq;
@@ -316,9 +341,9 @@ enum Error {
     /// Pathfinder: jq's report of a system error, exit status 2.
     System(String),
     // Pathfinder: the exit status now comes from `jq::Status`.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "jaq's exit status 1, now decided by `jq::Status`")]
     FalseOrNull,
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "jaq's exit status 4, now decided by `jq::Status`")]
     NoOutput,
 }
 

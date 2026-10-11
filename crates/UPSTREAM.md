@@ -126,6 +126,32 @@ map faulted file pages lazily. The copy itself is kernel time, which
 649 → 691 ms against a standard deviation of 77–122 ms. No difference
 stands out of the noise.
 
+T-006 (PLAN P-051): every engine crate and `pathfinder-jaq` takes the
+workspace lint set (`[lints] workspace = true`), so `unsafe_code = "forbid"`
+holds in every crate; with `memmap2` gone and `windows.rs` removed, none
+needed a change for it. What the pedantic set finds in upstream code is
+answered at each crate root, not fixed in place, so the code stays close to
+upstream: `#![expect(…, reason = …)]` for a lint that fires in every build
+configuration, grouped by reason (style, public API, numeric casts), and
+`#![allow(…, reason = …)]` for one that fires only in some (a test build, a
+feature set: `enum_glob_use` is silent in test builds, the `serde` module
+exists only with that feature, `pathfinder-std` without its default features
+has dead code), where `expect` would go unfulfilled. The integration tests
+use `allow`, because T-009 rewrites them. "Every configuration" was measured:
+`cargo clippy` over the workspace, with `--all-targets`, with
+`--lib --bins --profile test`, and per crate (`-p`) in the same three ways;
+all are clean with `-D warnings`, except that `cargo clippy -p
+pathfinder-json --all-targets` alone does not compile `pathfinder-json`'s
+tests (they need its `serde` feature, which upstream also gets only from the
+workspace). Fixed rather than answered: `rust-version` is 1.82 for
+`pathfinder-json` and the crates that depend on it, since the patch set's
+number output uses `iter::repeat_n` (`incompatible_msrv`; 1.82 is what clippy
+reports, no 1.82 toolchain was tried) and 1.81 for `pathfinder-core` and
+`pathfinder-std`, the release that stabilised `#[expect]` and lint `reason`s
+these attributes use; the redundant imports in the
+`pathfinder-fmts` files T-004 rewrote; and the CLI's `#[allow(dead_code)]`,
+now `#[expect]` with a reason.
+
 ## Patches applied
 
 `packaging/jaq/0001`–`0015`, the 3.1.1 cuts (never the `-3.1.0` ones), were

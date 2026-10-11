@@ -266,7 +266,8 @@ pass rates; `V=1` lists every failure.
 
 ## Forbidden patterns
 
-- `unsafe` — the crate sets `unsafe_code = "forbid"`.
+- `unsafe` — every crate sets `unsafe_code = "forbid"` through the workspace
+  lint set.
 - Forwarding an unrecognised flag to jaq.
 - Polyfilling a name jq 1.8.1 does not define.
 - Adding a runtime dependency to the jq path; it is std-only and stays that way.

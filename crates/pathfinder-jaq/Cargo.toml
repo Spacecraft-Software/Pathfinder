@@ -9,7 +9,8 @@ description = "jaq's command line on Pathfinder's engine crates: a test vehicle 
 repository = "https://github.com/01mf02/jaq"
 keywords = ["json", "query", "jq"]
 categories = ["command-line-utilities"]
-rust-version = "1.70"
+# Pathfinder: 1.82, not jaq's 1.70, as `pathfinder-json` needs.
+rust-version = "1.82"
 # Pathfinder (TODO T-010): a temporary test vehicle. The existing suites run
 # against it as `PATHFINDER_JAQ` until M19 evaluates in process; it is never
 # installed or published.
@@ -48,3 +49,8 @@ unicode-width = "0.1.13"
 env_logger = { version = "0.10.0", default-features = false }
 log = { version = "0.4.17" }
 mimalloc = { version = "0.1.29", default-features = false, optional = true }
+
+# Pathfinder (TODO T-006): the workspace lint set, `unsafe_code = "forbid"`
+# included.
+[lints]
+workspace = true

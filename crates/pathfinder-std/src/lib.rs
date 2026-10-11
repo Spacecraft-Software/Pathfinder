@@ -12,6 +12,35 @@
 #![no_std]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![expect(
+    clippy::semicolon_if_nothing_returned,
+    clippy::unnecessary_semicolon,
+    reason = "jaq 3.1.1 as imported (crates/UPSTREAM.md): kept textually close to upstream so later upstream fixes port by diff (TODO T-020); restyling it would bury the patch set"
+)]
+#![expect(
+    clippy::copy_iterator,
+    clippy::must_use_candidate,
+    clippy::needless_pass_by_value,
+    clippy::return_self_not_must_use,
+    missing_debug_implementations,
+    reason = "jaq 3.1.1 as imported (crates/UPSTREAM.md): changing the public signatures, derives or attributes of the engine's API ripples through every crate, and M19 reshapes that API"
+)]
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    reason = "jaq 3.1.1 as imported (crates/UPSTREAM.md): conversions between f64, isize and usize are how jaq models jq's numbers; they are changed one by one with the arithmetic, not wholesale at import"
+)]
+#![allow(
+    clippy::allow_attributes_without_reason,
+    clippy::cast_lossless,
+    clippy::items_after_statements,
+    clippy::redundant_else,
+    clippy::unreadable_literal,
+    dead_code,
+    unused_imports,
+    reason = "jaq 3.1.1 as imported (crates/UPSTREAM.md): fires only in some build configurations (test builds, feature sets), where `expect` would go unfulfilled"
+)]
 
 extern crate alloc;
 #[cfg(feature = "std")]

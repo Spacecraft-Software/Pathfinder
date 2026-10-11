@@ -51,6 +51,18 @@
 //! The `main` example in this crate shows you how to do all of this.
 //! You can run it with `cargo run --example main`.
 #![warn(missing_docs)]
+#![expect(
+    clippy::elidable_lifetime_names,
+    clippy::manual_string_new,
+    clippy::redundant_closure_for_method_calls,
+    reason = "jaq 3.1.1 as imported (crates/UPSTREAM.md): kept textually close to upstream so later upstream fixes port by diff (TODO T-020); restyling it would bury the patch set"
+)]
+#![expect(
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    missing_debug_implementations,
+    reason = "jaq 3.1.1 as imported (crates/UPSTREAM.md): changing the public signatures, derives or attributes of the engine's API ripples through every crate, and M19 reshapes that API"
+)]
 
 extern crate alloc;
 extern crate std;

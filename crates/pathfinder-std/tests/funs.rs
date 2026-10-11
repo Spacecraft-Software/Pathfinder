@@ -1,4 +1,11 @@
 //! Tests for named core filters, sorted by name.
+#![allow(
+    clippy::allow_attributes_without_reason,
+    clippy::needless_raw_string_hashes,
+    clippy::semicolon_if_nothing_returned,
+    clippy::unreadable_literal,
+    reason = "jaq 3.1.1's tests as imported (crates/UPSTREAM.md); `allow`, not `expect`, because T-009 rewrites these tests and may remove the instances"
+)]
 
 pub mod common;
 
