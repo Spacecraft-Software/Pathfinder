@@ -1086,7 +1086,27 @@ pub struct Context {
     /// The filter's plain string literals that contain `(`: candidate regexes
     /// whose groups are named ahead of time (see `crate::regex`).
     pub regex_literals: Vec<String>,
+    /// The program runs on the native engine, which has the behaviours in
+    /// [`NATIVE`] itself.
+    pub native: bool,
 }
+
+impl Context {
+    /// The rewrites the engine needs (`crate::syntax::rewrite`).
+    pub const fn rewrites(&self) -> crate::syntax::rewrite::Rewrites {
+        if self.native {
+            crate::syntax::rewrite::Rewrites::NATIVE
+        } else {
+            crate::syntax::rewrite::Rewrites::ALL
+        }
+    }
+}
+
+/// Polyfills and repairs the native engine no longer needs: it defines the
+/// name as jq does (PLAN M20). An entry joins in the change that gives the
+/// engine the behaviour, with the differential cases that pin it; the jaq
+/// engine keeps the definition until its path is removed (P-078).
+pub static NATIVE: &[&str] = &[];
 
 fn find<'a>(name: &str, table: &'a [Def]) -> Option<&'a Def> {
     table.iter().find(|d| d.name == name)
@@ -1213,6 +1233,9 @@ pub fn render(wanted: &[String], ctx: &Context) -> String {
     for name in wanted {
         // Internal helpers are wanted by name too: the syntax rewriter asks for
         // `_pf_assign`/`_pf_modify` directly.
+        if ctx.native && NATIVE.contains(&name.as_str()) {
+            continue;
+        }
         if let Some(def) = lookup(name) {
             push_with_deps(def, &mut chosen);
         }
@@ -1299,7 +1322,7 @@ mod tests {
             &Context {
                 input_filename: Some("a.json".to_owned()),
                 ambiguous_filename: false,
-                regex_literals: Vec::new(),
+                ..Context::default()
             },
         );
         assert!(one.contains(r#"def input_filename: "a.json";"#));
@@ -1309,7 +1332,7 @@ mod tests {
             &Context {
                 input_filename: None,
                 ambiguous_filename: true,
-                regex_literals: Vec::new(),
+                ..Context::default()
             },
         );
         // Wrong-but-quiet is the one thing this must not do.

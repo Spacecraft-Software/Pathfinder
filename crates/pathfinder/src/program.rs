@@ -141,7 +141,7 @@ fn assemble_here(
     // Rewrite what jaq would run differently from jq (assignment, chiefly).
     // `None` means the body needed nothing, or could not be parsed: either way
     // it goes to jaq exactly as written.
-    let rewritten_body = crate::syntax::rewrite::rewrite(body);
+    let rewritten_body = crate::syntax::rewrite::rewrite(body, ctx.rewrites());
     let mut wanted = wanted;
     if let Some(rw) = &rewritten_body {
         for name in &rw.needs {

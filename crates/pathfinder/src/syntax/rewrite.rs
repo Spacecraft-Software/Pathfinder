@@ -69,18 +69,75 @@ pub struct Rewrite {
 /// Environment escape hatch: set it to hand every program to jaq unparsed.
 pub const NO_REWRITE_ENV: &str = "PATHFINDER_NO_REWRITE";
 
+/// Which of jq's behaviours the rewriter supplies.
+///
+/// The jaq engine needs every one. The native engine has them one by one as
+/// they move into it (PLAN M20); a behaviour it has natively is switched off
+/// in [`Rewrites::NATIVE`] in the same change, and the differential cases
+/// that pin it then hold the engine to it. Rewrites that only make jq's
+/// syntax parse (`.5`, `?//`, `{$b: p}`, a compound `reduce` source) are not
+/// listed: both engines need them until the engine compiles Pathfinder's
+/// syntax tree (M21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one independent switch per behaviour"
+)]
+pub struct Rewrites {
+    /// A computed object key must be a string.
+    pub computed_key: bool,
+    /// Assignment creates missing containers and raises jq's errors.
+    pub assignment: bool,
+    /// `/` and `%` raise jq's zero-divisor errors; `%` is on integers.
+    pub division: bool,
+    /// Binary operators evaluate the right operand in the outer loop.
+    pub operand_order: bool,
+    /// `del(f)` and `L |= empty` keep jq's order and semantics.
+    pub delete: bool,
+    /// A fractional index is truncated.
+    pub index: bool,
+    /// `null` slices to `null`; fractional bounds round outwards.
+    pub slice: bool,
+    /// A `catch` handler sees jq's wording of the error.
+    pub catch_wording: bool,
+    /// Unary minus on a non-number raises jq's error.
+    pub negation: bool,
+    /// `@base64d` and `@urid` decode by jq's rules.
+    pub decoders: bool,
+}
+
+impl Rewrites {
+    /// Everything: what the jaq engine needs.
+    pub const ALL: Self = Self {
+        computed_key: true,
+        assignment: true,
+        division: true,
+        operand_order: true,
+        delete: true,
+        index: true,
+        slice: true,
+        catch_wording: true,
+        negation: true,
+        decoders: true,
+    };
+
+    /// What the native engine still needs.
+    pub const NATIVE: Self = Self::ALL;
+}
+
 /// Rewrite `src` if it needs it; `None` means "pass it through unchanged".
 ///
 /// Cheap when nothing applies: a token pre-screen decides whether to parse at
 /// all, and most programs contain no assignment and no compound `reduce`
 /// source. A program the parser rejects is also passed through — exactly what
 /// happened before the parser existed.
-pub fn rewrite(src: &str) -> Option<Rewrite> {
+pub fn rewrite(src: &str, on: Rewrites) -> Option<Rewrite> {
     if std::env::var_os(NO_REWRITE_ENV).is_some() || !worth_parsing(src) {
         return None;
     }
     let tree = parse(src).ok()?;
     let mut cx = Cx {
+        on,
         src,
         needs: Vec::new(),
         temps: 0,
@@ -129,6 +186,8 @@ fn worth_parsing(src: &str) -> bool {
 }
 
 struct Cx<'a> {
+    /// The behaviours to supply.
+    on: Rewrites,
     src: &'a str,
     needs: Vec<&'static str>,
     /// Counter for `$__pf_tN` temporaries, unique per program.
@@ -157,7 +216,7 @@ impl Cx<'_> {
         match &node.kind {
             // jaq builds `{1: 2}` — not JSON — from a computed key that is not
             // a string, where jq raises an error. Check the key first.
-            Kind::Paren(inner) if self.keys.contains(&node.span) => {
+            Kind::Paren(inner) if self.on.computed_key && self.keys.contains(&node.span) => {
                 let (k, _) = self.emit(inner);
                 self.need("_pf_dump");
                 (format!("(({k}) | {KEY_CHECK})"), true)
@@ -181,7 +240,8 @@ impl Cx<'_> {
             // `L |= empty` is `del(L)` in jq 1.7+: `_modify` collects the paths
             // `empty` produced nothing for and deletes them together.
             Kind::Binary { op, lhs, rhs }
-                if self.fast_del
+                if self.on.delete
+                    && self.fast_del
                     && *op == "|="
                     && matches!(&rhs.kind, Kind::Call { name, args } if name == "empty" && args.is_empty()) =>
             {
@@ -194,20 +254,19 @@ impl Cx<'_> {
             }
             // `L /= R` and `L %= R` are `R as $t | L |= . op $t` in jq; the
             // update goes through the same division as the operator.
-            Kind::Binary { op, lhs, rhs } if *op == "/=" || *op == "%=" => {
+            Kind::Binary { op, lhs, rhs } if self.on.division && (*op == "/=" || *op == "%=") => {
                 let (l, _) = self.emit(lhs);
                 let (r, _) = self.emit(rhs);
                 let t = self.temp();
                 let update = self.arith(&op[..1], ".", &t);
-                (
-                    format!(
-                        "(({r}) as {t} | {})",
-                        self.assignment("|=", lhs, &l, &update)
-                    ),
-                    true,
-                )
+                let assign = if self.on.assignment {
+                    self.assignment("|=", lhs, &l, &update)
+                } else {
+                    format!("({l}) |= {update}")
+                };
+                (format!("(({r}) as {t} | {assign})"), true)
             }
-            Kind::Binary { op, lhs, rhs } if is_assignment(op) => {
+            Kind::Binary { op, lhs, rhs } if self.on.assignment && is_assignment(op) => {
                 let (l, _) = self.emit(lhs);
                 let (r, _) = self.emit(rhs);
                 (self.assignment(op, lhs, &l, &r), true)
@@ -216,7 +275,9 @@ impl Cx<'_> {
             // `Infinity`/`NaN`, and jq's `%` is on integers. A divisor written
             // as a non-zero literal needs no check for `/`.
             Kind::Binary { op, lhs, rhs }
-                if (*op == "/" || *op == "%") && !nonzero_literal(rhs, self.src, op) =>
+                if self.on.division
+                    && (*op == "/" || *op == "%")
+                    && !nonzero_literal(rhs, self.src, op) =>
             {
                 let (l, _) = self.emit(lhs);
                 let (r, _) = self.emit(rhs);
@@ -225,7 +286,7 @@ impl Cx<'_> {
                 let body = self.arith(op, &a, &b);
                 (format!("(({r}) as {b} | ({l}) as {a} | {body})"), true)
             }
-            Kind::Binary { op, lhs, rhs } if *op == "%" => {
+            Kind::Binary { op, lhs, rhs } if self.on.division && *op == "%" => {
                 // A non-zero literal divisor: only the dividend is truncated.
                 let (l, _) = self.emit(lhs);
                 let (r, _) = self.emit(rhs);
@@ -240,7 +301,8 @@ impl Cx<'_> {
             // (`input - input`) and of errors (`.a + .b` raises `.b`'s) — and
             // in none of them when either operand is inert.
             Kind::Binary { op, lhs, rhs }
-                if matches!(*op, "+" | "-" | "*" | "==" | "!=" | "<" | "<=" | ">" | ">=")
+                if self.on.operand_order
+                    && matches!(*op, "+" | "-" | "*" | "==" | "!=" | "<" | "<=" | ">" | ">=")
                     && !inert(lhs)
                     && !inert(rhs) =>
             {
@@ -295,7 +357,9 @@ impl Cx<'_> {
             Kind::Reduce { source, .. } | Kind::Foreach { source, .. } if is_compound(source) => {
                 (self.splice_wrapping(node, Some(source.span)).0, true)
             }
-            Kind::Call { name, args } if self.fast_del && name == "del" && args.len() == 1 => {
+            Kind::Call { name, args }
+                if self.on.delete && self.fast_del && name == "del" && args.len() == 1 =>
+            {
                 match self.delete(&args[0]) {
                     Some(text) => (text, true),
                     None => self.splice(node),
@@ -304,7 +368,7 @@ impl Cx<'_> {
             // jaq rejects a fractional index (`.[1.5]`, `.[length/2]`, a `1.0`
             // read from JSON); jq truncates it. The key is normalised inline,
             // so the index stays a path expression for assignment and `del`.
-            Kind::Index { index, .. } if index_needs_norm(index, self.src) => {
+            Kind::Index { index, .. } if self.on.index && index_needs_norm(index, self.src) => {
                 let (text, _) = self
                     .splice_mapping(node, Some(index.span), |k| format!("({k}) | {INDEX_NORM}"));
                 (text, true)
@@ -313,7 +377,7 @@ impl Cx<'_> {
             // jaq errors on both. The bounds are evaluated against the input,
             // not the base (`[1,2][0:.]`), so they are bound first; a bound
             // that is a literal stays in place.
-            Kind::Slice { base, from, to } => {
+            Kind::Slice { base, from, to } if self.on.slice => {
                 (self.slice(base, from.as_deref(), to.as_deref()), true)
             }
             // A `catch` handler sees jq's wording for the errors jaq words
@@ -321,21 +385,21 @@ impl Cx<'_> {
             // `?`, discard the message anyway.
             Kind::Try {
                 handler: Some(h), ..
-            } if reads_input(h) => {
+            } if self.on.catch_wording && reads_input(h) => {
                 self.need("_pf_err");
                 let (text, _) =
                     self.splice_mapping(node, Some(h.span), |t| format!("(_pf_err | {t})"));
                 (text, true)
             }
             // jq's unary minus has its own message for a non-number.
-            Kind::Neg(n) if !matches!(n.kind, Kind::Number) => {
+            Kind::Neg(n) if self.on.negation && !matches!(n.kind, Kind::Number) => {
                 self.need("_pf_neg");
                 let (t, _) = self.emit(n);
                 (format!("(({t}) | _pf_neg)"), true)
             }
             // jaq's decoders are stricter than jq's in some places and more
             // lenient in others; the prelude has jq's rules.
-            Kind::Format(f) if f == "base64d" || f == "urid" => {
+            Kind::Format(f) if self.on.decoders && (f == "base64d" || f == "urid") => {
                 let name = if f == "base64d" {
                     "_pf_base64d"
                 } else {
@@ -1442,10 +1506,10 @@ const fn is_compound(source: &Node) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::rewrite;
+    use super::{Rewrites, rewrite};
 
     fn rw(src: &str) -> Option<String> {
-        rewrite(src).map(|r| r.text)
+        rewrite(src, Rewrites::ALL).map(|r| r.text)
     }
 
     #[test]
