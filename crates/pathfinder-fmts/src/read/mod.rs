@@ -10,13 +10,13 @@ use std::path::Path;
 
 type Result<T, E = std::io::Error> = core::result::Result<T, E>;
 
-/// Try to load file by memory mapping and fall back to regular loading if it fails.
+/// Load a file into memory.
+///
+/// Pathfinder (TODO T-005): jaq memory-maps the file, which needs `unsafe`
+/// and is unsound if another process truncates or rewrites the file while
+/// it is mapped. A plain read costs about the same here (crates/UPSTREAM.md).
 pub fn load_file(path: impl AsRef<Path>) -> Result<Bytes> {
-    let file = std::fs::File::open(path.as_ref())?;
-    Ok(match unsafe { memmap2::Mmap::map(&file) } {
-        Ok(mmap) => Bytes::from_owner(mmap),
-        Err(_) => Bytes::from(std::fs::read(path)?),
-    })
+    Ok(Bytes::from(std::fs::read(path)?))
 }
 
 /// Read JSON values in a file to an array.

@@ -103,6 +103,29 @@ T-004 (PLAN P-050):
   feature (`@base64`, `@html`, …) needs them, and `@tsv` uses
   `aho-corasick`.
 
+T-005 (PLAN P-051): `read::load_file` reads the file with `std::fs::read`
+instead of memory-mapping it with `memmap2`, the one `unsafe` outside
+Windows code; `memmap2` leaves `Cargo.lock`. Every file the CLI loads goes
+through it: input files, `--rawfile`, `--slurpfile` and imported JSON
+modules. Error text is unchanged (a directory was already read by the
+fallback, since mapping it fails). Measured with `pathfinder-jaq length`,
+release build, `perf stat -e instructions:u,cycles:u`, one run per
+invocation, 7 runs each, medians:
+
+| Input | instructions:u before | after | cycles:u before | after |
+|---|---|---|---|---|
+| `big.json` (29.4 MB, one value) | 2 001 889 082 | 2 001 902 821 (+0.001%) | 1 073 151 417 | 966 605 360 |
+| `big.jsonl` (14.4 MB, many values) | 2 323 415 466 | 2 323 691 595 (+0.012%) | 1 293 586 616 | 1 330 212 696 |
+
+The cycle counts are noise on this host (the spread across the seven runs
+is 27–39% of the median, either way). User page faults fall from 696 to
+253 and from 353 to 133: the read faults its buffer in once, where the
+map faulted file pages lazily. The copy itself is kernel time, which
+`:u` events do not see; `hyperfine` (15 runs) put system time at
+21 → 25 ms and 71 → 87 ms, with wall-clock means 512 → 544 ms and
+649 → 691 ms against a standard deviation of 77–122 ms. No difference
+stands out of the noise.
+
 ## Patches applied
 
 `packaging/jaq/0001`–`0015`, the 3.1.1 cuts (never the `-3.1.0` ones), were

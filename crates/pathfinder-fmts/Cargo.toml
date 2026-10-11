@@ -29,4 +29,3 @@ jaq-json = { workspace = true, features = ["std"] }
 aho-corasick = "1.0"
 bstr = "1"
 bytes = "1.10.1"
-memmap2 = "0.9"
