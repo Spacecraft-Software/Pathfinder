@@ -39,7 +39,7 @@ mod translate;
 
 use std::env;
 use std::ffi::OsString;
-use std::io;
+use std::io::{self, IsTerminal as _};
 use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::process::{Command, Stdio};
 
@@ -79,13 +79,13 @@ fn main() {
     // every failure below keeps jq's bytes there.
     let report = if native { lifted.json_report() } else { None };
 
-    let args = match jqargs::parse(&argv[1.min(argv.len())..]) {
+    let mut args = match jqargs::parse(&argv[1.min(argv.len())..]) {
         Ok(a) => a,
         Err(e) => {
             if let Some(r) = &report {
                 r.fail(&native::Failure::invalid_argument(&e.message));
             }
-            diag::die(prog, &e.message)
+            diag::die(prog, &e.line(prog))
         }
     };
 
@@ -115,6 +115,15 @@ fn main() {
             env!("CARGO_PKG_VERSION")
         );
         return;
+    }
+    // jq runs `.` when no filter is given and either end is not a terminal, so
+    // `curl … | jq` pretty-prints. `-f` with no file is still a usage error.
+    // Measured on jq 1.8.1 under a pseudo-terminal for each combination.
+    if args.program.is_none()
+        && !args.flags.from_file
+        && !(io::stdin().is_terminal() && io::stdout().is_terminal())
+    {
+        args.program = Some(OsString::from("."));
     }
     if args.program.is_none() {
         if let Some(r) = &report {

@@ -110,13 +110,54 @@ pub struct JqArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
     pub message: String,
+    /// jq prints this message without its `jq: ` prefix. Only `-L`'s missing
+    /// value does, in jq 1.8.1.
+    pub unprefixed: bool,
 }
 
 impl ParseError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            unprefixed: false,
         }
+    }
+
+    /// jq's `-L` error: a bare `fprintf` in its `main.c`, so no program name.
+    fn library_path() -> Self {
+        Self {
+            message: "-L takes a parameter: (e.g. -L /search/path or -L/search/path)".to_owned(),
+            unprefixed: true,
+        }
+    }
+
+    /// The first line of the diagnostic, as jq prints it under the name `prog`.
+    pub fn line(&self, prog: &str) -> String {
+        if self.unprefixed {
+            self.message.clone()
+        } else {
+            format!("{prog}: {}", self.message)
+        }
+    }
+}
+
+/// An option jq acts on the moment it reads it, ignoring the rest of argv.
+///
+/// jq 1.8.1 prints and exits from inside its option loop, so whatever follows
+/// is never parsed: `jq --version --bogus` prints the version and exits 0. A
+/// short bundle is read left to right, so `-Vh` is the version, `-hV` the
+/// help, and `-zV` fails at `-z` before the `V` is reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    Help,
+    Version,
+    BuildConfiguration,
+}
+
+impl Flags {
+    /// Whether an option has already ended parsing.
+    const fn stopped(&self) -> bool {
+        self.help || self.version || self.build_configuration
     }
 }
 
@@ -164,6 +205,9 @@ pub fn parse(argv: &[OsString]) -> Result<JqArgs, ParseError> {
         } else {
             i = parse_short_cluster(&mut out, &text[1..], argv, i)?;
         }
+        if out.flags.stopped() {
+            break;
+        }
     }
 
     Ok(out)
@@ -210,18 +254,31 @@ fn operand_count(bytes: &[u8]) -> usize {
     }
 }
 
-/// Whether the option at an [option position](option_positions) asks for
-/// jq's version: `--version`, or a short bundle holding `V` before any `L`
-/// (after `L`, the letters are its path).
-pub fn is_version_option(arg: &OsString) -> bool {
+/// The [`Stop`] jq acts on when it reads the option at an
+/// [option position](option_positions), if any.
+///
+/// A short bundle is read as [`parse`] reads it: left to right, ending at `L`
+/// (the rest is its path) or at a letter jq does not know (an error there).
+pub fn stop_at(arg: &OsString) -> Option<Stop> {
     match arg.as_encoded_bytes() {
-        b"--version" => true,
-        [b'-', b'-', ..] => false,
-        [b'-', cluster @ ..] => cluster
-            .iter()
-            .take_while(|&&b| b != b'L')
-            .any(|&b| b == b'V'),
-        _ => false,
+        b"--help" => Some(Stop::Help),
+        b"--version" => Some(Stop::Version),
+        b"--build-configuration" => Some(Stop::BuildConfiguration),
+        [b'-', b'-', ..] => None,
+        [b'-', cluster @ ..] => {
+            for &b in cluster {
+                match b {
+                    b'h' => return Some(Stop::Help),
+                    b'V' => return Some(Stop::Version),
+                    // jq's other short options, which do not stop it.
+                    b's' | b'r' | b'j' | b'c' | b'C' | b'M' | b'a' | b'S' | b'R' | b'n' | b'f'
+                    | b'e' | b'b' => {}
+                    _ => return None,
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }
 
@@ -314,20 +371,21 @@ fn parse_long(
             return Ok(i + 2);
         }
         "library-path" => {
-            let v = values(
-                argv,
-                i,
-                1,
-                "-L takes a parameter: (e.g. -L /search/path or -L/search/path)",
-            )?;
-            f.lib_paths.push(v[0].clone());
+            let v = argv.get(i + 1).ok_or_else(ParseError::library_path)?;
+            f.lib_paths.push(v.clone());
             return Ok(i + 2);
         }
         // `--argfile` is deliberately absent: jq 1.8.1 removed it, and answers
         // `Unknown option --argfile`. Accepting it here would make the shim more
         // permissive than the tool it stands in for.
         "arg" | "argjson" | "rawfile" | "slurpfile" => {
-            let what = format!("--{name} takes two parameters (e.g. --{name} varname value)");
+            // jq's own wording names what each option's second value is.
+            let second = match name {
+                "arg" => "value",
+                "argjson" => "text",
+                _ => "filename",
+            };
+            let what = format!("--{name} takes two parameters (e.g. --{name} varname {second})");
             let v = values(argv, i, 2, &what)?;
             let key = v[0].to_string_lossy().into_owned();
             let value = match name {
@@ -371,20 +429,22 @@ fn parse_short_cluster(
             'f' => f.from_file = true,
             'e' => f.exit_status = true,
             'b' => f.binary = true,
-            'h' => f.help = true,
-            'V' => f.version = true,
+            // jq stops here; the rest of the bundle and of argv is never read.
+            'h' => {
+                f.help = true;
+                return Ok(i + 1);
+            }
+            'V' => {
+                f.version = true;
+                return Ok(i + 1);
+            }
             'L' => {
                 // `-Ldir` consumes the rest of the bundle; a bare `-L` takes the
                 // next argv entry. Either way the bundle ends here.
                 let rest: String = chars[k + 1..].iter().collect();
                 if rest.is_empty() {
-                    let v = values(
-                        argv,
-                        i,
-                        1,
-                        "-L takes a parameter: (e.g. -L /search/path or -L/search/path)",
-                    )?;
-                    f.lib_paths.push(v[0].clone());
+                    let v = argv.get(i + 1).ok_or_else(ParseError::library_path)?;
+                    f.lib_paths.push(v.clone());
                     return Ok(i + 2);
                 }
                 f.lib_paths.push(OsString::from(rest));
@@ -400,8 +460,8 @@ fn parse_short_cluster(
 #[cfg(test)]
 mod tests {
     use super::{
-        JqArgs, NamedValue, OutputFormat, ParseError, PositionalMode, is_version_option,
-        option_positions, parse,
+        JqArgs, NamedValue, OutputFormat, ParseError, PositionalMode, Stop, option_positions,
+        parse, stop_at,
     };
     use std::ffi::OsString;
 
@@ -630,12 +690,76 @@ mod tests {
     }
 
     #[test]
-    fn version_options_include_short_bundles() {
-        for yes in ["--version", "-V", "-nV", "-VL/x"] {
-            assert!(is_version_option(&OsString::from(yes)), "{yes}");
+    fn stops_include_short_bundles_read_left_to_right() {
+        for (arg, stop) in [
+            ("--version", Stop::Version),
+            ("-V", Stop::Version),
+            ("-nV", Stop::Version),
+            ("-VL/x", Stop::Version),
+            ("-Vh", Stop::Version),
+            ("--help", Stop::Help),
+            ("-hV", Stop::Help),
+            ("--build-configuration", Stop::BuildConfiguration),
+        ] {
+            assert_eq!(stop_at(&OsString::from(arg)), Some(stop), "{arg}");
         }
-        for no in ["--versions", "-LV", "-n", "--", "V", "-rLV"] {
-            assert!(!is_version_option(&OsString::from(no)), "{no}");
+        for no in ["--versions", "-LV", "-n", "--", "V", "-rLV", "-zV"] {
+            assert_eq!(stop_at(&OsString::from(no)), None, "{no}");
+        }
+    }
+
+    #[test]
+    fn help_and_version_end_parsing_where_jq_acts_on_them() {
+        // Measured on jq 1.8.1: everything after is ignored, even an unknown
+        // option or a missing value.
+        assert!(ok(&["--version", "--json"]).flags.version);
+        assert!(ok(&["--version", "--indent", "99"]).flags.version);
+        assert!(ok(&["-n", "--version", "--arg"]).flags.version);
+        assert!(ok(&["--help", "--bogus"]).flags.help);
+        assert!(ok(&["-hz"]).flags.help);
+        assert!(
+            ok(&["--build-configuration", "--bogus"])
+                .flags
+                .build_configuration
+        );
+        let first = ok(&["-Vh"]);
+        assert!(first.flags.version && !first.flags.help);
+        let first = ok(&["-hV"]);
+        assert!(first.flags.help && !first.flags.version);
+        // What comes before is still parsed, and still fails.
+        assert_eq!(err(&["-zV"]).message, "Unknown option -z");
+        assert_eq!(
+            err(&["--bogus", "--version"]).message,
+            "Unknown option --bogus"
+        );
+        // As a value, `--version` is data, not a request.
+        assert!(!ok(&["--arg", "v", "--version", "."]).flags.version);
+    }
+
+    #[test]
+    fn option_value_messages_are_jqs() {
+        assert_eq!(
+            err(&["--argjson", "a"]).line("jq"),
+            "jq: --argjson takes two parameters (e.g. --argjson varname text)"
+        );
+        assert_eq!(
+            err(&["--rawfile"]).line("jq"),
+            "jq: --rawfile takes two parameters (e.g. --rawfile varname filename)"
+        );
+        assert_eq!(
+            err(&["--slurpfile", "a"]).line("jq"),
+            "jq: --slurpfile takes two parameters (e.g. --slurpfile varname filename)"
+        );
+        assert_eq!(
+            err(&["--arg"]).line("jq"),
+            "jq: --arg takes two parameters (e.g. --arg varname value)"
+        );
+        // jq prints the `-L` error without its name.
+        for form in [&["-L"][..], &["--library-path"], &["-rL"]] {
+            assert_eq!(
+                err(form).line("jq"),
+                "-L takes a parameter: (e.g. -L /search/path or -L/search/path)"
+            );
         }
     }
 

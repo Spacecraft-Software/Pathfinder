@@ -18,10 +18,12 @@ pub const EXIT_COMPILE: i32 = 3;
 
 /// Print a jq-shaped usage error and terminate with jq's usage exit code.
 ///
-/// `prog` is `argv[0]`'s base name, so the message reads `jq: …` when invoked
-/// through the shim symlink and `pathfinder: …` when invoked directly.
-pub fn die(prog: &str, message: &str) -> ! {
-    eprintln!("{prog}: {message}");
+/// `line` is the first line whole, usually `<prog>: <message>`; jq prints a
+/// few without its name (`ParseError::line` decides). `prog` is `argv[0]`'s
+/// base name, so the help pointer reads `jq --help` through the shim symlink
+/// and `pathfinder --help` when invoked directly.
+pub fn die(prog: &str, line: &str) -> ! {
+    eprintln!("{line}");
     eprintln!("Use {prog} --help for help with command-line options,");
     // Two spaces before "at": jq 1.8.1's own text, measured, not a typo here.
     eprintln!("or see the jq manpage, or online docs  at https://jqlang.org");
