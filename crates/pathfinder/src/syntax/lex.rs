@@ -149,7 +149,7 @@ const fn is_ident_char(c: u8) -> bool {
 /// is not jq's error: like any program this lexer cannot read, it reaches jaq
 /// unrewritten. The parser's own bound (`parse::MAX_NESTING`) is of the same
 /// order: each level is a `query` and a `term` there.
-const MAX_INTERP: usize = 1000;
+const MAX_INTERP: usize = 500;
 
 /// Tokenize a whole program.
 pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {

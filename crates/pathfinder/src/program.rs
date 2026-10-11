@@ -287,7 +287,7 @@ mod tests {
             .spawn(|| {
                 let nested = |n: usize| format!("{}.a.b = 1{}", "[".repeat(n), "]".repeat(n));
                 let chain = |n: usize| format!(".a.b = (1{})", " + 1".repeat(n));
-                for src in [nested(900), chain(2900)] {
+                for src in [nested(400), chain(1400)] {
                     let a = plain(&src);
                     assert!(a.syntax_rewritten, "{}", &src[..40]);
                 }

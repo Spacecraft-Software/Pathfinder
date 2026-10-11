@@ -55,7 +55,7 @@ enum Assoc {
 /// without a bound, `[[[…]]]` four thousand deep overflows it and aborts the
 /// shim. Beyond the bound the program is a parse failure, so it reaches jaq
 /// unrewritten (see [`MAX_DEPTH`]).
-const MAX_NESTING: usize = 2000;
+const MAX_NESTING: usize = 1000;
 
 /// How deep a parsed tree may be.
 ///
@@ -64,11 +64,12 @@ const MAX_NESTING: usize = 2000;
 /// over the tree recurse on them all the same. Measured on the 8 MiB main
 /// thread, a `+` chain overflows the rewriter between 6000 and 8000 deep
 /// (release) and bracket nesting overflows the parser between 3000 and 4000
-/// (debug); this keeps about half of that. jq itself stops at a parser stack
+/// (debug); this keeps about a quarter of that, because CI's debug build
+/// (Rust 1.99) overflowed 8 MiB at half. jq itself stops at a parser stack
 /// of 10000 ("memory exhausted", about 3300 bracket levels) but takes flat
 /// chains of any length, so a deeper program is not jq's error: it is passed
 /// through, as any parse failure is.
-const MAX_DEPTH: usize = 3000;
+const MAX_DEPTH: usize = 1500;
 
 /// How many links the loops that build chains (`,`, binary operators,
 /// postfixes) may add in all, across the whole program.
@@ -78,9 +79,10 @@ const MAX_DEPTH: usize = 3000;
 /// `MAX_FOLDS` plus a few nodes per nesting level. That matters because a
 /// tree is dropped recursively: built in full, `1 + 1 + …` overflowed the
 /// stack while being dropped at 200000 links, and a tree too deep for
-/// [`MAX_DEPTH`] is still built and dropped. A program with more links than
-/// this is passed through, as any parse failure is.
-const MAX_FOLDS: usize = 20_000;
+/// [`MAX_DEPTH`] is still built and dropped; at 20000 links that drop
+/// overflowed 8 MiB in CI's debug build. A program with more links than this
+/// is passed through, as any parse failure is.
+const MAX_FOLDS: usize = 10_000;
 
 /// Parse a program body: no `module`/`import`/`include` header.
 pub fn parse(src: &str) -> Result<Node> {
