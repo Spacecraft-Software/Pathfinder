@@ -94,7 +94,13 @@ anything a `jq` call prints; the differential suite runs under a live agent
 environment and proves it.
 
 The Standard governs the native `pathfinder` surface: `--explain`,
-`--version` and `--install-shim`. Each reports as text or as one compact JSON
+`--version`, `--install-shim`, `--describe` and `--schema`. The last two are
+the Standard's `describe` and `schema` as flags, because a bare word is a jq
+program; both render from one table (`src/describe.rs`), so a new native
+option is added there or `--describe` and `--schema` miss it. `--schema`
+prints raw JSON Schema in every mode (`--format` wraps it for an LLM
+provider); every `parameters` schema has a `type` and a `description` on
+each property, which `describe.rs`'s tests check. Each reports as text or as one compact JSON
 envelope (`{"metadata":…,"data":…}`), chosen by the cascade in `src/mode.rs`:
 `--json`, then a non-empty `AI_AGENT`/`AGENT`, then a truthy `CI`, then a
 terminal on stdout means text, else JSON. Every failure of a report in JSON
@@ -344,6 +350,7 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
 | `crates/pathfinder/src/post.rs` | `-a` and `--seq` byte transforms: `Framer` (output) and `StripRs` (input), for both engines. |
 | `crates/pathfinder/src/inputs.rs` | Several input files: opened before the engine starts, read as one stream, and described to it — as `Segment`s in process, in `PATHFINDER_INPUTS` to a jaq binary. |
 | `crates/pathfinder/src/native.rs` | `--explain` / `--version` / `--install-shim`, their text and JSON reports, and structured errors; reachable only under the native name. |
+| `crates/pathfinder/src/describe.rs` | `--describe` and `--schema`: the native surface described from one table of commands. |
 | `crates/pathfinder/src/mode.rs` | The native verbs' output-mode cascade (CLI Standard §5). |
 | `crates/pathfinder/src/json.rs` | Minimal JSON writer (RFC 8259 escaping) for the native reports; std-only. |
 | `crates/pathfinder/src/syntax/lex.rs`, `parse.rs` | jq's lexer and grammar, transcribed. Every node keeps its span. |

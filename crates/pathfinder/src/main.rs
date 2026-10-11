@@ -21,6 +21,7 @@
 //! The jaq path is kept until it is redundant (PLAN M24).
 
 mod compat;
+mod describe;
 mod diag;
 mod engine;
 mod inputs;
@@ -74,10 +75,7 @@ fn main() {
     } else {
         native::Lifted::default()
     };
-    if let Some(native::Verb::InstallShim { dir, force }) = &lifted.verb {
-        let mode = mode::detect(lifted.json);
-        std::process::exit(native::run_install_shim(dir, *force, mode));
-    }
+    run_standalone_verb(&lifted);
 
     // A JSON-mode report (`--explain`, `--version`) fails with the Standard's
     // structured error instead of jq's text. `None` under the name `jq`, so
@@ -181,6 +179,29 @@ fn main() {
         exec(prog, &plan.argv);
     }
     std::process::exit(pipe(prog, &plan));
+}
+
+/// Run a native verb that takes no jq call, and end the process; any other
+/// verb returns.
+fn run_standalone_verb(lifted: &native::Lifted) {
+    let mode = || mode::detect(lifted.json);
+    match &lifted.verb {
+        Some(native::Verb::InstallShim { dir, force }) => {
+            std::process::exit(native::run_install_shim(dir, *force, mode()));
+        }
+        Some(native::Verb::Describe) => {
+            describe::describe(mode());
+            std::process::exit(0);
+        }
+        Some(native::Verb::Schema { command, format }) => {
+            std::process::exit(native::run_schema(
+                command.as_ref(),
+                format.as_ref(),
+                mode(),
+            ));
+        }
+        Some(native::Verb::Explain) | None => {}
+    }
 }
 
 /// The engine to run, or the end of the process if `PATHFINDER_ENGINE` names

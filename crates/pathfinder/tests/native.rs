@@ -301,7 +301,15 @@ fn native_help_names_the_maintainer_on_stderr() {
     assert!(err.contains("Maintained by Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>\n"));
     assert!(err.ends_with("https://Pathfinder.SpacecraftSoftware.org/\n"));
     // The native options are documented, with a `--json` example.
-    for option in ["--explain", "--install-shim [DIR]", "--force", "--json"] {
+    for option in [
+        "--explain",
+        "--install-shim [DIR]",
+        "--force",
+        "--describe",
+        "--schema [COMMAND]",
+        "--format FORMAT",
+        "--json",
+    ] {
         assert!(err.contains(option), "{option}");
     }
     assert!(err.contains("pathfinder --explain --json "));
@@ -705,4 +713,78 @@ fn a_terminal_gets_the_human_explain_and_refusal() {
             dir.join("jq").display()
         )
     );
+}
+
+// ---- --describe and --schema -------------------------------------------
+
+#[test]
+fn describe_json_lists_every_command_and_how_to_get_the_schema() {
+    let (code, out, err) = stdout_of(pathfinder(&[]).args(["--describe", "--json"]));
+    assert_eq!((code, err.as_str()), (Some(0), ""));
+    let v = document(&out);
+    assert_metadata(&v, "pathfinder --describe");
+    let data = &v["data"];
+    assert_eq!(data["tool"], "pathfinder");
+    assert_eq!(data["schema_command"], "pathfinder --schema");
+    let tools: Vec<&str> = data["commands"]
+        .as_array()
+        .expect("commands")
+        .iter()
+        .filter_map(|c| c["tool"].as_str())
+        .collect();
+    assert_eq!(
+        tools,
+        [
+            "jq",
+            "pathfinder_explain",
+            "pathfinder_version",
+            "pathfinder_install_shim",
+            "pathfinder_describe",
+            "pathfinder_schema"
+        ]
+    );
+}
+
+#[test]
+fn schema_is_raw_json_schema_in_any_mode() {
+    // A schema is JSON whatever the mode: no envelope, one document.
+    for vars in [&[][..], &[("AI_AGENT", AGENT_VALUE)][..]] {
+        let (code, out, _) = stdout_of(pathfinder(vars).args(["--schema"]));
+        assert_eq!(code, Some(0));
+        let v = document(&out);
+        assert_eq!(v["$schema"], "https://json-schema.org/draft/2020-12/schema");
+        assert!(v.get("metadata").is_none());
+    }
+    let (_, out, _) = stdout_of(pathfinder(&[]).args(["--schema", "pathfinder_explain"]));
+    assert_eq!(document(&out)["parameters"]["required"][0], "filter");
+    let (_, out, _) = stdout_of(pathfinder(&[]).args(["--schema", "--format", "mcp"]));
+    assert_eq!(document(&out)["tools"][0]["name"], "jq");
+}
+
+#[test]
+fn schema_refuses_an_unknown_format_with_a_runnable_hint() {
+    let (code, out, err) =
+        stdout_of(pathfinder(&[("AI_AGENT", AGENT_VALUE)]).args(["--schema", "--format", "yaml"]));
+    assert_eq!((code, out.as_str()), (Some(2), ""));
+    let e = document(&err);
+    assert_eq!(e["error"]["code"], "INVALID_ARGUMENT");
+    assert_eq!(e["error"]["hint"], "pathfinder --schema --format anthropic");
+}
+
+#[test]
+fn the_jq_name_rejects_describe_and_schema_as_jq_does() {
+    let jq = jq_shim();
+    for flag in ["--describe", "--schema"] {
+        let shim = stdout_of(command(&jq, &[]).args([flag, "."]).write_stdin("1"));
+        assert_eq!(shim.0, Some(2), "{flag}");
+        assert!(
+            shim.2.starts_with(&format!("jq: Unknown option {flag}\n")),
+            "{}",
+            shim.2
+        );
+        if let Some(real) = real_jq() {
+            let jq = stdout_of(command(&real, &[]).args([flag, "."]).write_stdin("1"));
+            assert_eq!(shim, jq, "{flag}");
+        }
+    }
 }

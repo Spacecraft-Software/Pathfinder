@@ -102,6 +102,14 @@ impl Object {
         self
     }
 
+    /// Add a member whose value is JSON text written elsewhere: an array
+    /// from [`array`], or a constant document. The caller vouches for it.
+    pub fn raw(mut self, key: &str, json: &str) -> Self {
+        self.key(key);
+        self.buf.push_str(json);
+        self
+    }
+
     /// Add a string member only when `value` is present.
     pub fn opt_str(self, key: &str, value: Option<&str>) -> Self {
         match value {
@@ -124,6 +132,19 @@ impl Object {
         self.buf.push('}');
         self.buf
     }
+}
+
+/// A JSON array of values that are already JSON text.
+pub fn array<I: IntoIterator<Item = String>>(items: I) -> String {
+    let mut out = String::from("[");
+    for (i, item) in items.into_iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&item);
+    }
+    out.push(']');
+    out
 }
 
 #[cfg(test)]

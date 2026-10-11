@@ -20,6 +20,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::describe;
 use crate::json::Object;
 use crate::mode::{self, Mode};
 use crate::syntax::check::CompileError;
@@ -34,11 +35,11 @@ use crate::{diag, jqargs};
 pub const JQ_BASELINE_VERSION: &str = "jq-1.8.1";
 
 /// The maintainer, as the Standard's attribution clause (§15) names him.
-const MAINTAINER: &str = "Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>";
+pub const MAINTAINER: &str = "Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>";
 
 /// The project's registered subdomain (Standard §15.1); also the docs URL in
 /// structured errors.
-const WEBSITE: &str = "https://Pathfinder.SpacecraftSoftware.org/";
+pub const WEBSITE: &str = "https://Pathfinder.SpacecraftSoftware.org/";
 
 /// The `--help` trailer printed on stderr under the native name only, after
 /// jq's own help text on stdout.
@@ -47,13 +48,16 @@ const WEBSITE: &str = "https://Pathfinder.SpacecraftSoftware.org/";
 /// it cannot, and `jq --help` must not.
 pub fn help_trailer() -> String {
     format!(
-        "\n(pathfinder {}: a jq-compatible shim over jaq)\n\
+        "\n(pathfinder {}: a jq 1.8.1-compatible jq on a fork of jaq's engine)\n\
          \n\
          Pathfinder's own options (not available as `jq`):\n      \
-         --explain             show the jaq command line and program, run nothing;\n      \
-         --version             Pathfinder's version and the jaq it would run;\n      \
+         --explain             show the engine and program a call would run, run nothing;\n      \
+         --version             Pathfinder's version and the engine it runs;\n      \
          --install-shim [DIR]  link DIR/jq (default .) to this binary;\n      \
          --force               with --install-shim, replace an existing jq;\n      \
+         --describe            list these commands, the environment and conventions;\n      \
+         --schema [COMMAND]    every command's JSON Schema, or COMMAND's;\n      \
+         --format FORMAT       with --schema: json, anthropic, openai, gemini or mcp;\n      \
          --json                report as one JSON document; the default under\n                            \
          AI_AGENT, AGENT, a truthy CI, or a non-terminal stdout;\n\
          \n\
@@ -61,6 +65,8 @@ pub fn help_trailer() -> String {
          pathfinder --explain -c '.a.b = 1'\n    \
          pathfinder --explain --json -c '.a.b = 1'\n    \
          pathfinder --version --json\n    \
+         pathfinder --describe --json\n    \
+         pathfinder --schema --format anthropic\n    \
          pathfinder --install-shim ~/.local/bin\n\
          \n\
          Maintained by {MAINTAINER}\n{WEBSITE}\n",
@@ -311,6 +317,49 @@ pub fn run_install_shim(dir: &Path, force: bool, mode: Mode) -> i32 {
     failure.exit
 }
 
+/// `pathfinder --schema`: the document, or a usage error naming what is
+/// accepted. Returns the exit status.
+pub fn run_schema(command: Option<&OsString>, format: Option<&OsString>, mode: Mode) -> i32 {
+    const COMMAND: &str = "pathfinder --schema";
+    let text = |s: Option<&OsString>| s.map(|s| s.to_string_lossy().into_owned());
+    let (command, format) = (text(command), text(format));
+    let failure = match format
+        .as_deref()
+        .map_or(Some(describe::Format::Json), describe::Format::parse)
+    {
+        None => Failure::reported(
+            "INVALID_ARGUMENT",
+            diag::EXIT_USAGE,
+            format!(
+                "--format {} is not one of json, anthropic, openai, gemini, mcp",
+                format.unwrap_or_default()
+            ),
+            Some("pathfinder --schema --format anthropic"),
+        ),
+        Some(f) => match describe::schema(command.as_deref(), f) {
+            Some(doc) => {
+                println!("{doc}");
+                return 0;
+            }
+            None => Failure::reported(
+                "INVALID_ARGUMENT",
+                diag::EXIT_USAGE,
+                format!(
+                    "{} is not a command; one of {}",
+                    command.unwrap_or_default(),
+                    describe::tool_names()
+                ),
+                Some("pathfinder --schema pathfinder_explain"),
+            ),
+        },
+    };
+    match mode {
+        Mode::Human => eprintln!("pathfinder: {}", failure.human),
+        Mode::Json => eprintln!("{}", failure.render(COMMAND, &utc_now())),
+    }
+    failure.exit
+}
+
 /// Exit code for a failure with no more specific class.
 const EXIT_GENERAL: i32 = 1;
 
@@ -527,7 +576,7 @@ fn version_json(engine: &Engine<'_>, meta: &Meta) -> String {
 
 /// The envelope's `metadata` for one report.
 #[derive(Debug)]
-struct Meta {
+pub struct Meta {
     command: &'static str,
     timestamp: String,
     invoking_agent: Option<&'static str>,
@@ -535,7 +584,7 @@ struct Meta {
 
 impl Meta {
     /// Metadata for `command`, stamped now.
-    fn now(command: &'static str) -> Self {
+    pub fn now(command: &'static str) -> Self {
         Self {
             command,
             timestamp: utc_now(),
@@ -560,7 +609,7 @@ fn invoking_agent(var: impl Fn(&str) -> Option<OsString>) -> Option<&'static str
 }
 
 /// Wrap `data` in the Standard's `{"metadata":…,"data":…}` envelope.
-fn envelope(meta: &Meta, data: Object) -> String {
+pub fn envelope(meta: &Meta, data: Object) -> String {
     let metadata = Object::new()
         .str("tool", "pathfinder")
         .str("version", env!("CARGO_PKG_VERSION"))
@@ -624,7 +673,16 @@ fn civil_from_days(days: u64) -> (u64, u64, u64) {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verb {
     Explain,
-    InstallShim { dir: PathBuf, force: bool },
+    InstallShim {
+        dir: PathBuf,
+        force: bool,
+    },
+    Describe,
+    /// `--schema [COMMAND] [--format FORMAT]`, as written: checked when run.
+    Schema {
+        command: Option<OsString>,
+        format: Option<OsString>,
+    },
 }
 
 /// What [`take_verb`] lifted out of argv.
@@ -644,6 +702,8 @@ impl Lifted {
     pub fn json_report(&self) -> Option<JsonReport> {
         let command = match self.verb {
             Some(Verb::Explain) => "pathfinder --explain",
+            Some(Verb::Describe) => "pathfinder --describe",
+            Some(Verb::Schema { .. }) => "pathfinder --schema",
             None if self.version => "pathfinder --version",
             // `--install-shim` decides its own mode and failures.
             Some(Verb::InstallShim { .. }) | None => return None,
@@ -681,13 +741,22 @@ pub fn take_verb(argv: &mut Vec<OsString>) -> Lifted {
         options.iter().find_map(|&i| jqargs::stop_at(&argv[i])) == Some(jqargs::Stop::Version);
     let explain = at("--explain");
     let install = at("--install-shim");
-    let json = (version || !explain.is_empty() || !install.is_empty()) && !at("--json").is_empty();
+    let describe = at("--describe");
+    let schema = at("--schema");
+    let json = (version
+        || !explain.is_empty()
+        || !install.is_empty()
+        || !describe.is_empty()
+        || !schema.is_empty())
+        && !at("--json").is_empty();
 
-    // `--install-shim`'s directory is the bare word right after it, if any.
-    let dir_at = install
-        .first()
-        .map(|&i| i + 1)
-        .filter(|&j| j < argv.len() && !options.contains(&j) && argv[j] != "--");
+    // The bare word right after an option, if any: `--install-shim`'s
+    // directory, `--schema`'s command, `--format`'s value.
+    let word_after = |i: usize| {
+        Some(i + 1).filter(|&j| j < argv.len() && !options.contains(&j) && argv[j] != "--")
+    };
+
+    let dir_at = install.first().and_then(|&i| word_after(i));
     let force = !install.is_empty() && !at("--force").is_empty();
 
     let verb = if let Some(&i) = install.first() {
@@ -697,6 +766,28 @@ pub fn take_verb(argv: &mut Vec<OsString>) -> Lifted {
         None
     }
     .or_else(|| explain.first().map(|_| Verb::Explain));
+
+    // `--describe` and `--schema` take no jq call: the first of them wins
+    // over everything else, as `--version` does.
+    let command_at = schema.first().and_then(|&i| word_after(i));
+    let format_flag = if schema.is_empty() {
+        Vec::new()
+    } else {
+        at("--format")
+    };
+    let format_at = format_flag.first().and_then(|&i| word_after(i));
+    let verb = match (describe.first(), schema.first()) {
+        (Some(&d), Some(&s)) if s < d => Some(Verb::Schema {
+            command: command_at.map(|j| argv[j].clone()),
+            format: format_at.map(|j| argv[j].clone()),
+        }),
+        (Some(_), _) => Some(Verb::Describe),
+        (None, Some(_)) => Some(Verb::Schema {
+            command: command_at.map(|j| argv[j].clone()),
+            format: format_at.map(|j| argv[j].clone()),
+        }),
+        (None, None) => verb,
+    };
 
     // Remove what was lifted, highest index first so the rest stay valid. Only
     // the first verb is lifted; a second one stays for the jq parser to reject.
@@ -709,6 +800,13 @@ pub fn take_verb(argv: &mut Vec<OsString>) -> Lifted {
             if force {
                 lifted.extend(at("--force"));
             }
+        }
+        Some(Verb::Describe) => lifted.push(describe[0]),
+        Some(Verb::Schema { .. }) => {
+            lifted.push(schema[0]);
+            lifted.extend(command_at);
+            lifted.extend(format_flag.first());
+            lifted.extend(format_at);
         }
         None => {}
     }
