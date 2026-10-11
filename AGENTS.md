@@ -27,9 +27,10 @@ because it answers jq's way across concatenated multi-file input.
 
 ```sh
 cargo build --release
-cargo test                       # unit + differential
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
+cargo test                       # the shim: unit + differential
+cargo test --workspace --exclude pathfinder-jq   # the engine crates
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
 make check                       # all of the above
 ```
 
