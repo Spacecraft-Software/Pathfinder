@@ -1,0 +1,104 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# bench/gen — write the benchmark inputs into a directory.
+#
+#   bench/gen DIR            # ~30 MB each, plus ~4 MB small inputs
+#   BENCH_MB=5 bench/gen DIR # smaller, for a quick look
+#
+# Deterministic: the same sizes give byte-identical files (the cksums printed
+# at the end are recorded in bench/README.md). It uses POSIX awk with a
+# Park-Miller generator (every product fits in a double's 53-bit mantissa),
+# not jq or jaq, so the inputs never depend on the tool being measured.
+#
+#   doc.json     one JSON document on a single line: {"meta":…,"items":[…]}
+#   lines.jsonl  one small object per line
+#   small.json   doc.json's shape at BENCH_SMALL_MB (default 4) MB
+#   small.jsonl  lines.jsonl's shape at BENCH_SMALL_MB MB
+#
+# The small pair feeds the filter-heavy set: at 30 MB, jq 1.8.1 spends 5-14 s
+# per run on `-s` sorting, `[paths]` and `ascii_downcase`, which would push a
+# multi-engine run far past ten minutes without measuring anything more.
+#
+# Both carry nested objects, arrays, integers, decimals, booleans, null,
+# escapes and non-ASCII text, so the parse, filter and output sets exercise
+# every value type.
+
+set -eu
+
+dir=${1:?usage: bench/gen DIR}
+mb=${BENCH_MB:-30}
+small=${BENCH_SMALL_MB:-4}
+mkdir -p "$dir"
+
+LC_ALL=C
+export LC_ALL
+
+# gen KIND MEGABYTES
+gen() {
+    awk -v target="$(( $2 * 1048576 ))" -v kind="$1" '
+    function rnd() { seed = (seed * 16807) % 2147483647; return seed }
+    function pick(n) { return rnd() % n }
+    function words(n,   s, i) {
+        s = word[pick(nw)]
+        for (i = 1; i < n; i++) s = s " " word[pick(nw)]
+        return s
+    }
+    function num() {
+        # A decimal with 1-6 fraction digits, or an integer, or a negative.
+        r = pick(4)
+        if (r == 0) return pick(1000000)
+        if (r == 1) return "-" pick(100000) "." pick(1000)
+        return pick(100000) "." sprintf("%06d", pick(1000000))
+    }
+    BEGIN {
+        seed = 20260101
+        nw = split("alpha bravo charlie delta echo foxtrot golf hotel india " \
+                   "juliett kilo lima mike november oscar papa quebec romeo " \
+                   "sierra tango uniform victor whiskey xray yankee zulu " \
+                   "Orbit Apogee Perigee Kepler Lagrange café naïve résumé " \
+                   "→ ✓ 日本 \\\"quoted\\\" tab\\tsep line\\nbreak", word, " ")
+        # split() is 1-based; shift so pick(nw) indexes 0..nw-1.
+        for (i = 1; i <= nw; i++) word[i - 1] = word[i]
+        nu = 64
+        bytes = 0
+        if (kind == "doc") {
+            head = "{\"meta\":{\"name\":\"bench\",\"version\":1,\"generator\":\"bench/gen\"},\"items\":["
+            printf "%s", head
+            bytes = length(head)
+        }
+        id = 0
+        while (bytes < target) {
+            if (kind == "doc") {
+                s = sprintf("%s{\"id\":%d,\"name\":\"%s\",\"user\":\"user%02d\",\"score\":%s," \
+                    "\"active\":%s,\"parent\":%s,\"tags\":[\"%s\",\"%s\",\"%s\"]," \
+                    "\"pos\":{\"x\":%s,\"y\":%s,\"z\":%d},\"text\":\"%s\"}",
+                    id ? "," : "", id, words(2), pick(nu), num(),
+                    pick(2) ? "true" : "false",
+                    pick(3) ? id - 1 - pick(id + 1) : "null",
+                    word[pick(nw)], word[pick(nw)], word[pick(nw)],
+                    num(), num(), pick(1000), words(6 + pick(10)))
+                printf "%s", s
+            } else {
+                s = sprintf("{\"id\":%d,\"user\":\"user%02d\",\"score\":%s,\"active\":%s," \
+                    "\"tags\":[\"%s\",\"%s\"],\"text\":\"%s\"}\n",
+                    id, pick(nu), num(), pick(2) ? "true" : "false",
+                    word[pick(nw)], word[pick(nw)], words(4 + pick(8)))
+                printf "%s", s
+            }
+            bytes += length(s)
+            id++
+        }
+        if (kind == "doc") printf "]}\n"
+    }'
+}
+
+put() { gen "$1" "$2" >"$dir/$3.tmp" && mv "$dir/$3.tmp" "$dir/$3"; }
+put doc "$mb" doc.json
+put lines "$mb" lines.jsonl
+put doc "$small" small.json
+put lines "$small" small.jsonl
+
+# One fingerprint per file, so a run can show it measured the documented inputs.
+cd "$dir" && cksum doc.json lines.jsonl small.json small.jsonl

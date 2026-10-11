@@ -64,10 +64,16 @@ PATHFINDER_ENGINE=jaq PATHFINDER_JAQ=$PWD/target/release/pathfinder-jaq cargo te
 the dev host; get one ephemerally and compare:
 
 ```sh
-JQ=$(nix build --no-link --print-out-paths nixpkgs#jq | head -1)/bin/jq
-printf '{}' | $JQ  -c '.a.b = 1'
-printf '{}' | jaq -c '.a.b = 1'
+# jq 1.8.1's release binary, as CI fetches it (nixpkgs has moved to 1.8.2).
+curl -fsSL -o jq https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64
+echo "020468de7539ce70ef1bceaf7cde2e8c4f2ca6c3afb84642aabc5c97d9fc2a0d  jq" | sha256sum -c -
+chmod +x jq
+printf '{}' | ./jq -c '.a.b = 1'
+printf '{}' | PATHFINDER_ENGINE=native target/release/pathfinder -c '.a.b = 1'
 ```
+
+Point `PATHFINDER_REAL_JQ` at it for the suites: their fallback,
+`nix build nixpkgs#jq`, now finds 1.8.2 and skips.
 
 Four beliefs that felt obvious turned out to be wrong when checked: `--indent 0`
 does *not* mean compact, malformed-JSON input exits 5 in both (not 2 in jq),
