@@ -109,7 +109,7 @@ working on a stock jaq; the patched one is what the package pins.
 - [x] P-028 String repetition: `n * "s"`, fractional and non-positive counts
 - [x] P-029 Conformance and differential measured against the patched jaq
 - [x] P-030 Output-heavy benchmark: the patched printer is not slower
-- [ ] P-031 Operand evaluation order of binary operators (optional)
+- [x] P-031 Operand evaluation order of binary operators (optional)
 - [ ] ~~P-032 Path-expression error wording~~ (dropped) — jaq's path tracking
 - [ ] ~~P-033 decNumber literal canonicalisation~~ (dropped) — needs decNumber
 

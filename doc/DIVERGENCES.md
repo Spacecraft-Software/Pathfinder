@@ -38,6 +38,7 @@ copied byte for byte; a filter that needs nothing is passed through unchanged.
 | `1 / 0`, `0 / 0`, `.a /= 0` | error: `… cannot be divided because the divisor is zero` | `Infinity`, `NaN` — **not JSON** | jq's error |
 | `5.9 % 2.9`, `5 % 0.4`, `.a %= 3` | on integers: `1`; divisor truncates to 0, error | `0.1`; `NaN` | jq's integer remainder and error |
 | `select(. > .5)` | `.5` is `0.5` | parse error | `0.5` |
+| `[(1,2) + (10,20)]`, `[input - input]`, `try (.a + .b) catch .` | right operand in the outer loop: `[11,12,21,22]`; `.b`'s error | left: `[11,21,12,22]`; `.a`'s error | jq's order |
 
 Measured at 100,000 elements, the rewritten assignments take between 0.1× and
 3.6× jq's time (the slow end is building nested fields, `.[].w.x = 1`); `del`
@@ -46,10 +47,20 @@ takes between 0.6× and 2.9×.
 Division and remainder are checked inline, with the right operand evaluated in
 the outer loop as in jq: `1 / $i` over 300,000 values took 0.17 s (jaq 0.07 s,
 jq 0.11 s), `100 % $i` 0.40 s (jaq 0.07 s); a divisor written as a non-zero
-literal (`. / 7`, `. % 7`) costs nothing for `/` and 0.1 s for `%`. Only `/`
-and `%` take jq's operand order; `+`, `-` and `*` keep jaq's (see the number
-model below). `infinite % 1` is `NaN` here and `0` in jq, which clamps to a
-64-bit integer first.
+literal (`. / 7`, `. % 7`) costs nothing for `/` and 0.1 s for `%`.
+`infinite % 1` is `NaN` here and `0` in jq, which clamps to a 64-bit integer
+first.
+
+jq evaluates the right operand of an arithmetic operator or a comparison
+first, in the outer loop; jaq evaluates the left. It shows in the order of
+outputs when both operands yield several values, in the order of effects
+(`input - input`, `debug`) and in which error is raised when both fail
+(`.a + .b` on a number raises `.b`'s). `+`, `-`, `*` and the comparisons are
+rewritten to bind the right operand first, `(R) as $t | L op $t`, unless
+either operand is a literal, a variable or `.` — then no order can be
+observed, and the filter is left as written. The binding costs nothing
+measurable: 2,000,000 rewritten operations took 2.9–3.3 s against jaq's own
+2.8–3.2 s. `and`, `or` and `//` already agree.
 
 An index whose key is not a literal (`.[$i]`, `.[.k]`) is rounded inline, which
 costs about 0.5 µs per indexing: 300,000 of them took 0.49 s, against 0.30 s
@@ -131,7 +142,6 @@ and what the packaged one gives.
 | `9007199254740993 * 1` | `9007199254740992` (a double) | `9007199254740993` (exact) | as jq |
 | input `[nan, -Infinity, inf]`, a leading byte-order mark | read | error | as jq |
 | `"a" * 0`, `"a" * 0.5`, `3.7 * "a"`, `"a" * 1e9` | `""`, `""`, `"aaa"`, error | `null`, error, error, an allocation | as jq |
-| `[(1,2) + (10,20)]` | `[11,12,21,22]` | `[11,21,12,22]` | as stock jaq |
 
 The packaged jaq prints a decimal literal the way jq's decNumber does (`1E+3`,
 `1.000`, `1E-7`), computes integers beyond 2^53 in doubles as jq does, and is
@@ -139,13 +149,6 @@ no slower: printing 500,000 objects took 2.8–3.1 s against stock jaq's
 3.3 s (jq: 4.2 s), measured interleaved on a loaded host. Its `--version`
 reads `jaq 3.1.1+pathfinder.1`, and the conformance suite holds it to its own
 ratchet, `tests/jq-suite/FLOOR-patched`.
-
-The last row is semantic: when both operands of `+`, `-`, `*` or a comparison
-produce several values, jq iterates the right-hand side in the outer loop and
-jaq the left. `/` and `%` are rewritten and follow jq; `==` and `!=` give the
-same set either way. Repairing the rest would mean rewriting every arithmetic
-operator in every filter, which costs every user for a difference few filters
-can observe.
 
 ## Unsupported, with a diagnostic
 

@@ -499,6 +499,27 @@ static CASES: &[Case] = &[
     c(r#""abc""#, &["-c", r#"test("B";"i")"#]),
     c("null", &["-nc", "[limit(3;repeat(1))]"]),
     c("null", &["-nc", "[1,2]-[1]"]),
+    // --- operand order: jq evaluates the right operand in the outer loop ---
+    c("null", &["-nc", "[(1,2) + (10,20)]"]),
+    c("null", &["-nc", "[(1,2) - (10,20)]"]),
+    c("null", &["-nc", "[(1,2) * (10,100)]"]),
+    c("null", &["-nc", r#"[("a","b") + ("c","d")]"#]),
+    c("null", &["-nc", "[(1,2) == (2,3)]"]),
+    c("null", &["-nc", "[(1,2) != (2,3)]"]),
+    c("null", &["-nc", "[(1,2) < (1,2), (1,2) <= (1,2)]"]),
+    c("null", &["-nc", "[(1,2) > (1,2), (1,2) >= (1,2)]"]),
+    c("null", &["-nc", "[(1,2) + (10,20) + (100,200)]"]),
+    c("null", &["-nc", "[limit(3; (1,2,3) + (10,20))]"]),
+    c("null", &["-nc", r#""x\((1,2) + (10,20))""#]),
+    c(r#"{"a":[1,2],"b":[3,4]}"#, &["-c", "[.a[] + .b[]]"]),
+    c("1 2 3", &["-c", "[input - input]"]),
+    c("1 2 3", &["-c", "input + (10,20)"]),
+    c("1", &["-c", "try (.a + .b) catch ."]),
+    c("1", &["-c", "try (.a < .b) catch ."]),
+    c(r#"{"a":"x","b":"y"}"#, &["-c", "{(.a + .b): 1}"]),
+    c("[1,2,3,4]", &["-c", "del(.[.[0] + .[1]])"]),
+    c(r#"{"a":1,"b":2,"c":3}"#, &["-c", ".a |= .b + .c"]),
+    c("[1,2]", &["-c", "[.[] * .[]]"]),
 ];
 
 /// Cases only the packaged, patched jaq (`packaging/jaq/`) answers as jq does:
@@ -722,8 +743,8 @@ fn documented_divergences_still_diverge() {
     std::fs::create_dir_all(&dir).expect("temp dir");
     let shim = shim(&dir);
 
-    // `"a" * 0` is `""` in jq 1.8.1 and `null` in a stock jaq. `*` is an
-    // operator the rewriter leaves alone; Pathfinder's patched jaq
+    // `"a" * 0` is `""` in jq 1.8.1 and `null` in a stock jaq. `*` of two
+    // literals is left alone by the rewriter; Pathfinder's patched jaq
     // (`packaging/jaq/0005-string-repeat.patch`) repairs it, so there the
     // case must agree with jq instead. Documented in doc/DIVERGENCES.md.
     let case = c("null", &["-nc", r#""a"*0"#]);
