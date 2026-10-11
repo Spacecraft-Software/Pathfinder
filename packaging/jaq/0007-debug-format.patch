@@ -1,0 +1,18 @@
+Pathfinder patch for jaq 3.1.1: Write debug messages compactly, as jq 1.8.1.
+
+Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
+
+diff --git a/jaq/src/main.rs b/jaq/src/main.rs
+index 00a8ab9..0e8ad48 100644
+--- a/jaq/src/main.rs
++++ b/jaq/src/main.rs
+@@ -32,7 +32,8 @@ fn main() -> ExitCode {
+             // format error messages (yielded by `stderr`) without newline
+             log::Level::Error => write!(buf, "{}", record.args()),
+             // format debug messages such as `["DEBUG:", [1, 2, 3]]`
+-            level => writeln!(buf, "[\"{}:\", {}]", level, record.args()),
++            // Pathfinder: jq 1.8.1 writes it compactly, `["DEBUG:",[1,2,3]]`.
++            level => writeln!(buf, "[\"{}:\",{}]", level, record.args()),
+         })
+         .init();
+ 

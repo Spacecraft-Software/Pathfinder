@@ -89,8 +89,42 @@ What is still not quite jq:
 | Case | jq 1.8.1 | jaq 3.0.0 | Why not |
 |---|---|---|---|
 | `"a" * 0`, `"a" * 0.5` | `""` | `null`, error | Fixed by the packaged jaq (see the number model); the rewriter leaves `*` alone. |
-| `debug` output | `["DEBUG:",1]` | `["DEBUG:", 1]` | Stderr only. Fixing it means capturing stderr, which costs more than the space it saves. |
-| Error text on stderr | `jq: error (at <stdin>:0): …` | `Error: …` | Same reason. stderr is passed through untouched so `debug`, colour, and interleaving stay correct. What a `catch` handler sees *is* jq's text; see below. |
+| `debug` output | `["DEBUG:",1]` | `["DEBUG:", 1]` | Fixed by the packaged jaq. stderr is never captured, so a stock jaq keeps its spacing. |
+| An uncaught error | `jq: error (at <stdin>:3): …`, then the next input | `Error: …`, and stops | Fixed by the packaged jaq; see below. A stock jaq keeps its own report, for the same reason. What a `catch` handler sees *is* jq's text on both. |
+| `halt_error` on a non-string | its JSON and a newline; nothing for `null` | no newline; `null` | Fixed by the packaged jaq. |
+| `.[3]`, `.[3] = 1`, `has(3)`, `path(.[3])` on an object | `Cannot index object with number` | `null`, `{"a":1,3:1}` — **not JSON**, `false`, `[3]` | Fixed by the packaged jaq. Rewriting would put a check on every index in every filter. |
+
+### Uncaught errors, on the packaged jaq
+
+The packaged jaq reports an error that escapes the filter as jq 1.8.1 does —
+`jq: error (at <stdin>:3): Cannot index number with string "a"`, or
+`jq: error (at <stdin>:0) (not a string): {"a":1}` for a non-string error —
+abandons the rest of that input's outputs, and goes on to the next input. Its
+exit status is jq's: 5 when the last input failed, whatever came before, and
+under `-e` the last input's result, else the last input with output's.
+
+The location is jq's: `<stdin>` or the file name, then the number of complete
+lines read when the error is reported. jq reads a line at a time, so `1 2 3`
+with no newline reports `:0` for each value, and `1 \n2` reports `:1` for
+both. Before any input is read, under `-n`, it is `<unknown>`. The message
+is translated by the same rules as a `catch` handler's (`jaq/src/jq.rs` in
+`packaging/jaq/0008-uncaught-errors.patch`), so the two always agree.
+
+Limits:
+
+- With several input files, Pathfinder concatenates them onto jaq's stdin
+  (see "Several input files are one stream" below), so the location reads
+  `<stdin>:N`, counted across the files, where jq names each file and
+  restarts the count.
+- A message outside the translation table keeps jaq's words in both places,
+  for instance `test` on a number: `cannot use 1 as string`, where jq says
+  `number (1) cannot be matched, as it is not a string`.
+- When stdout and stderr are the same file, jq writes its outputs in blocks
+  and jaq per value, so the two interleave differently. Each stream on its
+  own is jq's.
+- Counting lines costs nothing measurable on file input and on line-delimited
+  stdin (14 MB of JSON lines: 5% *fewer* cycles than before); one 29 MB
+  single-line document on stdin takes 6–11% more.
 
 ## Error messages a script can see
 
@@ -128,8 +162,9 @@ Limits:
 
 jq holds every number as a double, keeping a literal's text until it is
 computed on; jaq has integers, floats and literals. The Nix package of
-Pathfinder pins a jaq patched to close this gap (`packaging/jaq/`, five small
-patches applied to jaq 3.1.1). The table shows both: what a stock jaq gives,
+Pathfinder pins a jaq patched to close this gap (`packaging/jaq/`, small
+patches applied to jaq 3.1.1; the last four repair object keys, `debug`,
+uncaught errors and `halt_error`). The table shows both: what a stock jaq gives,
 and what the packaged one gives.
 
 | Filter | jq 1.8.1 | stock jaq | packaged jaq |
@@ -147,7 +182,7 @@ The packaged jaq prints a decimal literal the way jq's decNumber does (`1E+3`,
 `1.000`, `1E-7`), computes integers beyond 2^53 in doubles as jq does, and is
 no slower: printing 500,000 objects took 2.8–3.1 s against stock jaq's
 3.3 s (jq: 4.2 s), measured interleaved on a loaded host. Its `--version`
-reads `jaq 3.1.1+pathfinder.1`, and the conformance suite holds it to its own
+reads `jaq 3.1.1+pathfinder.2`, and the conformance suite holds it to its own
 ratchet, `tests/jq-suite/FLOOR-patched`.
 
 ## Unsupported, with a diagnostic
@@ -187,10 +222,13 @@ When no output transform is needed, Pathfinder replaces its own process with
 jaq's. It therefore never sees jaq's exit code or stderr and cannot retouch
 either.
 
-In practice this costs nothing, because the exit codes already agree: `-e` on
+On the packaged jaq this costs nothing, because the exit codes agree: `-e` on
 `false`/`null` → 1, `-e` with no output → 4, `halt_error` → 5, `halt_error(7)` →
 7, compile error → 3, usage error → 2, and malformed JSON input → 5 in **both**
 (an earlier draft of this document claimed jq exits 2 here; that was wrong).
+A stock jaq stops at the first uncaught error and exits 5, where jq goes on
+to the next input and exits with the last input's status: `1 {}` through
+`.a` exits 0 in jq.
 
 ## Things that needed no work at all
 
