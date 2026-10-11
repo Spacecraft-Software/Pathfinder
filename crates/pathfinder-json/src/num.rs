@@ -484,7 +484,11 @@ fn jq_float(x: f64) -> String {
             out.push_str(&digits[1..]);
         }
         let e = decpt - 1;
-        out.push_str(&alloc::format!("e{}{:02}", if e < 0 { '-' } else { '+' }, e.abs()));
+        out.push_str(&alloc::format!(
+            "e{}{:02}",
+            if e < 0 { '-' } else { '+' },
+            e.abs()
+        ));
     } else if decpt <= 0 {
         out.push_str("0.");
         out.extend(core::iter::repeat_n('0', (-decpt) as usize));
@@ -531,7 +535,9 @@ fn jq_dec(n: &str) -> Option<String> {
         None => (n, 0),
     };
     let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    if int.is_empty() && frac.is_empty() || !(int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit())) {
+    if int.is_empty() && frac.is_empty()
+        || !(int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit()))
+    {
         return None;
     }
     let all: String = alloc::format!("{int}{frac}");
@@ -562,7 +568,11 @@ fn jq_dec(n: &str) -> Option<String> {
             out.push('.');
             out.push_str(&coeff[1..]);
         }
-        out.push_str(&alloc::format!("E{}{}", if adjusted < 0 { '-' } else { '+' }, adjusted.abs()));
+        out.push_str(&alloc::format!(
+            "E{}{}",
+            if adjusted < 0 { '-' } else { '+' },
+            adjusted.abs()
+        ));
     }
     Some(out)
 }

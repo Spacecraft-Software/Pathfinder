@@ -79,7 +79,9 @@ applied in order with `git apply`, their `jaq-core/`, `jaq-std/`, `jaq-json/`
 and `jaq-fmts/` paths rewritten to `crates/pathfinder-*/`. Every hunk applied
 cleanly. The result was checked with `diff -r` against the tree the patches
 were cut from (the import base plus one commit per patch): the four crates
-are identical to it but for their manifests.
+are identical to it but for their manifests. A following commit runs
+`cargo fmt` over the two `pathfinder-json` files the patches left unformatted
+(`lib.rs`, `num.rs`); it changes layout only.
 
 | Patch | Applied here |
 |---|---|

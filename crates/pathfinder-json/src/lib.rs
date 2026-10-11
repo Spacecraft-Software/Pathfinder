@@ -630,7 +630,11 @@ impl core::ops::Mul for Val {
                 if d < 0.0 || d.is_nan() {
                     return Ok(Null);
                 }
-                let count = if d > f64::from(i32::MAX) { i32::MAX as usize } else { d as usize };
+                let count = if d > f64::from(i32::MAX) {
+                    i32::MAX as usize
+                } else {
+                    d as usize
+                };
                 let len = match &s {
                     BStr(b) | TStr(b) => b.len(),
                     _ => unreachable!(),
