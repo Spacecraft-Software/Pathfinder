@@ -169,6 +169,62 @@ pub fn parse(argv: &[OsString]) -> Result<JqArgs, ParseError> {
     Ok(out)
 }
 
+/// The indices of the argv entries jq reads as options: not bare words, not the
+/// values an option consumes, and nothing after `--`.
+///
+/// Pathfinder's native surface recognises its own flags only where jq would
+/// read a flag. `--arg v --version` binds `$v` to the string `--version`; it
+/// does not ask for a version, and its `--json` must not be lifted either.
+/// `--args`/`--jsonargs` do not end option processing: they change only what a
+/// later bare word means.
+pub fn option_positions(argv: &[OsString]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < argv.len() {
+        let bytes = argv[i].as_encoded_bytes();
+        if bytes == b"--" {
+            break;
+        }
+        if is_optish(bytes) {
+            out.push(i);
+            i += operand_count(bytes);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// How many following argv entries the option `bytes` consumes, as [`parse`]
+/// reads it. A malformed option is counted as taking none; `parse` rejects it.
+fn operand_count(bytes: &[u8]) -> usize {
+    match bytes {
+        b"--arg" | b"--argjson" | b"--rawfile" | b"--slurpfile" => 2,
+        b"--indent" | b"--library-path" => 1,
+        [b'-', b'-', ..] => 0,
+        // A short bundle: `L` swallows the rest of it, and takes the next entry
+        // only when nothing of the bundle is left.
+        [b'-', cluster @ ..] => {
+            usize::from(cluster.iter().position(|&b| b == b'L') == Some(cluster.len() - 1))
+        }
+        _ => 0,
+    }
+}
+
+/// Whether the option at an [option position](option_positions) asks for
+/// jq's version: `--version`, or a short bundle holding `V` before any `L`
+/// (after `L`, the letters are its path).
+pub fn is_version_option(arg: &OsString) -> bool {
+    match arg.as_encoded_bytes() {
+        b"--version" => true,
+        [b'-', b'-', ..] => false,
+        [b'-', cluster @ ..] => cluster
+            .iter()
+            .take_while(|&&b| b != b'L')
+            .any(|&b| b == b'V'),
+        _ => false,
+    }
+}
+
 /// Assign a bare word to the program slot, an input file, or `$ARGS.positional`.
 fn take_bare_word(out: &mut JqArgs, word: OsString) {
     if out.program.is_none() {
@@ -343,7 +399,10 @@ fn parse_short_cluster(
 
 #[cfg(test)]
 mod tests {
-    use super::{JqArgs, NamedValue, OutputFormat, ParseError, PositionalMode, parse};
+    use super::{
+        JqArgs, NamedValue, OutputFormat, ParseError, PositionalMode, is_version_option,
+        option_positions, parse,
+    };
     use std::ffi::OsString;
 
     fn argv(parts: &[&str]) -> Vec<OsString> {
@@ -525,6 +584,59 @@ mod tests {
             ok(&["--tab", "--indent", "3", "."]).flags.output_format,
             Some(OutputFormat::Indent(3))
         );
+    }
+
+    #[test]
+    fn option_positions_skip_values_and_stop_at_double_dash() {
+        let a = argv(&[
+            "--arg",
+            "v",
+            "--version",
+            "-L",
+            "-V",
+            "-rL/x",
+            "--indent",
+            "2",
+            "--args",
+            "--json",
+            ".",
+            "--",
+            "--explain",
+        ]);
+        let pos: Vec<&str> = option_positions(&a)
+            .into_iter()
+            .map(|i| a[i].to_str().expect("UTF-8"))
+            .collect();
+        assert_eq!(
+            pos,
+            ["--arg", "-L", "-rL/x", "--indent", "--args", "--json"]
+        );
+        // `parse` consumes the same values: `--version` and `-V` are bound, not
+        // flags, so no version is asked for.
+        let parsed = ok(&[
+            "--arg",
+            "v",
+            "--version",
+            "-L",
+            "-V",
+            "-rL/x",
+            "--indent",
+            "2",
+            ".",
+        ]);
+        assert!(!parsed.flags.version);
+        assert_eq!(parsed.flags.lib_paths, argv(&["-V", "/x"]));
+        assert_eq!(program(&parsed), ".");
+    }
+
+    #[test]
+    fn version_options_include_short_bundles() {
+        for yes in ["--version", "-V", "-nV", "-VL/x"] {
+            assert!(is_version_option(&OsString::from(yes)), "{yes}");
+        }
+        for no in ["--versions", "-LV", "-n", "--", "V", "-rLV"] {
+            assert!(!is_version_option(&OsString::from(no)), "{no}");
+        }
     }
 
     #[test]

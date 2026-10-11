@@ -26,6 +26,8 @@
 mod compat;
 mod diag;
 mod jqargs;
+mod json;
+mod mode;
 mod native;
 mod post;
 mod prelude;
@@ -44,12 +46,6 @@ use std::process::{Command, Stdio};
 /// jq's own `--help` output, reproduced so the shim answers exactly as jq does.
 const JQ_HELP: &str = include_str!("embed/jq-help.txt");
 
-/// The jq release Pathfinder reproduces.
-///
-/// Reported by `--version` because scripts grep for `jq-1.` to gate features;
-/// answering with a Pathfinder version string would fail those checks.
-const JQ_BASELINE_VERSION: &str = "jq-1.8.1";
-
 /// Environment variable naming the jaq binary, for testing and for packaging
 /// that wants to pin a store path rather than trust `PATH`.
 const JAQ_ENV: &str = "PATHFINDER_JAQ";
@@ -65,49 +61,52 @@ fn main() {
 
     // Pathfinder's own verbs are lifted out first, and only under its own name:
     // through the `jq` symlink they stay unknown options, exactly as with jq.
-    let verb = if invoked.allows_own_verbs() {
+    // The output mode is likewise decided only on the native side, so nothing
+    // in the environment can reach a `jq` call's output.
+    let native = invoked.allows_own_verbs();
+    let lifted = if native {
         native::take_verb(&mut argv)
     } else {
-        None
+        native::Lifted::default()
     };
-    if let Some(native::Verb::InstallShim { dir, force }) = &verb {
-        match native::install_shim(dir, *force) {
-            Ok(native::Installed::Created(p)) => {
-                println!("installed {} -> this binary", p.display());
-                println!(
-                    "add {} to PATH ahead of any real jq to use it.",
-                    dir.display()
-                );
-            }
-            Ok(native::Installed::Refused(why)) => {
-                eprintln!("{prog}: {why}");
-                std::process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("{prog}: could not install the shim: {e}");
-                std::process::exit(1);
-            }
-        }
-        return;
+    if let Some(native::Verb::InstallShim { dir, force }) = &lifted.verb {
+        let mode = mode::detect(lifted.json);
+        std::process::exit(native::run_install_shim(dir, *force, mode));
     }
+
+    // A JSON-mode report (`--explain`, `--version`) fails with the Standard's
+    // structured error instead of jq's text. `None` under the name `jq`, so
+    // every failure below keeps jq's bytes there.
+    let report = if native { lifted.json_report() } else { None };
 
     let args = match jqargs::parse(&argv[1.min(argv.len())..]) {
         Ok(a) => a,
-        Err(e) => diag::die(prog, &e.message),
+        Err(e) => {
+            if let Some(r) = &report {
+                r.fail(&native::Failure::invalid_argument(&e.message));
+            }
+            diag::die(prog, &e.message)
+        }
     };
 
     if args.flags.help {
         print!("{JQ_HELP}");
-        if invoked.allows_own_verbs() {
-            eprintln!(
-                "\n(pathfinder {}: a jq-compatible shim over jaq)",
-                env!("CARGO_PKG_VERSION")
-            );
+        if native {
+            eprint!("{}", native::help_trailer());
         }
         return;
     }
     if args.flags.version {
-        println!("{JQ_BASELINE_VERSION}");
+        if native {
+            let (path, source) = jaq_binary();
+            let engine = native::Engine {
+                path: &path,
+                source: source.label(),
+            };
+            native::version(&engine, mode::detect(lifted.json));
+        } else {
+            println!("{}", native::JQ_BASELINE_VERSION);
+        }
         return;
     }
     if args.flags.build_configuration {
@@ -118,6 +117,9 @@ fn main() {
         return;
     }
     if args.program.is_none() {
+        if let Some(r) = &report {
+            r.fail(&native::Failure::missing_filter());
+        }
         // jq with no filter prints usage and exits 2.
         eprint!("{JQ_HELP}");
         std::process::exit(diag::EXIT_USAGE);
@@ -131,15 +133,23 @@ fn main() {
 
     let plan = match translate::plan(&args, &read_filter_file) {
         Ok(p) => p,
-        Err(translate::Refusal::Unsupported(u)) => diag::unsupported(prog, &u.feature, &u.detail),
+        Err(translate::Refusal::Unsupported(u)) => {
+            if let Some(r) = &report {
+                r.fail(&native::Failure::unsupported(&u));
+            }
+            diag::unsupported(prog, &u.feature, &u.detail)
+        }
         Err(translate::Refusal::Compile { error, source }) => {
+            if let Some(r) = &report {
+                r.fail(&native::Failure::compile(&error, &source));
+            }
             eprint!("{}", error.render(prog, &source));
             std::process::exit(diag::EXIT_COMPILE);
         }
     };
 
-    if matches!(verb, Some(native::Verb::Explain)) {
-        native::explain(&plan);
+    if matches!(lifted.verb, Some(native::Verb::Explain)) {
+        native::explain(&plan, mode::detect(lifted.json));
         return;
     }
 
@@ -200,17 +210,43 @@ fn read_filter_file(path: &OsString) -> io::Result<String> {
 /// this binary exists to keep.
 const PINNED_JAQ: Option<&str> = option_env!("PATHFINDER_DEFAULT_JAQ");
 
+/// Which step of the lookup in [`jaq_binary`] supplied the engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JaqSource {
+    /// The [`JAQ_ENV`] runtime override.
+    Env,
+    /// The build-time pin, [`PINNED_JAQ`].
+    Pinned,
+    /// Whatever `jaq` resolves to on `PATH`.
+    Path,
+}
+
+impl JaqSource {
+    /// The name `pathfinder --version` reports.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Env => JAQ_ENV,
+            Self::Pinned => "pinned",
+            Self::Path => "PATH",
+        }
+    }
+}
+
 /// Locate the jaq binary: the runtime override, then the build-time pin, then
 /// whatever `jaq` resolves to on `PATH`.
-fn jaq_binary() -> OsString {
-    env::var_os(JAQ_ENV)
-        .or_else(|| PINNED_JAQ.map(OsString::from))
-        .unwrap_or_else(|| OsString::from("jaq"))
+fn jaq_binary() -> (OsString, JaqSource) {
+    if let Some(jaq) = env::var_os(JAQ_ENV) {
+        return (jaq, JaqSource::Env);
+    }
+    match PINNED_JAQ {
+        Some(jaq) => (OsString::from(jaq), JaqSource::Pinned),
+        None => (OsString::from("jaq"), JaqSource::Path),
+    }
 }
 
 /// Replace this process with jaq. Only returns on failure.
 fn exec(prog: &str, argv: &[OsString]) -> ! {
-    let jaq = jaq_binary();
+    let (jaq, _) = jaq_binary();
     let err = Command::new(&jaq).args(argv).exec();
     // `exec` returns only when the replacement failed.
     eprintln!("{prog}: could not execute {}: {err}", jaq.to_string_lossy());
@@ -223,7 +259,7 @@ fn exec(prog: &str, argv: &[OsString]) -> ! {
 /// stderr is inherited rather than captured, so jaq's diagnostics, `debug`
 /// output and colour decisions reach the terminal untouched.
 fn pipe(prog: &str, plan: &translate::Plan) -> i32 {
-    let jaq = jaq_binary();
+    let (jaq, _) = jaq_binary();
     let mut command = Command::new(&jaq);
     command
         .args(&plan.argv)

@@ -23,7 +23,8 @@ pub const EXIT_COMPILE: i32 = 3;
 pub fn die(prog: &str, message: &str) -> ! {
     eprintln!("{prog}: {message}");
     eprintln!("Use {prog} --help for help with command-line options,");
-    eprintln!("or see the jq manpage, or online docs at https://jqlang.org");
+    // Two spaces before "at": jq 1.8.1's own text, measured, not a typo here.
+    eprintln!("or see the jq manpage, or online docs  at https://jqlang.org");
     std::process::exit(EXIT_USAGE);
 }
 

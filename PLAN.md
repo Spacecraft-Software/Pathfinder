@@ -120,6 +120,7 @@ Found by auditing step 3 against `spacecraft-cli-standard` and
 Only the native `pathfinder` name is in scope: under the name `jq` the
 command line must stay jq's, byte for byte (see AGENTS.md).
 
-- [ ] P-034 `pathfinder --explain --json`: the plan as one JSON document on stdout
-- [ ] P-035 `pathfinder --version`: Pathfinder's version, maintainer and URL
-- [ ] P-036 A root `SKILL.md` describing the shim for agents
+- [x] P-034 `pathfinder --explain --json`: the plan as one JSON document on stdout
+- [x] P-035 `pathfinder --version`: Pathfinder's version, maintainer and URL
+- [x] P-036 A root `SKILL.md` describing the shim for agents
+- [x] P-037 `--install-shim` reports in the same modes; a refusal is a conflict (exit 5) with a runnable hint

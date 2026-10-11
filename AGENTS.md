@@ -54,8 +54,35 @@ jq 1.8.1's — that compatibility is the product, and the Spacecraft CLI
 Standard's global flags (`--json`, `--format`, `--quiet`, …) would collide
 with jq's own. Agent detection (`AI_AGENT`, `AGENT`, `CI`) must not change
 anything a `jq` call prints; the differential suite runs under a live agent
-environment and proves it. The Standard governs the native `pathfinder`
-surface (`--explain`, `--install-shim`); its open gaps are PLAN.md M16.
+environment and proves it.
+
+The Standard governs the native `pathfinder` surface: `--explain`,
+`--version` and `--install-shim`. Each reports as text or as one compact JSON
+envelope (`{"metadata":…,"data":…}`), chosen by the cascade in `src/mode.rs`:
+`--json`, then a non-empty `AI_AGENT`/`AGENT`, then a truthy `CI`, then a
+terminal on stdout means text, else JSON. Every failure of a report in JSON
+mode — usage, missing filter, compile error, unsupported feature, install
+failure — goes to stderr as one `{"error":…}` line, with a runnable `hint`
+when one is known (never a guessed one); compile errors keep jq's exit 3,
+`--install-shim` exits 5 on a conflict and 4 on a permission failure. The
+route is `Lifted::json_report`, which is `None` under the `jq` name, so
+`diag::die` and `error.render` stay the only failure text a `jq` call can
+print. To keep the `jq` name untouched:
+
+- `--json` is lifted out of argv only under the native name and only beside a
+  native verb or `--version`/`-V`; anywhere else it reaches the jq parser and
+  is rejected as jq rejects it (exit 2). Flags and verbs count only in option
+  position (`jqargs::option_positions`): an option's value (`--arg x --json`)
+  or a word after `--` is the user's data and is never lifted.
+- The mode is decided inside the native branches, so a `jq` call never reads
+  the agent variables. `CLAUDECODE`/`CURSOR_AGENT`/`GEMINI_CLI` only label
+  `metadata.invoking_agent`.
+- `jq --version` stays `jq-1.8.1`, and `jq --help` stays jq's text; the
+  native `--help` adds a trailer on stderr.
+- `--version` reports the jaq lookup without spawning jaq; the lookup order
+  lives once, in `main.rs`'s `jaq_binary`.
+- No runtime dependency for this: `src/json.rs` writes the JSON. `serde_json`
+  is a dev-dependency, used by `tests/native.rs` to parse the output.
 
 ## Architectural invariants
 
@@ -170,7 +197,9 @@ pass rates; `V=1` lists every failure.
 | `src/program.rs` | Program assembly: module header, prelude, `$ARGS` wrap, `$__loc__`. |
 | `src/translate.rs` | jq argv → jaq argv. The only module that knows both dialects. |
 | `src/post.rs` | `-a` and `--seq` byte transforms. |
-| `src/native.rs` | `--explain` / `--install-shim`, reachable only under the native name. |
+| `src/native.rs` | `--explain` / `--version` / `--install-shim`, their text and JSON reports, and structured errors; reachable only under the native name. |
+| `src/mode.rs` | The native verbs' output-mode cascade (CLI Standard §5). |
+| `src/json.rs` | Minimal JSON writer (RFC 8259 escaping) for the native reports; std-only. |
 | `src/syntax/lex.rs`, `parse.rs` | jq's lexer and grammar, transcribed. Every node keeps its span. |
 | `src/regex.rs` | Facts about literal regexes for the regex repairs: group naming (mirrors the prelude's run-time scan), whether a group can be skipped, whether the regex can match empty. |
 | `src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
@@ -179,6 +208,8 @@ pass rates; `V=1` lists every failure.
 | `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); verified to apply and pass on 3.1.0, which Bravais builds by making this flake follow its stable nixpkgs. MIT, like jaq; never sent upstream. |
 | `tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
 | `tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
+| `tests/native.rs` | The native surface: mode cascade, JSON shapes, exit codes, and that the `jq` name is unchanged under an agent environment. |
+| `SKILL.md` | Agent-facing description of the shim. Frontmatter first, so its licence is in `REUSE.toml`; keep `description` ≤ 1000 rendered characters. |
 
 ## Forbidden patterns
 
