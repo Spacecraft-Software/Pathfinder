@@ -230,3 +230,20 @@ shim today with the engine main pins. Minimal reproduction:
 `jaq -nc '1 | significand'` with the packaged engine. The repair belongs in
 the engine (T-004/T-006 own the crate sources on the parallel branch) and its
 cases in `tests/differential.rs`.
+
+### Known coupling: `pathfinder-std` needs `pathfinder-json`
+
+Patch 0009 rewrites `halt_error` in `pathfinder-std/src/defs.jq` to call
+`tojson`, a native that `pathfinder-json` defines. Upstream, `jaq-std`'s
+definitions compile against `jaq-core`'s and its own natives alone; now
+compiling them without `jaq_json::funs()` fails, whatever the filter. With
+a loader over `jaq_core::defs().chain(jaq_std::defs())` and a compiler over
+`jaq_core::funs().chain(jaq_std::funs())`, the program `.` fails with
+`[(File { code: "", path: () }, [("tojson", Filter(0))])]`, an undefined
+`tojson/0`.
+
+Pathfinder always loads all three, so no `jq` call is affected, and the
+crate's tests now load the JSON natives too. A standalone user of the std
+crate would be. Two ways to repair it in the sources: move `halt_error` into
+`pathfinder-json/src/defs.jq`, next to `tojson`, or merge the crates when the
+engine's crate layout is settled.
