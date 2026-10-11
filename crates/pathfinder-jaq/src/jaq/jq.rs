@@ -507,24 +507,30 @@ fn wording(m: &str) -> Option<String> {
         });
     }
     let rest = m.strip_prefix("cannot calculate ")?;
-    [" + ", " - ", " * ", " / ", " % "].into_iter().find_map(|op| {
-        rest.match_indices(op).find_map(|(i, _)| {
-            let (a, b) = (value(&rest[..i])?, value(&rest[i + 3..])?);
-            let verb = match op {
-                " + " => "cannot be added",
-                " - " => "cannot be subtracted",
-                " * " => "cannot be multiplied",
-                " / " => "cannot be divided",
-                _ => "cannot be divided (remainder)",
-            };
-            let zero = matches!((&a, &b), (Val::Num(_), Val::Num(_)))
-                && b > Val::from(-1_isize)
-                && b < Val::from(1_isize)
-                && matches!(op, " / " | " % ");
-            let why = if zero { " because the divisor is zero" } else { "" };
-            Some(format!("{} and {} {verb}{why}", dumped(&a), dumped(&b)))
+    [" + ", " - ", " * ", " / ", " % "]
+        .into_iter()
+        .find_map(|op| {
+            rest.match_indices(op).find_map(|(i, _)| {
+                let (a, b) = (value(&rest[..i])?, value(&rest[i + 3..])?);
+                let verb = match op {
+                    " + " => "cannot be added",
+                    " - " => "cannot be subtracted",
+                    " * " => "cannot be multiplied",
+                    " / " => "cannot be divided",
+                    _ => "cannot be divided (remainder)",
+                };
+                let zero = matches!((&a, &b), (Val::Num(_), Val::Num(_)))
+                    && b > Val::from(-1_isize)
+                    && b < Val::from(1_isize)
+                    && matches!(op, " / " | " % ");
+                let why = if zero {
+                    " because the divisor is zero"
+                } else {
+                    ""
+                };
+                Some(format!("{} and {} {verb}{why}", dumped(&a), dumped(&b)))
+            })
         })
-    })
 }
 
 /// jq's name for the type of `v`.
