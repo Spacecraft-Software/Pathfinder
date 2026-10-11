@@ -57,3 +57,15 @@ SPDX-License-Identifier = "MIT"
 path = ["crates/pathfinder/tests/jq-suite/FLOOR-patched"]
 SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# The engine: jaq 3.1.1's jaq-core, jaq-std, jaq-json and jaq-fmts, imported
+# as a hard fork (crates/UPSTREAM.md) with packaging/jaq/ applied. jaq is MIT
+# and its files carry no headers; upstream states its copyright only through
+# the crates' `authors` field, quoted here. The imported files keep that
+# licence and that notice (Standard §4.2); Pathfinder's changes to them are
+# MIT too. Named crate by crate so that a new Pathfinder crate is not
+# swallowed by a glob.
+[[annotations]]
+path = ["crates/pathfinder-core/**", "crates/pathfinder-std/**", "crates/pathfinder-json/**", "crates/pathfinder-fmts/**"]
+SPDX-FileCopyrightText = ["Michael Färber <michael.faerber@gedenkt.at> and jaq contributors", "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
+SPDX-License-Identifier = "MIT"

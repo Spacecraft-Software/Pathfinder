@@ -14,10 +14,17 @@ yields!(bsearch_absent2, "[1, 3] | bsearch(2)", -2);
 yields!(bsearch_absent3, "[1, 3] | bsearch(4)", -3);
 yields!(bsearch_present, "[1, 3] | [bsearch(1, 3)]", [0, 1]);
 
+// Pathfinder: jq's `fromjson` rejects a string holding several values, and
+// it prints an infinity as the largest double (patches 0002, 0004, 0013);
+// measured from jq 1.8.1.
 yields!(
     fromjson_inf,
-    r#""Infinity +Infinity -Infinity" | [fromjson | tostring]"#,
-    ["Infinity", "Infinity", "-Infinity"]
+    r#"[("Infinity", "+Infinity", "-Infinity") | fromjson | tostring]"#,
+    [
+        "1.7976931348623157e+308",
+        "1.7976931348623157e+308",
+        "-1.7976931348623157e+308"
+    ]
 );
 yields!(fromjson_uint, r#"" 1" | fromjson"#, 1);
 yields!(fromjson_pint, r#""+1" | fromjson"#, 1);
@@ -76,9 +83,16 @@ yields!(length_float_neg, "-2.5 | length", 2.5);
 
 yields!(tojson_fl0, "1.0 | tojson", "1.0");
 yields!(tojson_fl1, "1.1 | tojson", "1.1");
-yields!(tojson_nan, "0.0 / 0.0 | tojson", "NaN");
-yields!(tojson_inf, "1.0 / 0.0 | tojson", "Infinity");
-yields!(tojson_ninf, "-1.0 / 0.0 | tojson", "-Infinity");
+// Pathfinder: jq writes NaN as `null` and an infinity as the largest double
+// (patch 0002). jq rejects a division by zero, so the values come from `nan`
+// and `infinite`; measured from jq 1.8.1.
+yields!(tojson_nan, "nan | tojson", "null");
+yields!(tojson_inf, "infinite | tojson", "1.7976931348623157e+308");
+yields!(
+    tojson_ninf,
+    "-infinite | tojson",
+    "-1.7976931348623157e+308"
+);
 
 #[test]
 fn tonumber() {
@@ -108,9 +122,11 @@ fn toboolean() {
 
 #[test]
 fn math_rem() {
-    // generated with this command with modification for errors and float rounding
-    // cargo run -- -rn 'def f: -2, -1, 0, 2.1, 3, 2000000001; f as $a | f as $b | "give!(json!(null), \"\($a) / \($b)\", \(try ($a % $b) catch tojson));"'
-    // TODO: use fail!()?
+    // Pathfinder: jq 1.8.1 truncates both operands to integers before taking
+    // the remainder (patch 0012). Every value below was measured from jq 1.8.1
+    // except the wording of the `cannot calculate` errors, which is still
+    // jaq's (jq: "number (-2) and number (0) cannot be divided (remainder)
+    // because the divisor is zero"); the engine takes jq's wording in M20.
     give(json!(null), "-2 % -2", json!(0));
     give(json!(null), "-2 % -1", json!(0));
     give(
@@ -118,7 +134,7 @@ fn math_rem() {
         "try (-2 % 0) catch .",
         json!("cannot calculate -2 % 0"),
     );
-    give(json!(null), "-2 % 2.1", json!(-2.0));
+    give(json!(null), "-2 % 2.1", json!(0));
     give(json!(null), "-2 % 3", json!(-2));
     give(json!(null), "-2 % 2000000001", json!(-2));
     give(json!(null), "-1 % -2", json!(-1));
@@ -128,7 +144,7 @@ fn math_rem() {
         "try (-1 % 0) catch .",
         json!("cannot calculate -1 % 0"),
     );
-    give(json!(null), "-1 % 2.1", json!(-1.0));
+    give(json!(null), "-1 % 2.1", json!(-1));
     give(json!(null), "-1 % 3", json!(-1));
     give(json!(null), "-1 % 2000000001", json!(-1));
     give(json!(null), "0 % -2", json!(0));
@@ -138,15 +154,19 @@ fn math_rem() {
         "try (0 % 0) catch .",
         json!("cannot calculate 0 % 0"),
     );
-    give(json!(null), "0 % 2.1", json!(0.0));
+    give(json!(null), "0 % 2.1", json!(0));
     give(json!(null), "0 % 3", json!(0));
     give(json!(null), "0 % 2000000001", json!(0));
-    give(json!(null), "2.1 % -2 | . * 1000 | round", json!(100));
-    give(json!(null), "2.1 % -1 | . * 1000 | round", json!(100));
-    give(json!(null), "2.1 % 0 | isnan", json!(true));
-    give(json!(null), "2.1 % 2.1", json!(0.0));
-    give(json!(null), "2.1 % 3", json!(2.1));
-    give(json!(null), "2.1 % 2000000001", json!(2.1));
+    give(json!(null), "2.1 % -2 | . * 1000 | round", json!(0));
+    give(json!(null), "2.1 % -1 | . * 1000 | round", json!(0));
+    give(
+        json!(null),
+        r#"try (2.1 % 0) catch "error""#,
+        json!("error"),
+    );
+    give(json!(null), "2.1 % 2.1", json!(0));
+    give(json!(null), "2.1 % 3", json!(2));
+    give(json!(null), "2.1 % 2000000001", json!(2));
     give(json!(null), "3 % -2", json!(1));
     give(json!(null), "3 % -1", json!(0));
     give(
@@ -154,7 +174,7 @@ fn math_rem() {
         "try (3 % 0) catch .",
         json!("cannot calculate 3 % 0"),
     );
-    give(json!(null), "3 % 2.1 | . * 1000 | round", json!(900));
+    give(json!(null), "3 % 2.1 | . * 1000 | round", json!(1000));
     give(json!(null), "3 % 3", json!(0));
     give(json!(null), "3 % 2000000001", json!(3));
     give(json!(null), "2000000001 % -2", json!(1));
@@ -167,7 +187,7 @@ fn math_rem() {
     give(
         json!(null),
         "2000000001 % 2.1 | . * 1000 | round",
-        json!(1800), // 1000 in jq
+        json!(1000),
     );
     give(json!(null), "2000000001 % 3", json!(0));
     give(json!(null), "2000000001 % 2000000001", json!(0));

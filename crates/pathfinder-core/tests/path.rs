@@ -29,9 +29,10 @@ fn index_access() {
     give(json!({"_a": 1}), "._a", json!(1));
     give(json!({"_0": 1}), "._0", json!(1));
 
-    // this diverges from jq, which fails here, because
-    // jaq can create objects with non-string keys
-    give(json!({"a": 1}), r#".[0]"#, json!(null));
+    // Pathfinder: jq fails here, and so does the engine since patch 0006
+    // ("Cannot index object with number" in jq 1.8.1; the engine's wording is
+    // still jaq's until M20). Measured from jq 1.8.1: `[.[0]?]` gives `[]`.
+    gives(json!({"a": 1}), r#".[0]?"#, []);
 
     give(json!([0, 1, 2]), r#".["a", 0, 0 == 0]?"#, json!(0));
     give(json!([0, 1, 2]), r#".[3]?"#, json!(null));
