@@ -1,0 +1,37 @@
+[package]
+name = "pathfinder-fmts"
+version = "0.1.1"
+authors = ["Michael Färber <michael.faerber@gedenkt.at>"]
+edition = "2021"
+license = "MIT"
+readme = "../../README.md"
+description = "JSON and raw-text input and output for jaq"
+repository = "https://github.com/01mf02/jaq"
+keywords = ["jq"]
+# Pathfinder: the workspace lints (`clippy::cargo`) require categories.
+categories = ["encoding", "parser-implementations"]
+# Pathfinder: 1.82, not jaq's 1.70, as `pathfinder-json` needs.
+rust-version = "1.82"
+
+# Pathfinder: the package is renamed, the library keeps its upstream name so
+# the imported sources compile unchanged (crates/UPSTREAM.md).
+[lib]
+name = "jaq_fmts"
+
+# Pathfinder (TODO T-004): the per-format features (`all`, `cbor`, `toml`,
+# `xml`, `yaml`, `tabular`) went with the formats; JSON, raw text and the
+# `@csv`/`@tsv` writers are always built.
+
+[dependencies]
+jaq-core = { workspace = true }
+jaq-std  = { workspace = true }
+jaq-json = { workspace = true, features = ["std"] }
+
+aho-corasick = "1.0"
+bstr = "1"
+bytes = "1.10.1"
+
+# Pathfinder (TODO T-006): the workspace lint set, `unsafe_code = "forbid"`
+# included.
+[lints]
+workspace = true

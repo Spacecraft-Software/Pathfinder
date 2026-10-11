@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "pathfinder-jq"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+readme = "../../README.md"
+description = "jq-compatible shim over jaq: translates jq's command line and filter syntax, then execs jaq"
+homepage = "https://Pathfinder.SpacecraftSoftware.org/"
+repository = "https://github.com/Spacecraft-Software/pathfinder"
+authors = ["Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
+categories = ["command-line-utilities"]
+keywords = ["jq", "jaq", "json", "shim", "compatibility"]
+
+[[bin]]
+name = "pathfinder"
+path = "src/main.rs"
+
+# No runtime dependencies, deliberately.
+#
+# Pathfinder's whole job is to hand off to `jaq` as fast as possible: the common
+# path is parse-argv-then-execve, which std covers completely. Pulling in clap
+# would also be actively wrong — jq's command line is positional and
+# order-sensitive in ways clap cannot express (see `src/jqargs.rs`). This
+# mirrors `doas-rs/crates/sudo-shim`, which is a shim for the same reason.
+#
+# M-MIMALLOC-APPS is deliberately NOT applied: the process allocates a few
+# hundred bytes of argv strings and then replaces its own image with execve.
+# There is no allocating hot path for mimalloc to improve, and linking it would
+# add startup cost to a binary whose entire value proposition is being
+# unmeasurable next to the jaq run it fronts (Standard §3.2 trade-off note).
+[dependencies]
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+# Conformance runner only: parses jq's expected outputs as JSON values.
+serde_json = "1"
+
+[lints]
+workspace = true

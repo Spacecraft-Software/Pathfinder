@@ -6,10 +6,16 @@ file is only what is true *here*.
 
 ## What this is
 
-A single-crate binary, `pathfinder`, installed with a `jq` symlink beside it. It
+A binary, `pathfinder`, installed with a `jq` symlink beside it. It
 translates jq's command line into jaq's, rewrites the filter where jaq would run
 it differently, and hands off. It parses jq (`src/syntax/`) but evaluates
 nothing.
+
+The repository is a Cargo workspace. The shim is `crates/pathfinder`; paths
+like `src/…` and `tests/…` in this file are relative to it. The root
+`Cargo.toml` holds the lint set and the release profile, and its
+`default-members` keeps a bare `cargo build`/`test`/`clippy` on the shim;
+`--workspace` reaches every crate.
 
 Baseline is **jq 1.8.1**. The differential suite passes unchanged against jaq
 **3.0.0, 3.1.0 and 3.1.1**; CI pins 3.1.0, the version nixpkgs 26.05 ships and
@@ -21,10 +27,21 @@ because it answers jq's way across concatenated multi-file input.
 
 ```sh
 cargo build --release
-cargo test                       # unit + differential
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
+cargo test                       # the shim: unit + differential
+cargo test --workspace --exclude pathfinder-jq   # the engine crates
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
 make check                       # all of the above
+```
+
+The engine crates build with the workspace (`cargo build --workspace`).
+`crates/pathfinder-jaq` builds a `jaq`-compatible binary from them, the test
+vehicle for the fork until M19 evaluates in process; run the suites against it
+as the engine:
+
+```sh
+cargo build --release -p pathfinder-jaq
+PATHFINDER_JAQ=$PWD/target/release/pathfinder-jaq cargo test
 ```
 
 ## The rule that matters most
@@ -215,6 +232,11 @@ pass rates; `V=1` lists every failure.
   regenerate `packaging/jaq/*.patch` with `git diff`. Never touch jaq's
   `Cargo.toml`/`Cargo.lock`: the Nix build reuses the upstream vendored
   dependencies.
+- **Until `packaging/jaq/` is retired (P-078), an engine fix lands twice**:
+  as a commit in jaq's source tree, folded into the patch it repairs and the
+  patches regenerated, and as the same diff applied to `crates/pathfinder-*`.
+  The packaged jaq and the in-tree crates must stay identical in behaviour;
+  `pathfinder-jaq` run as `PATHFINDER_JAQ` checks it.
 - `EXCLUDED` is generated from real jq 1.8.1, never hand-edited.
 - A rising total can hide regressions: compare the failing-case lists before and
   after (`V=1`), not just the count. The first `match`/`test`/`capture` repair
@@ -224,30 +246,34 @@ pass rates; `V=1` lists every failure.
 
 | File | Owns |
 |---|---|
-| `src/jqargs.rs` | jq's argv grammar, transcribed from jq's `src/main.c`. Hand-rolled; clap cannot express it. |
-| `src/scan.rs` | The jq token scanner — the crate's only real algorithm. Strings, `\(…)` interpolation nesting, comments, module headers. |
-| `src/prelude.rs` | Polyfill and repair definitions, and the evidence for each. |
-| `src/program.rs` | Program assembly: module header, prelude, `$ARGS` wrap, `$__loc__`. |
-| `src/translate.rs` | jq argv → jaq argv. The only module that knows both dialects. |
-| `src/post.rs` | `-a` and `--seq` byte transforms. |
-| `src/inputs.rs` | Several input files: opened before jaq starts, described to it in `PATHFINDER_INPUTS`, fed as one stream. |
-| `src/native.rs` | `--explain` / `--version` / `--install-shim`, their text and JSON reports, and structured errors; reachable only under the native name. |
-| `src/mode.rs` | The native verbs' output-mode cascade (CLI Standard §5). |
-| `src/json.rs` | Minimal JSON writer (RFC 8259 escaping) for the native reports; std-only. |
-| `src/syntax/lex.rs`, `parse.rs` | jq's lexer and grammar, transcribed. Every node keeps its span. |
-| `src/regex.rs` | Facts about literal regexes for the regex repairs: group naming (mirrors the prelude's run-time scan), whether a group can be skipped, whether the regex can match empty. |
-| `src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
-| `src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
-| `src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
+| `Cargo.toml` | The workspace: members, `default-members`, the shared lint set (`[workspace.lints]`) and the release profile. One `Cargo.lock`, at the root. |
+| `crates/pathfinder/src/jqargs.rs` | jq's argv grammar, transcribed from jq's `src/main.c`. Hand-rolled; clap cannot express it. |
+| `crates/pathfinder/src/scan.rs` | The jq token scanner — the crate's only real algorithm. Strings, `\(…)` interpolation nesting, comments, module headers. |
+| `crates/pathfinder/src/prelude.rs` | Polyfill and repair definitions, and the evidence for each. |
+| `crates/pathfinder/src/program.rs` | Program assembly: module header, prelude, `$ARGS` wrap, `$__loc__`. |
+| `crates/pathfinder/src/translate.rs` | jq argv → jaq argv. The only module that knows both dialects. |
+| `crates/pathfinder/src/post.rs` | `-a` and `--seq` byte transforms. |
+| `crates/pathfinder/src/inputs.rs` | Several input files: opened before jaq starts, described to it in `PATHFINDER_INPUTS`, fed as one stream. |
+| `crates/pathfinder/src/native.rs` | `--explain` / `--version` / `--install-shim`, their text and JSON reports, and structured errors; reachable only under the native name. |
+| `crates/pathfinder/src/mode.rs` | The native verbs' output-mode cascade (CLI Standard §5). |
+| `crates/pathfinder/src/json.rs` | Minimal JSON writer (RFC 8259 escaping) for the native reports; std-only. |
+| `crates/pathfinder/src/syntax/lex.rs`, `parse.rs` | jq's lexer and grammar, transcribed. Every node keeps its span. |
+| `crates/pathfinder/src/regex.rs` | Facts about literal regexes for the regex repairs: group naming (mirrors the prelude's run-time scan), whether a group can be skipped, whether the regex can match empty. |
+| `crates/pathfinder/src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
+| `crates/pathfinder/src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
+| `crates/pathfinder/src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
 | `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`, path expressions, `l // r` as a path, `%`, parse errors, lazy input reading, file names in error locations), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); verified to apply and pass on 3.1.0, which Bravais builds by making this flake follow its stable nixpkgs. `0008`, `0013` and `0015` have a 3.1.0 cut, picked by version, because 3.1.0's `real_main` differs on the lines they replace. MIT, like jaq; never sent upstream. |
-| `tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
-| `tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
-| `tests/native.rs` | The native surface: mode cascade, JSON shapes, exit codes, and that the `jq` name is unchanged under an agent environment. |
+| `crates/pathfinder-core`, `-std`, `-json`, `-fmts` | jaq 3.1.1's engine crates, imported with the patch set applied (`crates/UPSTREAM.md`). Library names stay `jaq_core`, … so the sources stay diffable against upstream. |
+| `crates/pathfinder-jaq` | jaq 3.1.1's CLI and `jaq-all` on those crates, with the CLI hunks of the patch set: the binary `pathfinder-jaq`, a test vehicle run as `PATHFINDER_JAQ` until M19. `publish = false`; never installed. |
+| `crates/pathfinder/tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
+| `crates/pathfinder/tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
+| `crates/pathfinder/tests/native.rs` | The native surface: mode cascade, JSON shapes, exit codes, and that the `jq` name is unchanged under an agent environment. |
 | `SKILL.md` | Agent-facing description of the shim. Frontmatter first, so its licence is in `REUSE.toml`; keep `description` ≤ 1000 rendered characters. |
 
 ## Forbidden patterns
 
-- `unsafe` — the crate sets `unsafe_code = "forbid"`.
+- `unsafe` — every crate sets `unsafe_code = "forbid"` through the workspace
+  lint set.
 - Forwarding an unrecognised flag to jaq.
 - Polyfilling a name jq 1.8.1 does not define.
 - Adding a runtime dependency to the jq path; it is std-only and stays that way.
@@ -269,7 +295,10 @@ pass rates; `V=1` lists every failure.
 
 ## Standards
 
-Every file carries the two SPDX tags (REUSE, Standard §4.3). Software is
-`GPL-3.0-or-later`; docs are `CC-BY-SA-4.0`; the embedded jq help text keeps
-upstream jq's MIT (§4.2). Commits to a Spacecraft Software remote must be signed
+Every file is covered by REUSE (Standard §4.3): Pathfinder's own files carry
+the two SPDX tags. Software is `GPL-3.0-or-later`; docs are `CC-BY-SA-4.0`;
+the embedded jq help text keeps upstream jq's MIT (§4.2). The engine crates
+imported from jaq (`crates/pathfinder-{core,std,json,fmts,jaq}`) are MIT and
+carry **no inline headers, by design**: `REUSE.toml` covers them, so each file
+stays byte-diffable against upstream. Do not add headers to them. Commits to a Spacecraft Software remote must be signed
 and show "Verified" (§6.3).

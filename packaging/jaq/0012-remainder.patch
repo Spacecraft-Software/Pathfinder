@@ -3,10 +3,10 @@ Pathfinder patch for jaq 3.1.1: Compute % as jq 1.8.1: both sides clamped to int
 Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
 
 diff --git a/jaq-json/src/lib.rs b/jaq-json/src/lib.rs
-index 008ab6c..33d22ae 100644
+index baff94d..4cb7038 100644
 --- a/jaq-json/src/lib.rs
 +++ b/jaq-json/src/lib.rs
-@@ -684,9 +684,12 @@ impl core::ops::Rem for Val {
+@@ -686,9 +686,12 @@ impl core::ops::Rem for Val {
      type Output = ValR;
      fn rem(self, rhs: Self) -> Self::Output {
          match (self, rhs) {
@@ -23,10 +23,10 @@ index 008ab6c..33d22ae 100644
          }
      }
 diff --git a/jaq-json/src/num.rs b/jaq-json/src/num.rs
-index 5d5d96b..a488e98 100644
+index babd62d..eb9c72b 100644
 --- a/jaq-json/src/num.rs
 +++ b/jaq-json/src/num.rs
-@@ -250,28 +250,64 @@ impl core::ops::Div for Num {
+@@ -254,28 +254,64 @@ impl core::ops::Div for Num {
      }
  }
  

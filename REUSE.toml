@@ -25,7 +25,7 @@ SPDX-License-Identifier = "CC-BY-SA-4.0"
 
 # Conformance metadata: generated exclusion list and the pass-count ratchet.
 [[annotations]]
-path = ["tests/jq-suite/EXCLUDED", "tests/jq-suite/FLOOR"]
+path = ["crates/pathfinder/tests/jq-suite/EXCLUDED", "crates/pathfinder/tests/jq-suite/FLOOR"]
 SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
@@ -41,7 +41,7 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 # jq is MIT (Standard §4.2: third-party-derived artifacts keep their upstream
 # license).
 [[annotations]]
-path = ["src/embed/jq-help.txt", "src/embed/jq-builtins.json", "tests/jq-suite/*.test"]
+path = ["crates/pathfinder/src/embed/jq-help.txt", "crates/pathfinder/src/embed/jq-builtins.json", "crates/pathfinder/tests/jq-suite/*.test"]
 SPDX-FileCopyrightText = "2012 Stephen Dolan and jq contributors"
 SPDX-License-Identifier = "MIT"
 
@@ -54,6 +54,19 @@ SPDX-License-Identifier = "MIT"
 
 # The pass-count ratchet for the patched engine.
 [[annotations]]
-path = ["tests/jq-suite/FLOOR-patched"]
+path = ["crates/pathfinder/tests/jq-suite/FLOOR-patched"]
 SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# The engine: jaq 3.1.1's jaq-core, jaq-std, jaq-json, jaq-fmts, and jaq's CLI
+# with jaq-all as pathfinder-jaq, imported
+# as a hard fork (crates/UPSTREAM.md) with packaging/jaq/ applied. jaq is MIT
+# and its files carry no headers; upstream states its copyright only through
+# the crates' `authors` field, quoted here. The imported files keep that
+# licence and that notice (Standard §4.2); Pathfinder's changes to them are
+# MIT too. Named crate by crate so that a new Pathfinder crate is not
+# swallowed by a glob.
+[[annotations]]
+path = ["crates/pathfinder-core/**", "crates/pathfinder-std/**", "crates/pathfinder-json/**", "crates/pathfinder-fmts/**", "crates/pathfinder-jaq/**"]
+SPDX-FileCopyrightText = ["Michael Färber <michael.faerber@gedenkt.at> and jaq contributors", "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
+SPDX-License-Identifier = "MIT"

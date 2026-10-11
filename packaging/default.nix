@@ -59,7 +59,7 @@ let
         ];
         # jaq's own tests assert jaq's number format (`1.0`, `NaN`), which the
         # patches change on purpose. Pathfinder's check phase runs jq's suite
-        # against this engine instead (tests/jq-suite/FLOOR-patched).
+        # against this engine instead (crates/pathfinder/tests/jq-suite/FLOOR-patched).
         doCheck = false;
       })
     else
@@ -75,7 +75,7 @@ rustPlatform.buildRustPackage rec {
   # Pin jaq by store path rather than trusting the user's PATH: the shim is
   # useless without it, and a PATH miss would surface as a confusing failure
   # inside something that looks like jq. The path is compiled in (see
-  # `PINNED_JAQ` in src/main.rs) instead of set by `wrapProgram`, because a
+  # `PINNED_JAQ` in crates/pathfinder/src/main.rs) instead of set by `wrapProgram`, because a
   # wrapper script would fork a shell before every `jq` call. PATHFINDER_JAQ
   # still overrides it at run time.
   env.PATHFINDER_DEFAULT_JAQ = "${engine}/bin/jaq";

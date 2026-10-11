@@ -36,7 +36,7 @@ index 50a5db1..75f77e6 100644
          let mut ret = Ret::NoOutput;
          for y in filter.id.run((ctx.clone(), x)) {
 diff --git a/jaq/src/jq.rs b/jaq/src/jq.rs
-index 772928a..daccd0a 100644
+index 772928a..33fef27 100644
 --- a/jaq/src/jq.rs
 +++ b/jaq/src/jq.rs
 @@ -67,6 +67,62 @@ impl Status {
@@ -319,7 +319,7 @@ index 772928a..daccd0a 100644
 +        let mut lines = Lines::new(&b"12"[..], &pos);
 +        let n = lines.fill_buf().unwrap().len();
 +        lines.consume(n);
-+        assert!(lines.fill_buf().unwrap().is_empty());
++        assert_eq!(lines.fill_buf().unwrap(), []);
 +        assert_eq!(pos.location("<stdin>", None), "m:0");
 +        assert!(pos.failed());
 +    }
