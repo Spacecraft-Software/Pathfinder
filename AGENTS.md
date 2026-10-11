@@ -200,7 +200,9 @@ print. To keep the `jq` name untouched:
   `MAX_NESTING` recursive calls, `MAX_FOLDS` chain links (`,`, binary
   operators, postfixes) in all, and a tree `MAX_DEPTH` deep. Past any of them
   the program is a parse failure and passes through; the error is at offset
-  0, never at a `?//`. Unbounded, a few thousand levels aborted the shim. A
+  0, never at a `?//`. Unbounded, a few thousand levels aborted the shim.
+  A program over 4 KiB is assembled on a 256 MiB thread (`program::assemble`):
+  the bounds alone kept a release build inside 8 MiB but not CI's debug one. A
   new recursive pass over the tree must stay within `MAX_DEPTH`; a new
   grammar cycle must pass through `query`, `term` or `pattern`, or be wrapped
   in `Parser::nested` where it recurses (as `//` is in `expr`).

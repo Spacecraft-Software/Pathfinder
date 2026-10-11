@@ -463,10 +463,10 @@ mod tests {
     /// which passes the program through to jaq.
     #[test]
     fn interpolations_nested_past_the_bound_are_an_error_not_an_overflow() {
-        // On the main thread's 8 MiB, as in the binary: a test thread's
-        // 2 MiB is too little for the bound in a debug build.
+        // On a deep stack, as `program::assemble` gives a long program: a
+        // test thread's 2 MiB is too little for the bound in a debug build.
         std::thread::Builder::new()
-            .stack_size(8 << 20)
+            .stack_size(64 << 20)
             .spawn(|| {
                 let nested = |n: usize| format!("{}1{}", r#""\("#.repeat(n), r#")""#.repeat(n));
                 lex(&nested(super::MAX_INTERP)).expect("at the bound it lexes");

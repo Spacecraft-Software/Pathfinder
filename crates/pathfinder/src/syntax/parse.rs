@@ -1160,7 +1160,7 @@ mod tests {
             ),
         ];
         std::thread::Builder::new()
-            .stack_size(8 << 20)
+            .stack_size(64 << 20)
             .spawn(move || {
                 for src in &too_deep {
                     let e = parse(src).expect_err("past the bound");
