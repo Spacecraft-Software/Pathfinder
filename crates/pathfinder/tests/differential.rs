@@ -576,7 +576,8 @@ static PATCHED_CASES: &[Case] = &[
         &[
             "-c",
             "(0 * -1) as $z | [.[$z], .[$z:], del(.[$z]), ([$z] | implode), \
-             (1 | significand), ldexp(1; $z), ($z | tostring)]",
+             (1 | significand), ldexp(1; $z), ($z | tostring), (.[$z] = 9), \
+             (.[$z] |= 7), has($z), getpath([$z]), setpath([$z]; 8)]",
         ],
     ),
     // `nan % 0` is NaN, which only the patched engine prints as `null`.

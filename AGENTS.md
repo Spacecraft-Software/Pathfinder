@@ -232,6 +232,11 @@ pass rates; `V=1` lists every failure.
   regenerate `packaging/jaq/*.patch` with `git diff`. Never touch jaq's
   `Cargo.toml`/`Cargo.lock`: the Nix build reuses the upstream vendored
   dependencies.
+- **Until `packaging/jaq/` is retired (P-078), an engine fix lands twice**:
+  as a commit in jaq's source tree, folded into the patch it repairs and the
+  patches regenerated, and as the same diff applied to `crates/pathfinder-*`.
+  The packaged jaq and the in-tree crates must stay identical in behaviour;
+  `pathfinder-jaq` run as `PATHFINDER_JAQ` checks it.
 - `EXCLUDED` is generated from real jq 1.8.1, never hand-edited.
 - A rising total can hide regressions: compare the failing-case lists before and
   after (`V=1`), not just the count. The first `match`/`test`/`capture` repair
@@ -290,7 +295,10 @@ pass rates; `V=1` lists every failure.
 
 ## Standards
 
-Every file carries the two SPDX tags (REUSE, Standard §4.3). Software is
-`GPL-3.0-or-later`; docs are `CC-BY-SA-4.0`; the embedded jq help text keeps
-upstream jq's MIT (§4.2). Commits to a Spacecraft Software remote must be signed
+Every file is covered by REUSE (Standard §4.3): Pathfinder's own files carry
+the two SPDX tags. Software is `GPL-3.0-or-later`; docs are `CC-BY-SA-4.0`;
+the embedded jq help text keeps upstream jq's MIT (§4.2). The engine crates
+imported from jaq (`crates/pathfinder-{core,std,json,fmts,jaq}`) are MIT and
+carry **no inline headers, by design**: `REUSE.toml` covers them, so each file
+stays byte-diffable against upstream. Do not add headers to them. Commits to a Spacecraft Software remote must be signed
 and show "Verified" (§6.3).
