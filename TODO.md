@@ -14,7 +14,7 @@ serves. Later milestones are broken down when they start, not before.
 
 - [ ] T-001 (P-048) Turn the repository into a Cargo workspace; move `src/`, `tests/` and the binary manifest to `crates/pathfinder` without behaviour change; CI, Makefile, Nix and REUSE paths follow
 - [ ] T-002 (P-049) Unpack jaq 3.1.1's source from nixpkgs, record its commit and hash in `crates/UPSTREAM.md`
-- [ ] T-003 (P-049) Copy `jaq-core`, `jaq-std`, `jaq-json` and the JSON/raw parts of `jaq-fmts` into `crates/`, renamed; apply `packaging/jaq/0001`–`0013` in order
+- [ ] T-003 (P-049) Copy `jaq-core`, `jaq-std`, `jaq-json` and the JSON/raw parts of `jaq-fmts` into `crates/`, renamed; apply `packaging/jaq/0001`–`0015` in order
 - [ ] T-004 (P-050) Remove the YAML, TOML, CBOR, XML, CSV/TSV readers and writers, `--in-place`, and their dependencies; the feature flags they hang off go too
 - [ ] T-005 (P-051) Replace `memmap2` with `std::fs::read`; measure file-input cost before and after
 - [ ] T-006 (P-051) Add `unsafe_code = "forbid"` and Pathfinder's lint set to each new crate; fix or justify every lint

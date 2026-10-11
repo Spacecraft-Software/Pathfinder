@@ -26,7 +26,7 @@ from `jaq-fmts`; the other formats, `jaq-all`, jaq's CLI and `jaq-play` stay
 out.
 
 - [ ] P-048 Cargo workspace: `crates/pathfinder` (today's `src/`), `crates/pathfinder-core`, `-std`, `-json`
-- [ ] P-049 Import jaq 3.1.1 at a recorded commit, with `packaging/jaq/0001`–`0013` applied
+- [ ] P-049 Import jaq 3.1.1 at a recorded commit, with `packaging/jaq/0001`–`0015` applied
 - [ ] P-050 Drop jaq's non-jq formats, `--in-place`, REPL and Windows console code, and their dependencies
 - [ ] P-051 Replace the `mmap` file load with a safe read; `unsafe_code = "forbid"` in every crate
 - [ ] P-052 Imported files keep MIT and upstream copyright in `REUSE.toml`; `CREDITS.md` names the import
@@ -42,7 +42,7 @@ rewriter and prelude still run; only the hand-off changes.
 - [ ] P-056 Inputs, multiple files as one stream, `-a`, `--seq` and output written in-process
 - [ ] P-057 Exit status, uncaught-error reports and `halt` handled in-process
 - [ ] P-058 `PATHFINDER_ENGINE=native|jaq` selects the engine; CI runs both suites on both
-- [ ] P-059 `FLOOR-native` ratchet at least 805/820
+- [ ] P-059 `FLOOR-native` ratchet at least 815/820
 - [ ] P-060 Benchmarks (`bench/`): startup, parse, filter and output sets; R-011 holds
 - [ ] P-061 Fuzz targets for the jq-argv parser, the filter parser and the evaluator; no panic
 
@@ -76,7 +76,7 @@ the same change.
 - [ ] P-074 `try input` and `break`, and the other evaluator quirks in jq's suite
 - [ ] P-075 `--stream` and `--stream-errors` (optional)
 - [ ] P-076 `input_line_number` and `$__loc__` (optional)
-- [ ] P-077 jq 1.8.1's suite at 812/820 or better (PRD R-003)
+- [ ] P-077 jq 1.8.1's suite at 818/820 or better (PRD R-003)
 
 ## M24 — Release
 

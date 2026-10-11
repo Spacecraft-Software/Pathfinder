@@ -25,6 +25,7 @@
 
 mod compat;
 mod diag;
+mod inputs;
 mod jqargs;
 mod json;
 mod mode;
@@ -169,41 +170,26 @@ fn main() {
     std::process::exit(pipe(prog, &plan));
 }
 
-/// Write jaq's input: the concatenated files, or stdin, with RS stripped if
-/// `--seq` asked for it.
-///
-/// Concatenating restores jq's "several files are one stream" semantics, which
-/// jaq does not share. `-` keeps its jq meaning of "stdin here".
-fn feed(sink: &mut impl io::Write, files: Option<&[OsString]>, strip: bool) -> io::Result<()> {
-    let Some(files) = files else {
-        let stdin = io::stdin();
-        return if strip {
-            post::strip_rs(stdin.lock(), sink)
-        } else {
-            io::copy(&mut stdin.lock(), sink).map(|_| ())
-        };
-    };
-    for path in files {
-        if path == "-" {
-            let stdin = io::stdin();
-            if strip {
-                post::strip_rs(stdin.lock(), sink)?;
-            } else {
-                io::copy(&mut stdin.lock(), sink)?;
-            }
-            continue;
-        }
-        let mut file = std::fs::File::open(path)?;
-        if strip {
-            post::strip_rs(&mut file, sink)?;
-        } else {
-            io::copy(&mut file, sink)?;
-        }
-        // jq inserts nothing between files, but a file with no trailing newline
-        // would otherwise glue its last token onto the next file's first.
-        sink.write_all(b"\n")?;
+/// Write jaq's stdin, with RS stripped if `--seq` asked for it.
+fn feed(sink: &mut impl io::Write, strip: bool) -> io::Result<()> {
+    let mut stdin = io::stdin().lock();
+    if strip {
+        post::strip_rs(&mut stdin, sink)
+    } else {
+        io::copy(&mut stdin, sink).map(|_| ())
     }
-    Ok(())
+}
+
+/// Whether `jaq` is Pathfinder's patched jaq, which reports an unreadable
+/// input file itself. Asked only when there is one, so it costs nothing on
+/// any other call.
+fn engine_is_patched(jaq: &OsString) -> bool {
+    Command::new(jaq)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("+pathfinder"))
 }
 
 /// Read a `-f` filter file.
@@ -274,7 +260,26 @@ fn pipe(prog: &str, plan: &translate::Plan) -> i32 {
         .args(&plan.argv)
         .stderr(Stdio::inherit())
         .stdout(Stdio::piped());
-    let feed_stdin = plan.strip_input_rs || plan.concat_inputs.is_some();
+    // Several files are opened before jaq starts, so that they can be
+    // described to it (see `inputs`).
+    let strip = plan.strip_input_rs;
+    let inputs = plan
+        .concat_inputs
+        .as_deref()
+        .map(|files| inputs::open(files, strip));
+    let mut unreported = false;
+    if let Some(inputs) = &inputs {
+        command.env(inputs::INPUTS_ENV, inputs::describe(inputs));
+        // A stock jaq does not know of unreadable files: say so here, if not
+        // where jq would, and exit as jq would.
+        if inputs.iter().any(|i| i.failure().is_some()) && !engine_is_patched(&jaq) {
+            unreported = true;
+            for m in inputs.iter().filter_map(inputs::Input::failure) {
+                eprintln!("jq: error: {m}");
+            }
+        }
+    }
+    let feed_stdin = plan.strip_input_rs || inputs.is_some();
     if feed_stdin {
         command.stdin(Stdio::piped());
     } else {
@@ -291,11 +296,12 @@ fn pipe(prog: &str, plan: &translate::Plan) -> i32 {
 
     // Feed jaq's stdin ourselves when the input needs reshaping. A thread keeps
     // it streaming rather than reading everything before jaq starts.
-    let strip = plan.strip_input_rs;
-    let files = plan.concat_inputs.clone();
     let feeder = child.stdin.take().map(|mut sink| {
         std::thread::spawn(move || {
-            let _ = feed(&mut sink, files.as_deref(), strip);
+            let _ = match inputs {
+                Some(inputs) => inputs::feed(&mut sink, inputs, strip),
+                None => feed(&mut sink, strip),
+            };
         })
     });
 
@@ -316,7 +322,7 @@ fn pipe(prog: &str, plan: &translate::Plan) -> i32 {
         let _ = handle.join();
     }
 
-    match child.wait() {
+    let code = match child.wait() {
         Ok(status) => status.code().unwrap_or_else(|| {
             // Killed by a signal: report it the way a shell would.
             status.signal().map_or(1, |s| 128 + s)
@@ -326,5 +332,7 @@ fn pipe(prog: &str, plan: &translate::Plan) -> i32 {
             1
         }
     }
-    .max(code)
+    .max(code);
+    // jq exits with 2 when an input file could not be read, unless killed.
+    if unreported && code < 128 { 2 } else { code }
 }

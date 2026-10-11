@@ -130,7 +130,7 @@ command line must stay jq's, byte for byte (see AGENTS.md).
 Requested after step 3; outside proposals 1–6, so not part of the MVP.
 P-044–P-047 were added on 2026-10-11 as the last patch-set work before the
 hard fork (`PLAN.md`), which imports the patch set as its starting point. Fixed
-in the packaged jaq (`packaging/jaq/0006`–`0009`); a stock jaq keeps jaq's
+in the packaged jaq (`packaging/jaq/0006`–`0015`); a stock jaq keeps jaq's
 behaviour, documented in `doc/DIVERGENCES.md`.
 
 - [x] P-038 An object is indexed only with a string: `.[3]`, `.[3] = 1`, `has(3)`, `path(.[3])`, `del`
@@ -139,7 +139,7 @@ behaviour, documented in `doc/DIVERGENCES.md`.
 - [x] P-041 The exit status is the last input's, with and without `-e`
 - [x] P-042 `debug` and `halt_error` write what jq writes
 - [x] P-043 `%` reports a type error before a zero divisor, and `%=` names the value
-- [ ] P-044 Locations name each input file when there are several
-- [ ] P-045 jq's JSON parse-error messages and exit status
-- [ ] P-046 `infinite % 1` clamps to a 64-bit integer, as jq does
-- [ ] P-047 Path-expression errors in jq's wording
+- [x] P-044 Locations name each input file when there are several
+- [x] P-045 jq's JSON parse-error messages and exit status
+- [x] P-046 `infinite % 1` clamps to a 64-bit integer, as jq does
+- [x] P-047 Path-expression errors in jq's wording

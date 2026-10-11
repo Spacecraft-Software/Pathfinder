@@ -119,6 +119,13 @@ print. To keep the `jq` name untouched:
   `PATHFINDER_JAQ`, then the pin, then `jaq` on `PATH`.
 - **stderr is inherited, never captured**, so jaq's diagnostics, `debug` output,
   colour detection and interleaving stay correct.
+- **Several input files reach jaq as one stdin stream, described in
+  `PATHFINDER_INPUTS`** (`src/inputs.rs`; read by `jaq/src/jq.rs`, patch
+  `0015`): names, byte counts, and jq's message for an unreadable file. Nothing
+  goes between files, because jq inserts nothing. The packaged jaq makes each
+  boundary an `fgets` chunk boundary, names the file being read and restarts
+  its line count; a stock jaq ignores the variable. The two sides share one
+  record format (`<bytes>:<n>:<name><m>:<message>`): change both or neither.
 
 ### The parser and the rewriter (`src/syntax/`)
 
@@ -179,6 +186,18 @@ print. To keep the `jq` name untouched:
   a reader layered under std's `Read::bytes` cost up to 66% on one long line.
   Measure stdin with `perf stat -e cycles:u`, one run per invocation (`-r`
   gives later runs an empty stdin).
+- **A parse error is worded by jq's own parser, transcribed.**
+  `jaq-json/src/parse_error.rs` (patch `0013`) is `jv_parse.c`'s state
+  machine without the values; jaq's parser builds the values, and on failure
+  the value that failed is re-scanned from jq's initial state. On stdin
+  `jq::Position` implements `Recall`, keeping that value's text only when the
+  line buffer is compacted. jaq's reader rejects what jq's rejects (comments,
+  byte strings, non-string keys, run-on literals) so that both stop at the
+  same byte; loosening it makes the two disagree on where an error is.
+- **A path expression fails where jq's does** (patch `0010`): a non-path
+  filter in path mode yields a *lost* path (`Node::Lost`), which fails only
+  when a later step uses it. The messages start `Invalid`, which `_pf_err`
+  and `jq.rs::wording` pass through unchanged; keep it so.
 
 ## Conformance
 
@@ -211,6 +230,7 @@ pass rates; `V=1` lists every failure.
 | `src/program.rs` | Program assembly: module header, prelude, `$ARGS` wrap, `$__loc__`. |
 | `src/translate.rs` | jq argv → jaq argv. The only module that knows both dialects. |
 | `src/post.rs` | `-a` and `--seq` byte transforms. |
+| `src/inputs.rs` | Several input files: opened before jaq starts, described to it in `PATHFINDER_INPUTS`, fed as one stream. |
 | `src/native.rs` | `--explain` / `--version` / `--install-shim`, their text and JSON reports, and structured errors; reachable only under the native name. |
 | `src/mode.rs` | The native verbs' output-mode cascade (CLI Standard §5). |
 | `src/json.rs` | Minimal JSON writer (RFC 8259 escaping) for the native reports; std-only. |
@@ -219,7 +239,7 @@ pass rates; `V=1` lists every failure.
 | `src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
 | `src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
 | `src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
-| `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); verified to apply and pass on 3.1.0, which Bravais builds by making this flake follow its stable nixpkgs. `0008` has a 3.1.0 cut, picked by version, because 3.1.0's `real_main` differs on the lines it replaces. MIT, like jaq; never sent upstream. |
+| `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`, path expressions, `l // r` as a path, `%`, parse errors, lazy input reading, file names in error locations), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); verified to apply and pass on 3.1.0, which Bravais builds by making this flake follow its stable nixpkgs. `0008`, `0013` and `0015` have a 3.1.0 cut, picked by version, because 3.1.0's `real_main` differs on the lines they replace. MIT, like jaq; never sent upstream. |
 | `tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
 | `tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
 | `tests/native.rs` | The native surface: mode cascade, JSON shapes, exit codes, and that the `jq` name is unchanged under an agent environment. |

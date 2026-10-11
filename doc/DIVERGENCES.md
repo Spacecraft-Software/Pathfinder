@@ -69,8 +69,9 @@ alone, and slices cost nothing measurable (0.37 s against 0.35 s).
 
 What is still not quite jq:
 
-- **Error wording on a bad path.** Where jaq's own `path()` fails, the message
-  is jaq's (`invalid path expression with input …`), not jq's.
+- **Error wording on a bad path, on a stock jaq.** Where jaq's own `path()`
+  fails, the message is jaq's (`invalid path expression with input …`); the
+  packaged jaq gives jq's (see "Path expressions, on the packaged jaq").
 - **Paths through a rounded index.** `path(.[1.5])` is `[1.5]` in jq and `[1]`
   here; `null | path(.[1:3])` is `[{"start":1,"end":3}]` in jq and `[]` here.
   The values read and written are jq's.
@@ -93,6 +94,8 @@ What is still not quite jq:
 | An uncaught error | `jq: error (at <stdin>:3): …`, then the next input | `Error: …`, and stops | Fixed by the packaged jaq; see below. A stock jaq keeps its own report, for the same reason. What a `catch` handler sees *is* jq's text on both. |
 | `halt_error` on a non-string | its JSON and a newline; nothing for `null` | no newline; `null` | Fixed by the packaged jaq. |
 | `.[3]`, `.[3] = 1`, `has(3)`, `path(.[3])` on an object | `Cannot index object with number` | `null`, `{"a":1,3:1}` — **not JSON**, `false`, `[3]` | Fixed by the packaged jaq. Rewriting would put a check on every index in every filter. |
+| Malformed input: `1 2 }` | `1`, `2`, `jq: parse error: Unmatched '}' at line 1, column 5` | `1`, `2`, `Error: failed to parse: value expected` | Fixed by the packaged jaq; see below. Input is outside the filter. |
+| `try path(reverse \| .[0]) catch .` | `Invalid path expression near attempt to access element 0 of [1]` | `invalid path expression with input [1]` | Fixed by the packaged jaq; see below. jaq's path tracking is in its core. |
 
 ### Uncaught errors, on the packaged jaq
 
@@ -115,9 +118,12 @@ is translated by the same rules as a `catch` handler's (`jaq/src/jq.rs` in
 Limits:
 
 - With several input files, Pathfinder concatenates them onto jaq's stdin
-  (see "Several input files are one stream" below), so the location reads
-  `<stdin>:N`, counted across the files, where jq names each file and
-  restarts the count.
+  (see "Several input files are one stream" below) and describes them to the
+  packaged jaq in `PATHFINDER_INPUTS` (names, byte counts, unreadable files),
+  so the location names the file being read and restarts the count in each,
+  as jq does. A stock jaq ignores the variable and reports `<stdin>:N`,
+  counted across the files; it also shows the variable in `$ENV`, which the
+  packaged jaq removes.
 - A message outside the translation table keeps jaq's words in both places,
   for instance `test` on a number: `cannot use 1 as string`, where jq says
   `number (1) cannot be matched, as it is not a string`.
@@ -130,6 +136,65 @@ Limits:
 - Counting lines costs nothing measurable on file input and on line-delimited
   stdin (14 MB of JSON lines: 3–5% *fewer* cycles than before); one 29 MB
   single-line document on stdin takes about 5–10% more.
+
+### Malformed input, on the packaged jaq
+
+The packaged jaq reads JSON as jq does and reports a malformed text in jq's
+words, line and column: `jq: parse error: Unfinished JSON term at EOF at line
+1, column 1`, exit 5, after the outputs before it. Under `-n`, `input` and
+`inputs` raise the message as an uncaught error (`jq: error (at <stdin>:0):
+Unmatched '}' at line 1, column 5`) that `try` can catch. `fromjson` gives
+jq's `… (while parsing '…')`, `Expected JSON value` and `Unexpected extra JSON
+values`; a bad `--argjson`, `--jsonargs`, `--slurpfile` or `--rawfile` gives
+jq's message and exit 2. jaq's parser still builds the values; when it fails,
+a transcription of jq's own parser (`jv_parse.c`) re-reads the value that
+failed to find jq's message. To stop where jq stops, it now rejects what jq
+rejects: `#` comments, `b"…"` byte strings, non-string object keys, a literal
+or number run into the next token (`truex`, `1.5.`), and nesting deeper than
+10000.
+
+Limits:
+
+- Numbers jq accepts and jaq's parser does not — `1.`, `.5`, `-.5` — are
+  errors, reported as `<jaq's message> at line L, column C`.
+- After a parse error no more values are read; jq discards its 4 KiB buffer
+  and reads on, which shows only when `try input catch …` swallows one.
+- `--seq` input reaches jaq without its RS bytes, so jq's `ignoring parse
+  error` and `Truncated value` messages are not given.
+- With several bad `--argjson`-family arguments, the first reported can
+  differ: jaq checks them by kind, jq in argv order.
+- Reading costs 2.5–7% more instructions than before these patches (29 MB
+  indented on stdin: +7%, about 3 points of it rejecting `#` comments; 14 MB
+  of JSON lines on stdin: +3%; either from a file: +3%). On stdin the text of
+  the value being parsed is kept until it ends, about its size again for one
+  huge document.
+
+### Path expressions, on the packaged jaq
+
+jq runs any filter inside `path()` and fails only when a lost path is used;
+the packaged jaq does the same, with jq's messages: `Invalid path expression
+with result [2,1,0]` at the end of `path()`, `… near attempt to access element
+0 of [1]` or `… near attempt to iterate through …` at a later step, values cut
+as jq cuts them. `[f]`, `-f` and a `catch` handler run as path expressions, as
+in jq, so `path(null)` is `[]`; `path(.a[] // .b)` keeps only the true outputs
+of `.a[]`, which jaq did not.
+
+Limits:
+
+- jq keeps a value's path while it is the *same* value; only `null`, `true`
+  and `false` are recognised so here. `. as $x | path($x)` is `[]` in jq and
+  an error here.
+- Builtins that are jq definitions in jq and native in jaq (`getpath`,
+  `ascii_downcase`, `limit`) fail at a different step, so the message names
+  a different value; `|=` inside `path()` shows jq's internals there and not
+  here.
+- Keys in the message are shown after Pathfinder rounds them (`.[1.5]` reads
+  `element 1`).
+- `.[nan] = 9` still raises `Out of bounds negative array index`, where jq says
+  `Cannot set array element at NaN index`: the rewriter folds a NaN key before
+  jaq sees it.
+- Update (`|=`, `=`) of a target jaq cannot update but jq can, such as
+  `(try .a catch .b) |= 1`, keeps jaq's `invalid path expression with input`.
 
 ## Error messages a script can see
 
@@ -159,17 +224,17 @@ Limits:
   the message is not one of jaq's, and about 18 µs when it is.
 - A user's own `error("cannot use 1 as number")` is translated too, since it
   cannot be told apart from jaq's.
-- **Path-expression errors** keep jaq's words: jq reports *where* the path
-  broke (`… near attempt to iterate through [{"a":1}]`) and the result rather
-  than the input, which jaq never reports.
+- **Path-expression errors** keep jaq's words on a stock jaq; the packaged jaq
+  reports them as jq does (see "Path expressions, on the packaged jaq").
 
 ## The number model
 
 jq holds every number as a double, keeping a literal's text until it is
 computed on; jaq has integers, floats and literals. The Nix package of
 Pathfinder pins a jaq patched to close this gap (`packaging/jaq/`, small
-patches applied to jaq 3.1.1; the last four repair object keys, `debug`,
-uncaught errors and `halt_error`). The table shows both: what a stock jaq gives,
+patches applied to jaq 3.1.1; the later ones repair object keys, `debug`,
+uncaught errors, `halt_error`, path expressions, `%`, malformed input and
+file locations). The table shows both: what a stock jaq gives,
 and what the packaged one gives.
 
 | Filter | jq 1.8.1 | stock jaq | packaged jaq |
@@ -182,12 +247,13 @@ and what the packaged one gives.
 | `9007199254740993 * 1` | `9007199254740992` (a double) | `9007199254740993` (exact) | as jq |
 | input `[nan, -Infinity, inf]`, a leading byte-order mark | read | error | as jq |
 | `"a" * 0`, `"a" * 0.5`, `3.7 * "a"`, `"a" * 1e9` | `""`, `""`, `"aaa"`, error | `null`, error, error, an allocation | as jq |
+| `[(infinite, -infinite) % (1, -1, infinite)]`, `1e19 % 7` | `[0,0,0,0,0,-1]`, `0` | `[NaN,…]`, `3.0` | as jq: both sides clamped to 64-bit integers |
 
 The packaged jaq prints a decimal literal the way jq's decNumber does (`1E+3`,
 `1.000`, `1E-7`), computes integers beyond 2^53 in doubles as jq does, and is
 no slower: printing 500,000 objects took 2.8–3.1 s against stock jaq's
 3.3 s (jq: 4.2 s), measured interleaved on a loaded host. Its `--version`
-reads `jaq 3.1.1+pathfinder.2`, and the conformance suite holds it to its own
+reads `jaq 3.1.1+pathfinder.3`, and the conformance suite holds it to its own
 ratchet, `tests/jq-suite/FLOOR-patched`.
 
 ## Unsupported, with a diagnostic
@@ -307,8 +373,20 @@ Pathfinder papers over it, listed so the mechanism is visible:
 - **Several input files are one stream.** jq concatenates them; jaq runs the
   whole program once per file, so `jq -s . a.json b.json` yields two arrays under
   bare jaq instead of one. Pathfinder feeds the files to jaq as a single
-  concatenated stdin stream. This costs the `exec` fast path, so it only happens
-  when there really is more than one input.
+  concatenated stdin stream, with nothing between files, as jq reads them
+  (`12` then `34` is `1234`). This costs the `exec` fast path, so it only
+  happens when there really is more than one input. The files are opened
+  before jaq starts, and a file that is not regular (stdin `-`, a FIFO, a
+  process substitution) is read into memory first unless it is the last,
+  because the packaged jaq needs each file's length up front.
+- **An unreadable input file** (among several) is reported by the packaged
+  jaq when its reader reaches it, `jq: error: Could not open file x: No such
+  file or directory` (or `jq: error: Is a directory`); jq then runs one more
+  input and exits 2. On a stock jaq, Pathfinder prints the same message before
+  jaq starts, skips the file, and exits 2. Under `--seq` jq's own reaction to
+  a missing file is stranger (it reports a parse error and prints nothing);
+  that is not reproduced. A *single* unreadable file is still jaq's
+  `Error: x: No such file or directory (os error 2)`, exit 2.
 - **Output-format flags are last-wins.** `jq -c --tab` pretty-prints with tabs
   and `jq --tab -c` is compact; jaq lets `-c` win either way. Pathfinder forwards
   only the winning directive.

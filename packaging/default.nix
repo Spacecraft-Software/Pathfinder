@@ -39,6 +39,23 @@ let
               ./jaq/0008-uncaught-errors.patch
           )
           ./jaq/0009-halt-error.patch
+          ./jaq/0010-path-errors.patch
+          ./jaq/0011-path-alternative.patch
+          ./jaq/0012-remainder.patch
+          # 3.1.0's `real_main` reads stdin differently.
+          (
+            if lib.versionOlder jaq.version "3.1.1" then
+              ./jaq/0013-parse-errors-3.1.0.patch
+            else
+              ./jaq/0013-parse-errors.patch
+          )
+          ./jaq/0014-lazy-input.patch
+          (
+            if lib.versionOlder jaq.version "3.1.1" then
+              ./jaq/0015-file-locations-3.1.0.patch
+            else
+              ./jaq/0015-file-locations.patch
+          )
         ];
         # jaq's own tests assert jaq's number format (`1.0`, `NaN`), which the
         # patches change on purpose. Pathfinder's check phase runs jq's suite
