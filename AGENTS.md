@@ -108,10 +108,26 @@ hand-written golden.
 - **Program-defined names disable reasoning about them.** If the filter defines
   `del`, `select`, or a name `single_valued` trusts, the `del` route is off.
 - **Emit `.[a][b]`, never `.[a].[b]`** — jaq 3.0 does not parse the latter.
+  The user's own `.a.[0]`/`.a.[]` are spliced without the dot for the same
+  reason (`splice_mapping`).
+- **Index keys and slice bounds are evaluated against the input, not the
+  base.** `[1,2][0:.]` slices with the outer `.`; a rewrite that pipes the base
+  first must bind the bounds before it. A non-literal key is rounded inline
+  (`INDEX_NORM`) so it stays a path expression; never guard with `type ==`.
+- **`src/regex.rs` and the prelude's `_pf_scanre` must name groups
+  identically.** The Rust side precomputes literal regexes, the jq side scans
+  computed ones; the two are transcriptions of one tokenising regex. Change
+  both or neither. The literal table is *bound*, not defined
+  (`{…} as $__pf_rl | def …`): a definition rebuilds it on every call.
 - **Measure the cost of a jq-level definition before adding one per element.**
-  A filter-parameter call, `first`, and `if type == …` each cost hundreds of
-  milliseconds per 100k calls under jaq; inline text and `label`/`break` were
-  the measured winners (`tonumber`, key deletion).
+  A filter-parameter call, `first`, `type` (about 4 µs under jaq 3.1) and
+  `and`/`or` (several µs each) are expensive; comparisons (`. < ""` is "not a
+  string, number or later type"), nested `if`s, inline text and `label`/`break`
+  are cheap. Type tests in a per-element path are written as comparisons.
+- **Error text reaches scripts only through `catch`.** The rewriter wraps a
+  handler that reads its input in `_pf_err`, which turns jaq's templates back
+  into jq's wording; a builtin whose jq message names it gets a guard that runs
+  jaq's builtin first and re-raises with jq's text only on a wrong input type.
 
 ## Conformance
 
@@ -139,6 +155,7 @@ pass rates; `V=1` lists every failure.
 | `src/post.rs` | `-a` and `--seq` byte transforms. |
 | `src/native.rs` | `--explain` / `--install-shim`, reachable only under the native name. |
 | `src/syntax/lex.rs`, `parse.rs` | jq's lexer and grammar, transcribed. Every node keeps its span. |
+| `src/regex.rs` | Facts about literal regexes for the regex repairs: group naming (mirrors the prelude's run-time scan), whether a group can be skipped, whether the regex can match empty. |
 | `src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
 | `src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
 | `src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |

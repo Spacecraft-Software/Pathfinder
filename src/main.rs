@@ -30,6 +30,7 @@ mod native;
 mod post;
 mod prelude;
 mod program;
+mod regex;
 mod scan;
 mod syntax;
 mod translate;
@@ -138,7 +139,7 @@ fn main() {
     };
 
     if matches!(verb, Some(native::Verb::Explain)) {
-        native::explain(&args, &plan);
+        native::explain(&plan);
         return;
     }
 

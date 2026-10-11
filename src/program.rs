@@ -47,6 +47,9 @@ pub struct Assembly {
     /// A compile error jq would report for this program, located in `src`.
     /// jaq would run the program; jq refuses it, and so must the shim.
     pub compile_error: Option<CompileError>,
+    /// Whether the filter's own syntax was rewritten (`syntax::rewrite`), as
+    /// opposed to only gaining prelude definitions.
+    pub syntax_rewritten: bool,
 }
 
 /// A binding to wrap the filter in, as the text before the parenthesised body.
@@ -111,6 +114,21 @@ pub fn assemble(
             }
         }
     }
+    // The regex repairs look literal regexes up instead of scanning them on
+    // every call; collect them only when one of those repairs is injected.
+    let regex_ctx;
+    let ctx = if wanted
+        .iter()
+        .any(|w| matches!(w.as_str(), "match" | "capture" | "sub" | "gsub" | "scan"))
+    {
+        regex_ctx = prelude::Context {
+            regex_literals: crate::regex::regex_args(body),
+            ..ctx.clone()
+        };
+        &regex_ctx
+    } else {
+        ctx
+    };
     let prelude_text = prelude::render(&wanted, ctx);
     let body: &str = rewritten_body.as_ref().map_or(body, |rw| rw.text.as_str());
 
@@ -153,6 +171,7 @@ pub fn assemble(
         shadowed,
         rewritten,
         compile_error,
+        syntax_rewritten: rewritten_body.is_some(),
     }
 }
 

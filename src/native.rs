@@ -11,7 +11,6 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use crate::jqargs::JqArgs;
 use crate::translate::Plan;
 
 /// Show what Pathfinder would run, without running it.
@@ -19,7 +18,7 @@ use crate::translate::Plan;
 /// This is the debugging entry point: when a filter behaves unexpectedly, the
 /// first question is always "what did jaq actually receive", and guessing at it
 /// from the source is how subtle rewriting bugs survive.
-pub fn explain(args: &JqArgs, plan: &Plan) {
+pub fn explain(plan: &Plan) {
     println!("jaq argv:");
     for a in &plan.argv {
         println!("  {}", a.to_string_lossy());
@@ -68,13 +67,12 @@ pub fn explain(args: &JqArgs, plan: &Plan) {
     }
 
     if let Some(a) = &plan.assembly
-        && a.rewritten
-        && uses_assignment(args)
+        && a.syntax_rewritten
     {
         println!(
-            "\nnote: this filter assigns to or deletes a path. Pathfinder rewrote it so \
-             jaq creates missing containers and deletes the way jq does. Set \
-             PATHFINDER_NO_REWRITE=1 to compare with jaq's own behaviour."
+            "\nnote: Pathfinder rewrote parts of this filter that jaq would run \
+             differently from jq (assignment, deletion, indices, slices, @base64d and \
+             others). Set PATHFINDER_NO_REWRITE=1 to compare with jaq's own behaviour."
         );
     }
 }
@@ -82,21 +80,6 @@ pub fn explain(args: &JqArgs, plan: &Plan) {
 /// Whether the plan gives up the `exec` fast path.
 fn needs_pipe(plan: &Plan) -> bool {
     !plan.post.is_identity() || plan.strip_input_rs || plan.concat_inputs.is_some()
-}
-
-/// Crude check for an assignment operator in the filter, used only to decide
-/// whether to print a warning.
-fn uses_assignment(args: &JqArgs) -> bool {
-    args.program
-        .as_ref()
-        .and_then(|p| p.to_str())
-        .is_some_and(|p| {
-            p.contains("|=")
-                || p.contains("+=")
-                || p.contains("-=")
-                || p.contains("//=")
-                || p.contains('=')
-        })
 }
 
 /// Result of installing the `jq` shim symlink.

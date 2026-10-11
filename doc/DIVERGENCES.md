@@ -32,17 +32,28 @@ copied byte for byte; a filter that needs nothing is passed through unchanged.
 | `{(.a): 1}` with a non-string `.a` | run-time error | `{1:1}` — not JSON | jq's error |
 | `{a, $__loc__}` | `"__loc__"` shorthand | parse error | jq's result |
 | `reduce .[] / .[] as $x (…)` | source is a whole expression | parse error | parenthesised |
+| `.[1.5]`, `.[length/2]`, `.[.i]` with `"i": 1.0` | truncates the index | error | jq's result |
+| `.[nan]`, `.[1.2:3.5]`, `.[nan:2]` | `null`; bounds rounded outwards | error | jq's result |
+| `null \| .[1:3]`, `[.[] \| .[1:3]?]` over nulls | `null` | error | `null` |
 
 Measured at 100,000 elements, the rewritten assignments take between 0.1× and
 3.6× jq's time (the slow end is building nested fields, `.[].w.x = 1`); `del`
 takes between 0.6× and 2.9×.
 
+An index whose key is not a literal (`.[$i]`, `.[.k]`) is rounded inline, which
+costs about 0.5 µs per indexing: 300,000 of them took 0.49 s, against 0.30 s
+unrewritten and jq's 0.22 s. A key written as an integer or a string is left
+alone, and slices cost nothing measurable (0.37 s against 0.35 s).
+
 What is still not quite jq:
 
-- **Error wording on a bad path.** Where jaq's own `path()` or `getpath` fails
-  first, its message is jaq's (`cannot index 1 with "b"`), not jq's.
-- **Fractional indices.** `.[1.5] = 1` and `del(.[1.5])` truncate in jq; jaq
-  rejects the index.
+- **Error wording on a bad path.** Where jaq's own `path()` fails, the message
+  is jaq's (`invalid path expression with input …`), not jq's.
+- **Paths through a rounded index.** `path(.[1.5])` is `[1.5]` in jq and `[1]`
+  here; `null | path(.[1:3])` is `[{"start":1,"end":3}]` in jq and `[]` here.
+  The values read and written are jq's.
+- **`.[infinite]`** is `null` in jq and still an error here; `.[nan] = 1`
+  raises an error in both, but with different words.
 - **`break` inside a `?//` body.** jq treats it like an error and tries the next
   alternative; the rewrite, built on `try`, lets it through.
 - **`.[0]` of an object** is `null` in jaq and an error in jq. The `?//` rewrite
@@ -58,9 +69,40 @@ What is still not quite jq:
 | `"a" * 0` | `""` | `null` | Repairing it means rewriting every `*`. |
 | `"a" * 0.5` | `""` | error | Same. |
 | `1 / 0` | error | `Infinity` — **invalid JSON on stdout** | Same, for `/`. Worth knowing about: the output will not parse. |
-| `"aGk" \| @base64d` (unpadded) | lenient | `Invalid padding` | `@`-formats cannot be defined in the jq language. |
 | `debug` output | `["DEBUG:",1]` | `["DEBUG:", 1]` | Stderr only. Fixing it means capturing stderr, which costs more than the space it saves. |
-| Error text | `jq: error (at <stdin>:0): …` | `Error: …` | Same reason. stderr is passed through untouched so `debug`, colour, and interleaving stay correct. |
+| Error text on stderr | `jq: error (at <stdin>:0): …` | `Error: …` | Same reason. stderr is passed through untouched so `debug`, colour, and interleaving stay correct. What a `catch` handler sees *is* jq's text; see below. |
+
+## Error messages a script can see
+
+A script sees an error's text only through `try … catch`, and that is where
+Pathfinder gives it jq's wording. jaq's generic messages carry the values
+involved, so they are parsed back and re-described as jq does:
+
+| jaq | jq 1.8.1 (and Pathfinder, in a `catch` handler) |
+|---|---|
+| `cannot use 123 as iterable (array or object)` | `Cannot iterate over number (123)` |
+| `cannot index 1 with "a"`, `cannot index 0 with 0` | `Cannot index number with string "a"`, `Cannot index number with number` |
+| `cannot calculate "a" - "a"` | `string ("a") and string ("a") cannot be subtracted` |
+| `cannot calculate 1 % 0` | `number (1) and number (0) cannot be divided (remainder) because the divisor is zero` |
+| `true has no length`, `cannot use "a" as number` | `boolean (true) has no length`, `string ("a") number required` |
+| `cannot use "foo" as number` (from `-.`) | `string ("foo") cannot be negated` |
+
+Values are shown as jq 1.8.1 shows them: cut to 11 bytes plus `...`, never
+splitting a character. Builtins whose jq message names the builtin —
+`utf8bytelength`, `trim`/`ltrim`/`rtrim`, `bsearch`, `mktime`, `strftime`,
+`strflocaltime`, `has`, `implode`, `toboolean`, `tonumber` — raise jq's text
+themselves.
+
+Limits:
+
+- A handler that never reads the error (`catch null`, `catch empty`, a
+  constant) is left alone; translating costs about 5 µs per caught error when
+  the message is not one of jaq's, and about 18 µs when it is.
+- A user's own `error("cannot use 1 as number")` is translated too, since it
+  cannot be told apart from jaq's.
+- **Path-expression errors** keep jaq's words: jq reports *where* the path
+  broke (`… near attempt to iterate through [{"a":1}]`) and the result rather
+  than the input, which jaq never reports.
 
 ## The number model
 
@@ -159,14 +201,37 @@ jq 1.8.1's own definition, or wraps jaq's builtin, only when the filter uses it:
 | `join(",")` with `null` items | writes `null` | writes nothing |
 | `pick(.[1])` | `{1:2}` — not JSON | `[null,2]` |
 | `match`/`test`/`capture` with `[re, flags]` | error | accepted |
+| `match` on a group that did not take part, `"b" \| match("(a)?b")` | leaves the group out of `captures` | lists it: `{"offset":-1,"string":null,"length":0,"name":null}` |
+| `match` on an unnamed group | no `name` key | `"name": null` |
+| `capture("(?<x>a)?b")` on `"b"` | `{}` | `{"x":null}` |
+| `match("[a-z]*"; "g")` on `"ab1"` | skips the empty match at 2 | reports it, as Oniguruma does |
+| `gsub("(?<x>.)"; "\(.x)", "-")` (several outputs) | the cartesian product | jq's one string per output |
 | `ltrimstr`/`rtrimstr`/`startswith`/`endswith` on a non-string | generic error | jq's own message |
 | `setpath` past an array's start / at a huge index | pads or errors oddly | `Out of bounds negative array index` / `Array index too large` |
 | `delpaths` | deletes in the order given; reorders object keys | jq's simultaneous deletion, keys in order |
 | `tonumber` | parses a JSON stream: `"1a"` → `1` then an error, `" 4"` → `4`, `""` → nothing, `"+5.43"` → `+5.43` (not JSON) | jq's grammar: sign, digits, point, exponent, `nan`, `infinity`; anything else is an error |
+| `from_entries` | reads only `key`/`k`/`name`, `value`/`v`; `[{"key":null,"value":1}]` → `{null:1}` — not JSON | also `Key`/`Name`/`Value`; a non-string key is an error |
+| `with_entries(f)` | goes through jaq's own `from_entries` | through the repaired one |
+| `has(k)` | `true` for a negative index, `false` for a number key on an object; errors on `has(nan)`, `has(1.5)` | `false`, an error, `false`, truncates; `null` has nothing |
+| `implode` | rejects `1.5`, `-1`, `1114112` | truncates; writes U+FFFD outside Unicode and for surrogates; jq's messages |
+| `toboolean` | parses JSON: `" true"` → `true` | exactly `true`, `false`, `"true"`, `"false"` |
+| `@base64d` | exact padding only; rejects unused low bits (`"QR=="`) | decodes up to the first `=`, padding optional, low bits ignored; jq's two errors |
+| `@urid` | keeps `%`-garbage as text; invalid UTF-8 becomes U+FFFD | both are errors |
 
-Still divergent: jaq's `from_entries` accepts a non-string key and prints an
-object that is not JSON (`{null:2}`); jq errors. (An object *construction* with
-a computed key is checked; see above.)
+The regex repairs need to know which capture groups can go unmatched and
+whether a regex can match empty. For regexes written as literals in the filter
+that is worked out once, in `src/regex.rs`; a regex computed at run time is
+scanned on every call. Measured on 100,000 lines (pre-repair time in brackets,
+jq 1.8.1 in parentheses): `match` with a group 2.6 s [2.1 s] (0.8 s), `capture`
+2.9 s [2.5 s] (1.4 s), `sub` 2.8 s [2.1 s] (2.5 s), `gsub("[0-9]"; "#")`
+13.2 s [16.2 s] (24.6 s), `scan` 3.6 s [1.8 s] (1.0 s). A group that can go
+unmatched takes the slower general path (`capture` with an optional group:
+5.7 s). Lookaround and `\b`'s Unicode word rules belong to the regex engine and
+stay jaq's.
+
+One deliberate exception: jq 1.8.1's `@urid` turns every non-ASCII character
+of its input into U+FFFD (`"é%41" | @urid` is `"��A"`), a bug jq 1.8.2 fixed
+(`"éA"`). Pathfinder follows 1.8.2 there rather than reproduce the bug.
 
 ## Behaviour Pathfinder adds on top of jaq
 
