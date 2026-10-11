@@ -5,6 +5,10 @@ pub struct List<T>(alloc::rc::Rc<Node<T>>);
 enum Node<T> {
     Nil,
     Cons(T, List<T>),
+    /// Pathfinder: a path that a path expression lost, as jq 1.8.1 tracks it:
+    /// the value at the path when it was lost, and the path itself.
+    /// Only paths (`path(f)`) ever carry it; to everything else it is `Nil`.
+    Lost(T, List<T>),
 }
 
 impl<T> Clone for List<T> {
@@ -22,7 +26,7 @@ impl<T> Default for List<T> {
 impl<T: Clone> List<T> {
     pub fn pop(self) -> Option<(T, Self)> {
         match alloc::rc::Rc::try_unwrap(self.0).unwrap_or_else(|rc| (*rc).clone()) {
-            Node::Nil => None,
+            Node::Nil | Node::Lost(..) => None,
             Node::Cons(head, tail) => Some((head, tail)),
         }
     }
@@ -44,10 +48,23 @@ impl<T> List<T> {
         iter.into_iter().fold(self, Self::cons)
     }
 
+    /// Pathfinder: mark the path `self` as lost, `x` being the value at it.
+    pub fn lose(self, x: T) -> Self {
+        Self(Node::Lost(x, self).into())
+    }
+
+    /// Pathfinder: if the path is lost, the value at it and the path.
+    pub fn lost(&self) -> Option<(&T, &Self)> {
+        match &*self.0 {
+            Node::Lost(x, xs) => Some((x, xs)),
+            _ => None,
+        }
+    }
+
     /// Return the element most recently added to the list.
     pub fn head(&self) -> Option<&T> {
         match &*self.0 {
-            Node::Nil => None,
+            Node::Nil | Node::Lost(..) => None,
             Node::Cons(x, _) => Some(x),
         }
     }
@@ -65,7 +82,7 @@ impl<T> List<T> {
         for _ in 0..n {
             match &*cur.0 {
                 Node::Cons(_, xs) => cur = xs,
-                Node::Nil => break,
+                Node::Nil | Node::Lost(..) => break,
             }
         }
         cur
@@ -83,7 +100,7 @@ impl<'a, T> Iterator for Iter<'a, T> {
     fn next(&mut self) -> Option<Self::Item> {
         let (x, xs) = match &*self.0 .0 {
             Node::Cons(x, xs) => (x, xs),
-            Node::Nil => return None,
+            Node::Nil | Node::Lost(..) => return None,
         };
         self.0 = xs;
         Some(x)

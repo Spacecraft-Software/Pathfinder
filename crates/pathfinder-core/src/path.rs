@@ -80,6 +80,11 @@ impl<'a, V: ValT + 'a> Path<V> {
     }
 
     pub(crate) fn paths(self, vp: (V, RcList<V>)) -> ValRs<'a, (V, RcList<V>), V> {
+        // Pathfinder: on a value whose path is lost, the first part fails,
+        // `?` or not, as jq 1.8.1's INDEX_OPT and EACH_OPT do.
+        if let (Some(_), Some((part, _))) = (vp.1.lost(), self.0.first()) {
+            return box_once(Err(part.lost(&vp.0)));
+        }
         run(self.0.into_iter(), vp, |part, vp| part.paths(vp))
     }
 
@@ -143,6 +148,21 @@ impl<'a, V: ValT + 'a> Part<V> {
                 v.range(from.as_ref()..upto.as_ref())
                     .map(|v| (v, p.cons(V::from(from.clone()..upto.clone())))),
             ),
+        }
+    }
+
+    /// Pathfinder: jq 1.8.1's error for this part applied to `v`, a value
+    /// whose path is lost. jq writes a slice key with both bounds.
+    fn lost(&self, v: &V) -> crate::Error<V> {
+        use alloc::string::ToString;
+        let bound = |b: &Option<V>| b.as_ref().map_or("null".into(), ToString::to_string);
+        match self {
+            Self::Index(idx) => crate::Error::path_index(v, idx.to_string()),
+            Self::Range(None, None) => crate::Error::path_iter(v),
+            Self::Range(from, upto) => {
+                let k = alloc::format!("{{\"start\":{},\"end\":{}}}", bound(from), bound(upto));
+                crate::Error::path_index(v, k)
+            }
         }
     }
 

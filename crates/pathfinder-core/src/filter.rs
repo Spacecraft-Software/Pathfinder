@@ -416,10 +416,50 @@ fn recurse_update<'a, V: ValT + 'a>(v: V, f: &dyn Update<'a, V>) -> ValXs<'a, V>
     box_iter::then(v.map_values(Optional, |v| recurse_update(v, f)), f)
 }
 
+/// Pathfinder: the value at the path of `vp` and that path, intact.
+///
+/// jq 1.8.1 keeps, beside the path, the value at it (`value_at_path`), and
+/// leaves both unchanged when a filter that is no path expression runs.
+fn at_path<V: Clone>((v, p): &(V, RcList<V>)) -> (V, RcList<V>) {
+    match p.lost() {
+        Some((at, p)) => (at.clone(), p.clone()),
+        None => (v.clone(), p.clone()),
+    }
+}
+
+/// Pathfinder: outputs `ys` of a filter that is no path expression, run
+/// inside a path expression at path `p`, where the value is `at`.
+///
+/// jq 1.8.1 runs such a filter normally. An output keeps the path only if it
+/// is identical to the value at the path (`jv_identical`), which for values
+/// that are not shared in memory means `null`, `true` or `false`; otherwise
+/// the path is lost, and the first path operation on the output, or else the
+/// end of `path(...)`, fails.
+fn lost<'a, V: ValT + 'a>(ys: ValXs<'a, V>, at: V, p: RcList<V>) -> ValPathXs<'a, V> {
+    Box::new(ys.map(move |y| {
+        let y = y?;
+        let same = (!y.as_bool() || y == V::from(true)) && y == at;
+        Ok(if same {
+            (y, p.clone())
+        } else {
+            (y, p.clone().lose(at.clone()))
+        })
+    }))
+}
+
+/// Pathfinder: `v | f` inside a path expression, for a filter `f` that is
+/// no path expression (see `lost`).
+fn lose<'a, D: DataT>(f: &Id, cv: Cvp<'a, D>) -> ValPathXs<'a, D::V<'a>> {
+    let (at, p) = at_path(&cv.1);
+    lost(f.run((cv.0, cv.1 .0)), at, p)
+}
+
 /// A filter which is implemented using function pointers.
 pub struct Native<D: DataT + ?Sized> {
     run: RunPtr<D>,
-    paths: PathsPtr<D>,
+    // Pathfinder: `None` for a filter that is no path expression, which
+    // `Id::paths` then runs as jq 1.8.1 does (see `lose`).
+    paths: Option<PathsPtr<D>>,
     update: UpdatePtr<D>,
 }
 
@@ -441,13 +481,14 @@ impl<D: DataT> Native<D> {
     pub const fn new(run: RunPtr<D>) -> Self {
         Self {
             run,
-            paths: |cv| box_once(Err(Exn::from(Error::path_expr(cv.1 .0)))),
+            paths: None,
             update: |cv, _| box_once(Err(Exn::from(Error::path_expr(cv.1)))),
         }
     }
 
     /// Specify a paths function (used for `path(...)`).
     pub const fn with_paths(self, paths: PathsPtr<D>) -> Self {
+        let paths = Some(paths);
         Self { paths, ..self }
     }
 
@@ -576,17 +617,37 @@ impl Id {
     /// In particular, `v | path(f)` in context `c` yields the same paths as
     /// `f.paths((c, (v, Default::default())))`.
     pub fn paths<'a, D: DataT>(&self, cv: Cvp<'a, D>) -> ValPathXs<'a, D::V<'a>> {
-        let err = |v| box_once(Err(Exn::from(Error::path_expr(v))));
         let proj_cv = |cv: &Cvp<'a, D>| (cv.0.clone(), cv.1 .0.clone());
         let proj_val = |(val, _path): &(D::V<'a>, _)| val.clone();
         match &cv.0.lut().terms[self.0] {
-            Ast::ToString => err(cv.1 .0),
-            Ast::Int(_) | Ast::Num(_) | Ast::Str(_) => err(cv.1 .0),
-            Ast::Arr(_) | Ast::ObjEmpty | Ast::ObjSingle(..) => err(cv.1 .0),
-            Ast::Neg(_) | Ast::Logic(..) | Ast::Math(..) | Ast::Cmp(..) => err(cv.1 .0),
-            Ast::Update(..) | Ast::Assign(..) => err(cv.1 .0),
-            Ast::UpdateMath(..) | Ast::UpdateAlt(..) => err(cv.1 .0),
+            // Pathfinder: no path expression; jq 1.8.1 runs it all the same,
+            // and fails only when the path it lost is used.
+            Ast::ToString => lose(self, cv),
+            Ast::Int(_) | Ast::Num(_) | Ast::Str(_) => lose(self, cv),
+            Ast::ObjEmpty | Ast::ObjSingle(..) => lose(self, cv),
+            Ast::Logic(..) | Ast::Math(..) | Ast::Cmp(..) => lose(self, cv),
+            // Pathfinder: jq 1.8.1 collects `[f]` and negates `-f` without
+            // leaving the path expression, so `f` runs as one, and a path
+            // operation in it on a value with a lost path fails.
+            Ast::Arr(f) => {
+                let (at, p) = at_path(&cv.1);
+                let arr = f.paths(cv).map(|r| r.map(|(v, _p)| v)).collect();
+                lost(box_once(arr), at, p)
+            }
+            Ast::Neg(f) => Box::new(f.paths(cv).map(|r| {
+                let y = r?;
+                let (at, p) = at_path(&y);
+                Ok(((-y.0)?, p.lose(at)))
+            })),
+            Ast::Update(..) | Ast::Assign(..) => lose(self, cv),
+            Ast::UpdateMath(..) | Ast::UpdateAlt(..) => lose(self, cv),
             Ast::Id => box_once(Ok(cv.1)),
+            // Pathfinder: `..` is `., (.[]? | ..)` in jq 1.8.1, so on a lost
+            // path it yields the value, then fails at `.[]?`.
+            Ast::Recurse if cv.1 .1.lost().is_some() => {
+                let e = Error::path_iter(&cv.1 .0);
+                Box::new(core::iter::once(Ok(cv.1)).chain(core::iter::once(Err(Exn::from(e)))))
+            }
             Ast::Recurse => recurse_run(cv.1, &|(v, p)| {
                 v.key_values()
                     .map(move |r| r.map(|(k, v_)| (v_, p.clone().cons(k))))
@@ -606,17 +667,29 @@ impl Id {
                 let any_true = l
                     .run(proj_cv(&cv))
                     .any(|v| v.as_ref().map_or(true, ValT::as_bool));
-                if any_true { l } else { r }.paths(cv)
+                // Pathfinder: only the true outputs of `l`, as in `run` and in
+                // jq 1.8.1, where `path(.[] // 0)` on `[false, 1]` is `[1]`.
+                if any_true {
+                    let true_ = |vp: &(D::V<'a>, _)| vp.0.as_bool();
+                    Box::new(l.paths(cv).filter(move |r| r.as_ref().map_or(true, true_)))
+                } else {
+                    r.paths(cv)
+                }
             }
             Ast::Ite(if_, then_, else_) => {
                 flat_map_then_with(if_.run(proj_cv(&cv)), cv, move |v, cv| {
                     if v.as_bool() { then_ } else { else_ }.paths(cv)
                 })
             }
-            Ast::TryCatch(f, c) => try_catch_run(f.paths((cv.0.clone(), cv.1)), move |e| {
-                c.run((cv.0.clone(), e.into_val()))
-                    .map(|e| Err(Exn::from(Error::path_expr(e?))))
-            }),
+            // Pathfinder: the handler runs as a path expression on the error,
+            // whose path is lost (see `lost`), as in jq 1.8.1.
+            Ast::TryCatch(f, c) => {
+                let (at, p) = at_path(&cv.1);
+                try_catch_run(f.paths((cv.0.clone(), cv.1)), move |e| {
+                    let e = lost(box_once(Ok(e.into_val())), at.clone(), p.clone());
+                    flat_map_then_with(e, cv.0.clone(), move |e, ctx| c.paths((ctx, e)))
+                })
+            }
             Ast::Path(f, path) => {
                 let path = path.map_ref(|i| {
                     let cv = (cv.0.clone(), cv.1 .0.clone());
@@ -629,7 +702,7 @@ impl Id {
                 })
             }
             Ast::Var(v) => match cv.0.vars.get(*v).unwrap() {
-                Bind::Var(_) => err(cv.1 .0),
+                Bind::Var(_) => lose(self, cv),
                 Bind::Fun(l) => l.0.paths((cv.0.with_vars(l.1.clone()), cv.1)),
                 Bind::Label(l) => box_once(Err(Exn(exn::Inner::Break(*l)))),
             },
@@ -649,10 +722,13 @@ impl Id {
                 def_run(id, call_typ, cvs, Id::paths, with_vars, into, from)
             }
             Ast::Label(id) => label_run(cv, |cv| id.paths(cv)),
-            Ast::Native(id, args) => {
-                let cvs = bind_vars(args, cv.0.with_vars(Vars::new([])), cv, proj_val);
-                flat_map_then(cvs, |cv| (cv.0.lut().funs[*id].paths)(cv))
-            }
+            Ast::Native(id, args) => match cv.0.lut().funs[*id].paths {
+                Some(paths) => {
+                    let cvs = bind_vars(args, cv.0.with_vars(Vars::new([])), cv, proj_val);
+                    flat_map_then(cvs, move |cv| paths(cv))
+                }
+                None => lose(self, cv),
+            },
         }
     }
 
@@ -706,7 +782,13 @@ impl Id {
             }),
             Ast::Alt(l, r) => {
                 let some_true = l.run(cv.clone()).any(|y| y.map_or(true, |y| y.as_bool()));
-                if some_true { l } else { r }.update(cv, f)
+                // Pathfinder: update only where `l` is true, as `paths` yields.
+                if some_true {
+                    let f = move |v: D::V<'a>| if v.as_bool() { f(v) } else { box_once(Ok(v)) };
+                    l.update(cv, Box::new(f))
+                } else {
+                    r.update(cv, f)
+                }
             }
             Ast::Fold(xs, pat, init, update, fold_type) => {
                 let xs = rc_lazy_list::List::from_iter(run_and_bind(xs, cv.clone(), pat));

@@ -1,11 +1,10 @@
-def null:  [][0];
-
 def stderr:      (       stderr_empty  as $x | .), .;
 def debug:       (        debug_empty  as $x | .), .;
 def debug(msgs): ((msgs | debug_empty) as $x | .), .;
 
 def halt: halt(0);
-def halt_error($exit_code): stderr_empty, halt($exit_code);
+# Pathfinder: jq 1.8.1 writes a string raw, nothing for null, else JSON and a newline.
+def halt_error($exit_code): (if . == null then empty elif . >= "" and . < [] then . else tojson + "\n" end | stderr_empty), halt($exit_code);
 def halt_error: halt_error(5);
 
 # Not defined in jq!

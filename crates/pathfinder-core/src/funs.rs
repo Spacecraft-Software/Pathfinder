@@ -14,7 +14,11 @@ where
             let (f, fc) = cv.0.pop_fun();
             let cvp = (fc, (cv.1, Default::default()));
             Box::new(f.paths(cvp).map(|vp| {
-                let (_v, path) = vp?;
+                let (v, path) = vp?;
+                // Pathfinder: a path lost on the way fails here, as in jq 1.8.1.
+                if path.lost().is_some() {
+                    return Err(Exn::from(Error::path_result(&v)));
+                }
                 let path: Vec<_> = path.iter().cloned().collect();
                 Ok(path.into_iter().rev().collect())
             }))
@@ -24,6 +28,10 @@ where
             let cvp = (fc, (cv.1, Default::default()));
             Box::new(f.paths(cvp).map(|vp| {
                 let (v, path) = vp?;
+                // Pathfinder: as in `path`.
+                if path.lost().is_some() {
+                    return Err(Exn::from(Error::path_result(&v)));
+                }
                 let path: Vec<_> = path.iter().cloned().collect();
                 Ok([path.into_iter().rev().collect(), v].into_iter().collect())
             }))

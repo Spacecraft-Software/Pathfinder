@@ -13,6 +13,8 @@ extern crate std;
 
 mod funs;
 mod num;
+// Pathfinder: jq's parse error messages.
+mod parse_error;
 #[macro_use]
 pub mod write;
 pub mod read;
@@ -25,8 +27,6 @@ use core::fmt;
 use core::hash::{Hash, Hasher};
 use jaq_core::box_iter::box_once;
 use jaq_core::{load, ops, path, val, Exn};
-use num_bigint::BigInt;
-use num_traits::{cast::ToPrimitive, Signed};
 
 pub use funs::{bytes_valrs, funs};
 pub use num::Num;
@@ -206,6 +206,10 @@ impl jaq_core::ValT for Val {
             return self.map_range(range, opt, f);
         };
         match self {
+            // Pathfinder: jq 1.8.1 indexes an object only with a string.
+            Val::Obj(_) if !matches!(index, Val::BStr(_) | Val::TStr(_)) => {
+                opt.fail(self, |v| Exn::from(Error::index(v, index.clone())))
+            }
             Val::Obj(ref mut o) => {
                 use indexmap::map::Entry::{Occupied, Vacant};
                 match Rc::make_mut(o).entry(index.clone()) {
@@ -497,7 +501,9 @@ impl Val {
                 let indices = iw.filter_map(|(i, w)| (w == **y).then_some(i));
                 Some(indices.map(Val::from).collect())
             }
-            (Val::Obj(o), i) => o.get(i).cloned(),
+            (Val::Obj(o), i @ (Val::BStr(_) | Val::TStr(_))) => o.get(i).cloned(),
+            // Pathfinder: jq 1.8.1 indexes an object only with a string.
+            (s @ Val::Obj(_), _) => return Err(Error::index(s, index.clone())),
             (v @ (Val::BStr(_) | Val::TStr(_) | Val::Arr(_)), Val::Obj(o)) => {
                 use jaq_core::ValT;
                 let start = o.get(&Val::utf8_str("start"));
@@ -551,12 +557,6 @@ impl FromIterator<Self> for Val {
     fn from_iter<T: IntoIterator<Item = Self>>(iter: T) -> Self {
         Self::Arr(Rc::new(iter.into_iter().collect()))
     }
-}
-
-fn bigint_to_int_saturated(i: &BigInt) -> isize {
-    let (min, max) = (isize::MIN, isize::MAX);
-    i.to_isize()
-        .unwrap_or_else(|| if i.is_negative() { min } else { max })
 }
 
 impl core::ops::Add for Val {
@@ -618,23 +618,32 @@ fn obj_merge(l: &mut Rc<Map>, r: Rc<Map>) {
 impl core::ops::Mul for Val {
     type Output = ValR;
     fn mul(self, rhs: Self) -> Self::Output {
-        use crate::Num::{BigInt, Int};
         use Val::*;
         match (self, rhs) {
             (Num(x), Num(y)) => Ok(Num(x * y)),
-            (s @ (BStr(_) | TStr(_)), Num(BigInt(i)))
-            | (Num(BigInt(i)), s @ (BStr(_) | TStr(_))) => {
-                s * Num(Int(bigint_to_int_saturated(&i)))
+            // Pathfinder: jq 1.8.1's `binop_multiply` and `jv_string_repeat`.
+            // The count is truncated (`"ab" * 1.5` is `"ab"`, `* 0.5` is `""`),
+            // a negative or NaN count is `null`, and a result of 2 GiB or more
+            // is an error rather than an allocation.
+            (s @ (BStr(_) | TStr(_)), Num(n)) | (Num(n), s @ (BStr(_) | TStr(_))) => {
+                let d = n.as_f64();
+                if d < 0.0 || d.is_nan() {
+                    return Ok(Null);
+                }
+                let count = if d > f64::from(i32::MAX) { i32::MAX as usize } else { d as usize };
+                let len = match &s {
+                    BStr(b) | TStr(b) => b.len(),
+                    _ => unreachable!(),
+                };
+                if (len as u64).saturating_mul(count as u64) >= (i32::MAX as u64 - 8) {
+                    return Err(Error::str("Repeat string result too long"));
+                }
+                match s {
+                    BStr(b) => Ok(Self::byte_str(b.repeat(count))),
+                    TStr(b) => Ok(Self::utf8_str(b.repeat(count))),
+                    _ => unreachable!(),
+                }
             }
-            (BStr(s), Num(Int(i))) | (Num(Int(i)), BStr(s)) if i > 0 => {
-                Ok(Self::byte_str(s.repeat(i as usize)))
-            }
-            (TStr(s), Num(Int(i))) | (Num(Int(i)), TStr(s)) if i > 0 => {
-                Ok(Self::utf8_str(s.repeat(i as usize)))
-            }
-            // string multiplication with negatives or 0 results in null
-            // <https://jqlang.github.io/jq/manual/#Builtinoperatorsandfunctions>
-            (BStr(_) | TStr(_), Num(Int(_))) | (Num(Int(_)), BStr(_) | TStr(_)) => Ok(Null),
             (Obj(mut l), Obj(r)) => {
                 obj_merge(&mut l, r);
                 Ok(Obj(l))
@@ -677,9 +686,12 @@ impl core::ops::Rem for Val {
     type Output = ValR;
     fn rem(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
-            (Self::Num(x), Self::Num(y)) if !(x.is_int() && y.is_int() && y == Num::Int(0)) => {
-                Ok(Self::Num(x % y))
-            }
+            // Pathfinder: jq's remainder; a divisor that truncates to zero
+            // is an error for any number, as in jq 1.8.1.
+            (Self::Num(x), Self::Num(y)) => match x.rem_jq(&y) {
+                Some(r) => Ok(Self::Num(r)),
+                None => Err(Error::math(Self::Num(x), ops::Math::Rem, Self::Num(y))),
+            },
             (l, r) => Err(Error::math(l, ops::Math::Rem, r)),
         }
     }

@@ -127,6 +127,20 @@ fn wrap_test() {
     assert_eq!(neg(8).wrap(len), None);
 }
 
+/// Pathfinder: the largest integer every double represents exactly. jq does
+/// all arithmetic in doubles; within this bound an integer result is the same
+/// either way, beyond it jq's rounding is reproduced by computing in `f64`.
+const EXACT: isize = 1 << 53;
+
+/// An integer operation as jq computes it: exact while the operands and the
+/// result stay within [`EXACT`], in doubles otherwise.
+fn int_as_jq(r: Option<isize>, x: isize, y: isize, op: fn(f64, f64) -> f64) -> Num {
+    match r {
+        Some(r) if x.abs() <= EXACT && y.abs() <= EXACT && r.abs() <= EXACT => Num::Int(r),
+        _ => Num::Float(op(x as f64, y as f64)),
+    }
+}
+
 fn int_or_big<const N: usize>(
     i: Option<isize>,
     x: [isize; N],
@@ -166,13 +180,12 @@ fn biguint_from_str_radix(s: &str, radix: u32) -> Option<BigUint> {
 impl core::ops::Add for Num {
     type Output = Num;
     fn add(self, rhs: Self) -> Self::Output {
-        use num_bigint::BigInt;
         use Num::*;
         match (self, rhs) {
-            (Int(x), Int(y)) => int_or_big(x.checked_add(y), [x, y], |[x, y]| x + y),
-            (Int(i), BigInt(b)) | (BigInt(b), Int(i)) => Self::big_int(&BigInt::from(i) + &*b),
+            (Int(x), Int(y)) => int_as_jq(x.checked_add(y), x, y, |x, y| x + y),
+            (Int(i), BigInt(b)) | (BigInt(b), Int(i)) => Float(b.to_f64().unwrap() + i as f64),
             (Int(i), Float(f)) | (Float(f), Int(i)) => Float(f + i as f64),
-            (BigInt(x), BigInt(y)) => Self::big_int(&*x + &*y),
+            (BigInt(x), BigInt(y)) => Float(x.to_f64().unwrap() + y.to_f64().unwrap()),
             (BigInt(i), Float(f)) | (Float(f), BigInt(i)) => Float(f + i.to_f64().unwrap()),
             (Float(x), Float(y)) => Float(x + y),
             (Dec(n), r) => Self::from_dec_str(&n) + r,
@@ -184,13 +197,12 @@ impl core::ops::Add for Num {
 impl core::ops::Sub for Num {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
-        use num_bigint::BigInt;
         use Num::*;
         match (self, rhs) {
-            (Int(x), Int(y)) => int_or_big(x.checked_sub(y), [x, y], |[x, y]| x - y),
-            (Int(i), BigInt(b)) => Self::big_int(&BigInt::from(i) - &*b),
-            (BigInt(b), Int(i)) => Self::big_int(&*b - &BigInt::from(i)),
-            (BigInt(x), BigInt(y)) => Self::big_int(&*x - &*y),
+            (Int(x), Int(y)) => int_as_jq(x.checked_sub(y), x, y, |x, y| x - y),
+            (Int(i), BigInt(b)) => Float(i as f64 - b.to_f64().unwrap()),
+            (BigInt(b), Int(i)) => Float(b.to_f64().unwrap() - i as f64),
+            (BigInt(x), BigInt(y)) => Float(x.to_f64().unwrap() - y.to_f64().unwrap()),
             (Float(f), Int(i)) => Float(f - i as f64),
             (Int(i), Float(f)) => Float(i as f64 - f),
             (Float(f), BigInt(i)) => Float(f - i.to_f64().unwrap()),
@@ -205,13 +217,14 @@ impl core::ops::Sub for Num {
 impl core::ops::Mul for Num {
     type Output = Self;
     fn mul(self, rhs: Self) -> Self::Output {
-        use num_bigint::BigInt;
         use Num::*;
         match (self, rhs) {
-            (Int(x), Int(y)) => int_or_big(x.checked_mul(y), [x, y], |[x, y]| x * y),
+            // A zero product with one negative factor is -0 in doubles.
+            (Int(x), Int(y)) if (x == 0 || y == 0) && (x < 0) != (y < 0) => Float(-0.0),
+            (Int(x), Int(y)) => int_as_jq(x.checked_mul(y), x, y, |x, y| x * y),
 
-            (Int(i), BigInt(b)) | (BigInt(b), Int(i)) => Self::big_int(&BigInt::from(i) * &*b),
-            (BigInt(x), BigInt(y)) => Self::big_int(&*x * &*y),
+            (Int(i), BigInt(b)) | (BigInt(b), Int(i)) => Float(b.to_f64().unwrap() * i as f64),
+            (BigInt(x), BigInt(y)) => Float(x.to_f64().unwrap() * y.to_f64().unwrap()),
             (BigInt(i), Float(f)) | (Float(f), BigInt(i)) => Float(f * i.to_f64().unwrap()),
             (Float(f), Int(i)) | (Int(i), Float(f)) => Float(f * i as f64),
             (Float(x), Float(y)) => Float(x * y),
@@ -237,28 +250,64 @@ impl core::ops::Div for Num {
     }
 }
 
+/// Pathfinder: jq's `dtoi`, which clamps a double to `intmax_t` before `%`.
+///
+/// Exactly 2^63 escapes both clamps and is converted by C's `(intmax_t)`,
+/// which is undefined; x86-64's `cvttsd2si` (jq 1.8.1 as measured) yields
+/// `i64::MIN` there, where Rust's `as` would saturate to `i64::MAX`.
+fn dtoi(n: f64) -> i64 {
+    const MIN: f64 = i64::MIN as f64;
+    if n < MIN {
+        i64::MIN
+    } else if -n < MIN {
+        i64::MAX
+    } else if n >= -MIN {
+        i64::MIN
+    } else {
+        n as i64
+    }
+}
+
+impl Num {
+    /// Pathfinder: the remainder as jq 1.8.1's `binop_mod` computes it: NaN
+    /// if either side is NaN, else both sides are truncated to integers by
+    /// [`dtoi`] (so `infinite % 1` is `0`, not NaN) and the remainder takes
+    /// the dividend's sign. `None` when the truncated divisor is zero, which
+    /// jq reports as an error.
+    pub fn rem_jq(&self, rhs: &Self) -> Option<Self> {
+        use Num::*;
+        let (x, y) = match (self, rhs) {
+            // Exact in doubles, so jq's conversion changes nothing.
+            (Int(x), Int(y)) if x.abs() <= EXACT && y.abs() <= EXACT => {
+                return x.checked_rem(*y).map(Int);
+            }
+            (x, y) => (x.as_f64(), y.as_f64()),
+        };
+        if x.is_nan() || y.is_nan() {
+            return Some(Float(f64::NAN));
+        }
+        let (x, y) = (dtoi(x), dtoi(y));
+        match y {
+            0 => None,
+            // `i64::MIN % -1` overflows; jq answers 0.
+            -1 => Some(Int(0)),
+            y => {
+                let r = x % y;
+                // jq's result is a double: beyond 2^53 it is rounded.
+                Some(match isize::try_from(r) {
+                    Ok(r) if r.abs() <= EXACT => Int(r),
+                    _ => Float(r as f64),
+                })
+            }
+        }
+    }
+}
+
 impl core::ops::Rem for Num {
     type Output = Self;
+    /// Pathfinder: [`Num::rem_jq`]; a zero divisor (guarded by `Val`) is NaN.
     fn rem(self, rhs: Self) -> Self::Output {
-        use num_bigint::BigInt;
-        use Num::*;
-        match (self, rhs) {
-            // `x.checked_rem(y)` is `None` only for:
-            //
-            // - `isize::MIN % -1`: The remainder is always 0.
-            // - `x % 0`: This is guarded by `Val`.
-            (Int(x), Int(y)) => Int(x.checked_rem(y).unwrap_or(0)),
-            (BigInt(x), BigInt(y)) => Num::big_int(&*x % &*y),
-            (Int(i), BigInt(b)) => Num::big_int(&BigInt::from(i) % &*b),
-            (BigInt(b), Int(i)) => Num::big_int(&*b % &BigInt::from(i)),
-            (Int(i), Float(f)) => Float(i as f64 % f),
-            (Float(f), Int(i)) => Float(f % i as f64),
-            (BigInt(i), Float(f)) => Float(i.to_f64().unwrap() % f),
-            (Float(f), BigInt(i)) => Float(f % i.to_f64().unwrap()),
-            (Float(x), Float(y)) => Float(x % y),
-            (Dec(n), r) => Self::from_dec_str(&n) % r,
-            (l, Dec(n)) => l % Self::from_dec_str(&n),
-        }
+        self.rem_jq(&rhs).unwrap_or(Num::Float(f64::NAN))
     }
 }
 
@@ -266,6 +315,7 @@ impl core::ops::Neg for Num {
     type Output = Self;
     fn neg(self) -> Self::Output {
         match self {
+            // jq negates a literal exactly, so negation stays exact here.
             Self::Int(x) => int_or_big(x.checked_neg(), [x], |[x]| -x),
             Self::BigInt(x) => Self::big_int(-&*x),
             Self::Float(x) => Self::Float(-x),
@@ -393,16 +443,126 @@ fn float_cmp(left: f64, right: f64) -> Ordering {
     }
 }
 
+// Pathfinder: numbers are printed as jq 1.8.1 prints them. A float goes
+// through jq's `jvp_dtoa_fmt` layout (shortest round-trip digits; `1e+17`,
+// `1e-05`, no `.0` on an integral value); NaN is `null` and an infinity is
+// the largest finite double, which keeps the output JSON. A decimal literal
+// keeps its digits but is spelled the way jq's decNumber spells it (`1E+3`
+// for `1e3`, `1.000` stays `1.000`).
 impl fmt::Display for Num {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Int(i) => write!(f, "{i}"),
             Self::BigInt(i) => write!(f, "{i}"),
-            Self::Float(x) if x.is_nan() => write!(f, "NaN"),
-            Self::Float(f64::INFINITY) => write!(f, "Infinity"),
-            Self::Float(f64::NEG_INFINITY) => write!(f, "-Infinity"),
-            Self::Float(x) => ryu::Buffer::new().format_finite(*x).fmt(f),
-            Self::Dec(n) => write!(f, "{n}"),
+            Self::Float(x) if x.is_nan() => write!(f, "null"),
+            Self::Float(x) => f.write_str(&jq_float(x.clamp(f64::MIN, f64::MAX))),
+            // Most literals are already canonical: no exponent, and no
+            // leading zero to fold. Those are written through unchanged.
+            Self::Dec(n) if dec_is_canonical(n) => f.write_str(n),
+            Self::Dec(n) => f.write_str(&jq_dec(n).unwrap_or_else(|| n.to_string())),
         }
     }
+}
+
+/// jq's `jvp_dtoa_fmt`: David Gay's `g_fmt` over the shortest digits.
+fn jq_float(x: f64) -> String {
+    // `{:e}` is the shortest round-trip representation, like `dtoa` mode 0.
+    let sci = alloc::format!("{x:e}");
+    let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
+    let (sign, mantissa) = match mantissa.strip_prefix('-') {
+        Some(m) => ("-", m),
+        None => ("", mantissa),
+    };
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let decpt = exp.parse::<i32>().unwrap_or(0) + 1;
+    let n = digits.len() as i32;
+    let mut out = String::from(sign);
+    if decpt <= -4 || decpt > n + 15 {
+        out.push_str(&digits[..1]);
+        if n > 1 {
+            out.push('.');
+            out.push_str(&digits[1..]);
+        }
+        let e = decpt - 1;
+        out.push_str(&alloc::format!("e{}{:02}", if e < 0 { '-' } else { '+' }, e.abs()));
+    } else if decpt <= 0 {
+        out.push_str("0.");
+        out.extend(core::iter::repeat_n('0', (-decpt) as usize));
+        out.push_str(&digits);
+    } else if decpt >= n {
+        out.push_str(&digits);
+        out.extend(core::iter::repeat_n('0', (decpt - n) as usize));
+    } else {
+        out.push_str(&digits[..decpt as usize]);
+        out.push('.');
+        out.push_str(&digits[decpt as usize..]);
+    }
+    out
+}
+
+/// Whether decNumber would print the literal `n` exactly as written: plain
+/// notation (no exponent) whose integer part is non-zero and has no leading
+/// zero, or `0.` followed by fewer than six zeros before the first digit.
+fn dec_is_canonical(n: &str) -> bool {
+    let n = n.strip_prefix('-').unwrap_or(n);
+    let b = n.as_bytes();
+    if b.iter().any(|c| matches!(c, b'e' | b'E' | b'+')) || b.is_empty() {
+        return false;
+    }
+    match b {
+        [b'0', b'.', frac @ ..] => {
+            let zeros = frac.iter().take_while(|c| **c == b'0').count();
+            zeros < 6 && zeros < frac.len()
+        }
+        [b'1'..=b'9', ..] => true,
+        _ => false,
+    }
+}
+
+/// decNumber's to-scientific-string for a decimal literal, or `None` if the
+/// text is not one.
+fn jq_dec(n: &str) -> Option<String> {
+    let (sign, n) = match n.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", n.strip_prefix('+').unwrap_or(n)),
+    };
+    let (mantissa, exp) = match n.find(['e', 'E']) {
+        Some(i) => (&n[..i], n[i + 1..].parse::<i64>().ok()?),
+        None => (n, 0),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if int.is_empty() && frac.is_empty() || !(int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    let all: String = alloc::format!("{int}{frac}");
+    let coeff = match all.trim_start_matches('0') {
+        "" => "0",
+        c => c,
+    };
+    let e = exp.checked_sub(i64::try_from(frac.len()).ok()?)?;
+    let len = coeff.len() as i64;
+    let adjusted = e + len - 1;
+    let mut out = String::from(sign);
+    if e <= 0 && adjusted >= -6 {
+        if e == 0 {
+            out.push_str(coeff);
+        } else if len > -e {
+            let point = (len + e) as usize;
+            out.push_str(&coeff[..point]);
+            out.push('.');
+            out.push_str(&coeff[point..]);
+        } else {
+            out.push_str("0.");
+            out.extend(core::iter::repeat_n('0', (-e - len) as usize));
+            out.push_str(coeff);
+        }
+    } else {
+        out.push_str(&coeff[..1]);
+        if len > 1 {
+            out.push('.');
+            out.push_str(&coeff[1..]);
+        }
+        out.push_str(&alloc::format!("E{}{}", if adjusted < 0 { '-' } else { '+' }, adjusted.abs()));
+    }
+    Some(out)
 }

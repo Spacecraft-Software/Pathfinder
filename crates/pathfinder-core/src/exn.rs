@@ -141,6 +141,49 @@ impl<V: From<String>> Error<V> {
     }
 }
 
+/// Pathfinder: jq 1.8.1's errors for a path expression that lost its path,
+/// raised where jq raises them: at the first path operation applied to the
+/// value afterwards, else at the end of `path(f)`.
+impl<V: From<String> + Display> Error<V> {
+    /// `Invalid path expression with result v`.
+    pub fn path_result(v: &V) -> Self {
+        let v = dump_trunc(v.to_string(), 30);
+        Self::new(V::from(alloc::format!(
+            "Invalid path expression with result {v}"
+        )))
+    }
+
+    /// `Invalid path expression near attempt to access element k of v`,
+    /// `k` being the key already written as JSON.
+    pub fn path_index(v: &V, k: String) -> Self {
+        let (k, v) = (dump_trunc(k, 15), dump_trunc(v.to_string(), 30));
+        let msg =
+            alloc::format!("Invalid path expression near attempt to access element {k} of {v}");
+        Self::new(V::from(msg))
+    }
+
+    /// `Invalid path expression near attempt to iterate through v`.
+    pub fn path_iter(v: &V) -> Self {
+        let v = dump_trunc(v.to_string(), 30);
+        let msg = alloc::format!("Invalid path expression near attempt to iterate through {v}");
+        Self::new(V::from(msg))
+    }
+}
+
+/// Pathfinder: jq's `jv_dump_string_trunc` into a buffer of `size` bytes:
+/// text longer than `size - 1` bytes is cut to `size - 4` and ends in `...`,
+/// never splitting a character.
+fn dump_trunc(s: String, size: usize) -> String {
+    if s.len() < size {
+        return s;
+    }
+    let mut end = size - 4;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    alloc::format!("{}...", &s[..end])
+}
+
 impl<V> FromIterator<Part<V>> for Error<V> {
     fn from_iter<T: IntoIterator<Item = Part<V>>>(iter: T) -> Self {
         Self(Part::Str(iter.into_iter().collect()))

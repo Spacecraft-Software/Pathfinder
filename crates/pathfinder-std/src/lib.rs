@@ -368,6 +368,13 @@ where
 {
     let f = || [Bind::Fun(())].into();
     Box::new([
+        // Pathfinder: native, not `def null: [][0];`, so that inside a path
+        // expression `null` is a value, as jq 1.8.1's literal is, and not the
+        // path operation `.[0]` on a constructed array. It is also cheaper.
+        ("null", v(0), |_| {
+            let empty: D::V<'_> = core::iter::empty().collect();
+            bome(empty.index(&D::V::from(0usize)))
+        }),
         ("floor", v(0), |cv| bome(cv.1.round(f64::floor))),
         ("round", v(0), |cv| bome(cv.1.round(f64::round))),
         ("ceil", v(0), |cv| bome(cv.1.round(f64::ceil))),

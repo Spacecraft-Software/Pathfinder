@@ -47,7 +47,9 @@ pub fn collect_if<'a, T: FromIterator<T> + 'a, E: 'a>(
     iter: impl Iterator<Item = Result<T, E>> + 'a,
 ) -> Box<dyn Iterator<Item = Result<T, E>> + 'a> {
     if slurp {
-        Box::new(core::iter::once(iter.collect()))
+        // Pathfinder: slurped only when asked for, so the reader is where jq's
+        // is when an input file turns out to be unreadable.
+        Box::new(core::iter::once_with(move || iter.collect()))
     } else {
         Box::new(iter)
     }

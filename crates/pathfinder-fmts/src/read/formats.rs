@@ -34,11 +34,11 @@ pub fn read<'a>(fmt: Format, read: impl io::BufRead + 'a, s: &'a str, slurp: boo
     use bstr::io::BufReadExt;
     let mut read = read;
     match fmt {
-        Format::Raw if slurp => {
+        // Pathfinder: read only when asked for, as `collect_if` slurps.
+        Format::Raw if slurp => Box::new(core::iter::once_with(move || {
             let mut buf = Vec::new();
-            let result = read.read_to_end(&mut buf);
-            box_once(result.map(|_| Val::utf8_str(buf)))
-        }
+            read.read_to_end(&mut buf).map(|_| Val::utf8_str(buf))
+        })),
         Format::Raw => Box::new(read.byte_lines().map(|r| r.map(Val::utf8_str))),
         Format::Raw0 => collect_if(slurp, read.byte_records(0).map(|r| r.map(Val::utf8_str))),
         Format::Cbor => collect_if(slurp, cbor::read_many(read)),

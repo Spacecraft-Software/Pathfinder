@@ -71,3 +71,62 @@ the two: `bstr` 1.13.1 (jaq 1.13.0), `serde`/`serde_core`/`serde_derive`
 1.0.229 (1.0.228), `serde_json` 1.0.151 (1.0.149), `proc-macro2` 1.0.107
 (1.0.106), `quote` 1.0.47 (1.0.41), `unicode-ident` 1.0.24 (1.0.18). No
 dependency is new; none comes from git.
+
+## Patches applied
+
+`packaging/jaq/0001`–`0015`, the 3.1.1 cuts (never the `-3.1.0` ones), were
+applied in order with `git apply`, their `jaq-core/`, `jaq-std/`, `jaq-json/`
+and `jaq-fmts/` paths rewritten to `crates/pathfinder-*/`. Every hunk applied
+cleanly. The result was checked with `diff -r` against the tree the patches
+were cut from (the import base plus one commit per patch): the four crates
+are identical to it but for their manifests.
+
+| Patch | Applied here |
+|---|---|
+| 0001 version marker | none (CLI only) |
+| 0002 number output | `pathfinder-json`: `num.rs`, `read.rs` |
+| 0003 arithmetic precision | `pathfinder-json`: `num.rs` |
+| 0004 input literals | `pathfinder-json`: `read.rs` |
+| 0005 string repeat | `pathfinder-json`: `lib.rs` |
+| 0006 object keys | `pathfinder-json`: `lib.rs` |
+| 0007 debug format | none (CLI only) |
+| 0008 uncaught errors | `pathfinder-json`: `read.rs` |
+| 0009 halt_error | `pathfinder-std`: `defs.jq` |
+| 0010 path errors | `pathfinder-core`: `exn.rs`, `filter.rs`, `funs.rs`, `path.rs`, `rc_list.rs`; `pathfinder-std`: `defs.jq`, `lib.rs` |
+| 0011 path alternative | `pathfinder-core`: `filter.rs` |
+| 0012 remainder | `pathfinder-json`: `lib.rs`, `num.rs` |
+| 0013 parse errors | `pathfinder-json`: `funs.rs`, `lib.rs`, `parse_error.rs`, `read.rs` |
+| 0014 lazy input | `pathfinder-fmts`: `read/formats.rs`, `read/mod.rs`; `pathfinder-json`: `read.rs` |
+| 0015 file locations | none (CLI only) |
+
+### CLI hunks, applied in T-010
+
+These hunks patch jaq's CLI crate (`jaq/`), which is not imported. They are
+applied when T-010 builds a `jaq`-compatible binary from the imported crates.
+Hunk headers are those of the 3.1.1 cuts.
+
+| Patch | File | Hunks |
+|---|---|---|
+| 0001 | `jaq/src/main.rs` | `-57,7` |
+| 0007 | `jaq/src/main.rs` | `-32,7` |
+| 0008 | `jaq/src/filter.rs` | `-60,6` |
+| 0008 | `jaq/src/jq.rs` | new file (329 lines) |
+| 0008 | `jaq/src/main.rs` | `-1,6`, `-141,18`, `-163,18`, `-182,24`, `-253,7` |
+| 0013 | `jaq/src/jq.rs` | `-13,7`, `-77,6`, `-129,11`, `-141,34`, `-180,29` |
+| 0013 | `jaq/src/main.rs` | `-151,7`, `-227,19`, `-255,6`, `-273,6`, `-312,8`, `-323,7` |
+| 0015 | `jaq/src/filter.rs` | `-64,6`, `-72,6`, `-88,8` |
+| 0015 | `jaq/src/jq.rs` | `-67,6`, `-95,6`, `-128,13`, `-142,6`, `-184,6`, `-195,6`, `-226,6`, `-239,16`, `-425,3` |
+| 0015 | `jaq/src/main.rs` | `-60,9`, `-119,6`, `-150,7`, `-160,12`, `-216,10` |
+
+## Upstream unit tests after the patches
+
+`cargo test --workspace --exclude pathfinder-jq`: before the patches all 361
+pass; after them 252 pass and 111 fail (363 tests: 0013 adds two to
+`pathfinder-json`'s unit tests). Fixing them is T-009.
+
+| Crate | Fail / total | Why |
+|---|---|---|
+| `pathfinder-core` | 3 / 181 | `defs::tostring_zero` (jaq's `0.0`; 0002), `path::index_access` (`{"a":1} \| .[0]` gives `null` in jaq; 0006), `tests::mul` (`0 * "Hello"`; 0005) |
+| `pathfinder-std` | 102 / 102 | test harness, not behaviour: 0009's `halt_error` calls `tojson`, which `jaq-json` defines, and `tests/common/mod.rs` loads only core and std, so no filter compiles |
+| `pathfinder-json` | 5 / 50 integration, 0 / 4 unit | `tojson_inf`, `tojson_nan`, `tojson_ninf`, `fromjson_inf` (jaq's NaN/infinity spellings, changed by 0002/0004) and `math_rem` (`%`, changed by 0012) |
+| `pathfinder-fmts` | 1 / 26 | `formats::cbor` parses JSON with a non-string object key, which 0013 makes a parse error |

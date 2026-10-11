@@ -1,11 +1,10 @@
-use crate::{read, Error, Val, ValR, ValX};
-use alloc::{boxed::Box, vec::Vec};
+use crate::{read, Error, Val, ValR};
+use alloc::{boxed::Box, string::ToString, vec::Vec};
 use bstr::ByteSlice;
 use bytes::{BufMut, Bytes, BytesMut};
-use core::fmt;
-use jaq_core::box_iter::{then, BoxIter};
+use jaq_core::box_iter::BoxIter;
 use jaq_core::native::{bome, run, unary, v, Filter, Fun};
-use jaq_core::{DataT, Exn, RunPtr};
+use jaq_core::{DataT, RunPtr};
 use jaq_std::ValT as _;
 
 impl Val {
@@ -113,13 +112,31 @@ impl Val {
     }
 }
 
-/// Box Map, Map Error.
-fn bmme<'a>(iter: BoxIter<'a, ValR>) -> BoxIter<'a, ValX<'a>> {
-    Box::new(iter.map(|r| r.map_err(Exn::from)))
-}
-
-fn parse_fail(i: &impl fmt::Display, fmt: &str, e: impl fmt::Display) -> Error {
-    Error::str(format_args!("cannot parse {i} as {fmt}: {e}"))
+/// Pathfinder: jq 1.8.1's `type_error`, `<type> (<value>) <message>`, the
+/// value's JSON cut to 11 bytes and `...` when longer than 14, never
+/// splitting a character (as `jaq/src/jq.rs` writes it for uncaught errors).
+fn type_error(v: &Val, msg: &str) -> Error {
+    let typ = match v {
+        Val::Null => "null",
+        Val::Bool(_) => "boolean",
+        Val::Num(_) => "number",
+        Val::BStr(_) | Val::TStr(_) => "string",
+        Val::Arr(_) => "array",
+        Val::Obj(_) => "object",
+    };
+    let s = v.to_string();
+    let dump = if s.len() <= 14 {
+        s
+    } else {
+        let end = s
+            .char_indices()
+            .map(|(i, c)| i + c.len_utf8())
+            .take_while(|&end| end <= 11)
+            .last()
+            .unwrap_or(0);
+        alloc::format!("{}...", &s[..end])
+    };
+    Error::str(format_args!("{typ} ({dump}) {msg}"))
 }
 
 self_cell::self_cell!(
@@ -152,11 +169,14 @@ pub fn funs<D: for<'a> DataT<V<'a> = Val>>() -> impl Iterator<Item = Fun<D>> {
 
 fn base<D: for<'a> DataT<V<'a> = Val>>() -> Box<[Filter<RunPtr<D>>]> {
     Box::new([
+        // Pathfinder: exactly one value, with jq 1.8.1's error messages.
         ("fromjson", v(0), |cv| {
-            bmme(then(cv.1.try_as_utf8_bytes_owned(), |s| {
-                let fail = move |r: Result<_, _>| r.map_err(|e| parse_fail(&cv.1, "JSON", e));
-                bytes_valrs(s, |s| Box::new(read::parse_many(s).map(fail)))
-            }))
+            let parse = |s: &[u8]| read::parse_jq_single(s).map_err(Error::str);
+            let s = match &cv.1 {
+                Val::TStr(s) => Ok(&s[..]),
+                v => Err(type_error(v, "only strings can be parsed")),
+            };
+            bome(s.and_then(parse))
         }),
         ("tojson", v(0), |cv| bome(Ok(Val::utf8_str(cv.1.to_json())))),
         ("tobytes", v(0), |cv| {
