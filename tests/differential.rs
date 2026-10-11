@@ -58,6 +58,23 @@ static CASES: &[Case] = &[
     c("1 2 3", &["-s", "-c", "."]),
     c(r#"{"a":1}"#, &["-c", "--unbuffered", "."]),
     c(r#"{"a":1}"#, &["-c", "-b", "."]),
+    // --- no filter: off a terminal jq runs `.` ---
+    c(r#"{"a":1}"#, &[]),
+    c(r#"{"a":1}"#, &["-c"]),
+    c("", &["-n"]),
+    c("", &["-f"]),
+    // --- help, version and build configuration end option parsing ---
+    c("", &["--version", "--json"]),
+    c("", &["--version", "--bogus"]),
+    c("", &["-n", "--version", "--arg"]),
+    c("", &["-Vz"]),
+    c("", &["-Vh"]),
+    c("", &["-zV"]),
+    c("", &["--bogus", "--version"]),
+    c("", &["--arg", "v", "--version", "-n", "$v"]),
+    c("", &["--help", "--bogus"]),
+    c("", &["-hz"]),
+    c("", &["--indent", "99", "--version"]),
     c(r#"{"a":1}"#, &["-c", "--", "."]),
     // `--indent 0` pretty-prints with no indent in BOTH; an early version of the
     // shim mistranslated it to `-c`.

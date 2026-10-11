@@ -648,7 +648,10 @@ pub fn take_verb(argv: &mut Vec<OsString>) -> Lifted {
             .collect::<Vec<_>>()
     };
 
-    let version = options.iter().any(|&i| jqargs::is_version_option(&argv[i]));
+    // jq acts on the first help/version/build-configuration option it reads
+    // and ignores the rest, so only a version reached first reports.
+    let version =
+        options.iter().find_map(|&i| jqargs::stop_at(&argv[i])) == Some(jqargs::Stop::Version);
     let explain = at("--explain");
     let install = at("--install-shim");
     let json = (version || !explain.is_empty() || !install.is_empty()) && !at("--json").is_empty();

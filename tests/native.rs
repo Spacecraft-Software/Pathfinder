@@ -525,15 +525,36 @@ fn explain_failures_are_structured_in_json_mode() {
     assert_eq!(e["code"], "INVALID_ARGUMENT");
     assert_eq!(e["hint"], "pathfinder --help");
 
-    let e = json_error(pathfinder(&[("AI_AGENT", AGENT_VALUE)]).arg("--explain"), 2);
+    // Off a terminal jq runs `.` when no filter is given, so only `-f` with no
+    // file is still missing one.
+    let e = json_error(
+        pathfinder(&[("AI_AGENT", AGENT_VALUE)]).args(["--explain", "-f"]),
+        2,
+    );
     assert_eq!(e["code"], "MISSING_ARGUMENT");
 
     let e = json_error(pathfinder(&[]).args(["--explain", "--stream", "."]), 2);
     assert_eq!(e["code"], "UNSUPPORTED");
 
-    let e = json_error(pathfinder(&[]).args(["--version", "--bogus"]), 2);
+    // An unknown option before `--version` fails; after it, it is never read.
+    let e = json_error(pathfinder(&[]).args(["--bogus", "--version"]), 2);
     assert_eq!(e["command"], "pathfinder --version");
     assert_eq!(e["message"], "Unknown option --bogus");
+    let (code, out, _) = stdout_of(pathfinder(&[]).args(["--version", "--bogus", "--json"]));
+    assert_eq!(code, Some(0));
+    assert_metadata(&document(&out), "pathfinder --version");
+}
+
+#[test]
+fn explain_without_a_filter_off_a_terminal_explains_dot() {
+    let (code, out, _) = stdout_of(pathfinder(&[]).args(["--explain", "-c"]));
+    assert_eq!(code, Some(0));
+    let argv = &document(&out)["data"]["jaq_argv"];
+    assert_eq!(
+        argv.as_array().and_then(|a| a.last()),
+        Some(&Value::from(".")),
+        "{argv}"
+    );
 }
 
 #[test]

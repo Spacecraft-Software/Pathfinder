@@ -125,7 +125,7 @@ such command is known:
 | `code` | Exit | When |
 |---|---|---|
 | `INVALID_ARGUMENT` | 2 | jq's grammar rejects the command line |
-| `MISSING_ARGUMENT` | 2 | `--explain` with no filter |
+| `MISSING_ARGUMENT` | 2 | `--explain` with no filter on a terminal, or `-f` with no file |
 | `UNSUPPORTED` | 2 | a jq feature jaq cannot provide |
 | `COMPILE_ERROR` | 3 | a filter jq refuses to compile; 3 is jq's own code, kept so both names agree, although the CLI Standard's table gives 3 to `NOT_FOUND` |
 | `GENERAL` | 1 | `--install-shim` could not create the link |
