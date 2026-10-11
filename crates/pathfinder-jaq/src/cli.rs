@@ -89,7 +89,11 @@ impl Cli {
         let int = |s: OsString| s.into_string().ok()?.parse().ok();
         match arg {
             // handle all arguments after "--"
-            "" => Iterator::try_for_each(&mut &mut *args, |arg| self.positional(mode, arg))?,
+            "" => {
+                for arg in &mut *args {
+                    self.positional(mode, arg)?;
+                }
+            }
 
             "from" => self.from = Some(parse_format("--from", args)?),
             "null-input" => self.short('n', args)?,
