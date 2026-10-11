@@ -33,6 +33,16 @@ cargo fmt --check
 make check                       # all of the above
 ```
 
+The engine crates build with the workspace (`cargo build --workspace`).
+`crates/pathfinder-jaq` builds a `jaq`-compatible binary from them, the test
+vehicle for the fork until M19 evaluates in process; run the suites against it
+as the engine:
+
+```sh
+cargo build --release -p pathfinder-jaq
+PATHFINDER_JAQ=$PWD/target/release/pathfinder-jaq cargo test
+```
+
 ## The rule that matters most
 
 **Never claim a jq behaviour you have not measured.** Real jq is not installed on
@@ -247,6 +257,8 @@ pass rates; `V=1` lists every failure.
 | `crates/pathfinder/src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
 | `crates/pathfinder/src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
 | `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`, path expressions, `l // r` as a path, `%`, parse errors, lazy input reading, file names in error locations), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); verified to apply and pass on 3.1.0, which Bravais builds by making this flake follow its stable nixpkgs. `0008`, `0013` and `0015` have a 3.1.0 cut, picked by version, because 3.1.0's `real_main` differs on the lines they replace. MIT, like jaq; never sent upstream. |
+| `crates/pathfinder-core`, `-std`, `-json`, `-fmts` | jaq 3.1.1's engine crates, imported with the patch set applied (`crates/UPSTREAM.md`). Library names stay `jaq_core`, … so the sources stay diffable against upstream. |
+| `crates/pathfinder-jaq` | jaq 3.1.1's CLI and `jaq-all` on those crates, with the CLI hunks of the patch set: the binary `pathfinder-jaq`, a test vehicle run as `PATHFINDER_JAQ` until M19. `publish = false`; never installed. |
 | `crates/pathfinder/tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
 | `crates/pathfinder/tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
 | `crates/pathfinder/tests/native.rs` | The native surface: mode cascade, JSON shapes, exit codes, and that the `jq` name is unchanged under an agent environment. |

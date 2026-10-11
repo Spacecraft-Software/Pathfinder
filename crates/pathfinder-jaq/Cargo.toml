@@ -1,0 +1,51 @@
+[package]
+name = "pathfinder-jaq"
+version = "3.1.1"
+authors = ["Michael Färber <michael.faerber@gedenkt.at>"]
+edition = "2021"
+license = "MIT"
+readme = "../../README.md"
+description = "jaq's command line on Pathfinder's engine crates: a test vehicle until M19"
+repository = "https://github.com/01mf02/jaq"
+keywords = ["json", "query", "jq"]
+categories = ["command-line-utilities"]
+rust-version = "1.70"
+# Pathfinder (TODO T-010): a temporary test vehicle. The existing suites run
+# against it as `PATHFINDER_JAQ` until M19 evaluates in process; it is never
+# installed or published.
+publish = false
+
+# Pathfinder: jaq's `jaq-all` crate and its `jaq` CLI crate, as one package.
+# The library keeps the name `jaq_all`, so the CLI sources compile as upstream
+# (plus the patch set) wrote them (crates/UPSTREAM.md).
+[lib]
+name = "jaq_all"
+path = "src/jaq-all/lib.rs"
+
+# Pathfinder: named so that it collides with no installed `jaq`.
+[[bin]]
+name = "pathfinder-jaq"
+path = "src/jaq/main.rs"
+
+[features]
+default = ["formats", "std-all", "mimalloc"]
+formats = ["jaq-fmts/all"]
+std-all = ["jaq-std/default"]
+
+[dependencies]
+jaq-core = { workspace = true }
+jaq-std  = { workspace = true }
+jaq-json = { workspace = true }
+jaq-fmts = { workspace = true }
+
+# jaq-all
+codesnake = { version = "0.3" }
+unicode-width = "0.1.13"
+
+# jaq
+dirs = { version = "6.0" }
+env_logger = { version = "0.10.0", default-features = false }
+log = { version = "0.4.17" }
+mimalloc = { version = "0.1.29", default-features = false, optional = true }
+rustyline = { version = "13.0.0", default-features = false, features = ["with-file-history"] }
+tempfile = "3.3.0"

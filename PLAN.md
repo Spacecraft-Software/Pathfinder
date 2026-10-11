@@ -26,7 +26,7 @@ from `jaq-fmts`; the other formats, `jaq-all`, jaq's CLI and `jaq-play` stay
 out.
 
 - [x] P-048 Cargo workspace: `crates/pathfinder` (today's `src/`), `crates/pathfinder-core`, `-std`, `-json`
-- [ ] P-049 Import jaq 3.1.1 at a recorded commit, with `packaging/jaq/0001`–`0015` applied
+- [x] P-049 Import jaq 3.1.1 at a recorded commit, with `packaging/jaq/0001`–`0015` applied
 - [ ] P-050 Drop jaq's non-jq formats, `--in-place`, REPL and Windows console code, and their dependencies
 - [ ] P-051 Replace the `mmap` file load with a safe read; `unsafe_code = "forbid"` in every crate
 - [ ] P-052 Imported files keep MIT and upstream copyright in `REUSE.toml`; `CREDITS.md` names the import

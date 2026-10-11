@@ -41,8 +41,11 @@ with `diff -r` and is identical to that store path.
 | `crates/pathfinder-std` | `jaq-std/` | 3.0.1 |
 | `crates/pathfinder-json` | `jaq-json/` | 2.0.2 |
 | `crates/pathfinder-fmts` | `jaq-fmts/`, whole | 0.1.1 |
+| `crates/pathfinder-jaq` | `jaq-all/src/` as its library, `jaq/src/` as its binary (T-010, below) | 0.3.0 / 3.1.1 |
 
-`jaq-all`, the `jaq` CLI crate and `jaq-play` were not imported.
+`jaq-play`, `jaq-all`'s examples and the `jaq` crate's `tests/` (golden tests
+of the CLI, mostly of the formats and `--in-place` that M18 removes) were not
+imported.
 
 `jaq-fmts` is its own crate rather than part of `pathfinder-json`: the
 functions jaq's CLI reads and writes with (`read::read`, `read::parse`,
@@ -103,9 +106,25 @@ are identical to it but for their manifests. A following commit runs
 
 ### CLI hunks, applied in T-010
 
-These hunks patch jaq's CLI crate (`jaq/`), which is not imported. They are
-applied when T-010 builds a `jaq`-compatible binary from the imported crates.
-Hunk headers are those of the 3.1.1 cuts.
+These hunks patch jaq's CLI crate (`jaq/`). They are in `crates/pathfinder-jaq`,
+which T-010 built from the imported crates. Hunk headers are those of the 3.1.1
+cuts.
+
+`crates/pathfinder-jaq/src/jaq/` is `jaq/src/` and
+`crates/pathfinder-jaq/src/jaq-all/` is `jaq-all/src/`, both taken with
+`git show` from the tree the patches were cut from (the import base plus one
+commit per patch), so the CLI hunks are in exactly as the packaged jaq has
+them; `jaq-all` has no hunks. One package holds both: its `[lib]` keeps the
+name `jaq_all` and its features (`formats`, `std-all`, `mimalloc`) are
+`jaq-all`'s and `jaq`'s, so no source file needed an edit to build on the
+`pathfinder-*` crates. The binary is named `pathfinder-jaq`, so it collides
+with no installed `jaq`, and it is the one difference from the packaged
+engine's output that is expected: `--version` prints
+`pathfinder-jaq 3.1.1+pathfinder.3` (it takes the name from
+`CARGO_PKG_NAME`), which still carries the `+pathfinder` the conformance
+test looks for. The dependencies `jaq-all` and `jaq` bring in were locked at
+the versions of jaq's `Cargo.lock` at the import base, every one of them. A following commit runs `cargo fmt` over `jq.rs`, which patch 0008
+added unformatted; it changes layout only.
 
 | Patch | File | Hunks |
 |---|---|---|
