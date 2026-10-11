@@ -84,18 +84,57 @@ jq -s 'add' a.json b.json
 jq -n --jsonargs '$ARGS.positional' 1 '{"k":2}'
 ```
 
-Under its own name it also answers two questions of its own:
+Under its own name it also answers questions of its own:
 
 ```sh
 pathfinder --explain -c '[fromstream(tostream)]'   # what would jaq receive?
+pathfinder --version                               # which Pathfinder, which jaq?
 pathfinder --install-shim ~/.local/bin [--force]
 ```
 
 `--explain` prints the translated argv, the assembled program, which polyfills
 were injected, whether the run will `exec` or pipe, and a warning if the filter
-assigns to a path. These verbs are unavailable through the `jq` symlink on
-purpose: a script passing `--explain` to what it believes is jq must get jq's
-`Unknown option` error.
+assigns to a path. `--version` names Pathfinder's version, the jaq it would run
+and where that came from (`PATHFINDER_JAQ`, `pinned` or `PATH`), the maintainer
+and the website. `--install-shim` exits 5 when a different `jq` is already
+there and `--force` was not given, and 4 when the directory is not writable.
+
+These verbs are unavailable through the `jq` symlink on purpose: a script
+passing `--explain` to what it believes is jq must get jq's `Unknown option`
+error, and `jq --version` prints `jq-1.8.1`, because scripts grep for it.
+
+Each verb reports as text or as one compact JSON document,
+`{"metadata":{…},"data":{…}}`, following the Spacecraft CLI Standard's
+cascade — first match wins:
+
+1. `--json` beside the verb;
+2. `AI_AGENT` or `AGENT` set to anything non-empty;
+3. `CI` set, and not `false` or `0`;
+4. stdout is a terminal: text;
+5. otherwise: JSON.
+
+```sh
+pathfinder --explain --json -c '.a.b = 1'
+```
+
+Every failure of a verb in JSON mode is written to stderr as one line,
+`{"error":{"code":…,"exit_code":…,"message":…,"hint":…,…}}`, with nothing on
+stdout. The hint is a command that can be run as is, and is omitted where no
+such command is known:
+
+| `code` | Exit | When |
+|---|---|---|
+| `INVALID_ARGUMENT` | 2 | jq's grammar rejects the command line |
+| `MISSING_ARGUMENT` | 2 | `--explain` with no filter |
+| `UNSUPPORTED` | 2 | a jq feature jaq cannot provide |
+| `COMPILE_ERROR` | 3 | a filter jq refuses to compile; 3 is jq's own code, kept so both names agree, although the CLI Standard's table gives 3 to `NOT_FOUND` |
+| `GENERAL` | 1 | `--install-shim` could not create the link |
+| `PERMISSION_DENIED` | 4 | `--install-shim` into a directory that is not writable |
+| `CONFLICT` | 5 | `--install-shim` found a `jq` that is not Pathfinder's |
+
+In text mode the same failures print jq's own wording. None of this reaches
+the `jq` name: there, `--json` is an unknown option, and an agent environment
+changes nothing. Agents should read [`SKILL.md`](SKILL.md).
 
 ## How it works
 
