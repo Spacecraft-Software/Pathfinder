@@ -6,10 +6,16 @@ file is only what is true *here*.
 
 ## What this is
 
-A single-crate binary, `pathfinder`, installed with a `jq` symlink beside it. It
+A binary, `pathfinder`, installed with a `jq` symlink beside it. It
 translates jq's command line into jaq's, rewrites the filter where jaq would run
 it differently, and hands off. It parses jq (`src/syntax/`) but evaluates
 nothing.
+
+The repository is a Cargo workspace. The shim is `crates/pathfinder`; paths
+like `src/…` and `tests/…` in this file are relative to it. The root
+`Cargo.toml` holds the lint set and the release profile, and its
+`default-members` keeps a bare `cargo build`/`test`/`clippy` on the shim;
+`--workspace` reaches every crate.
 
 Baseline is **jq 1.8.1**. The differential suite passes unchanged against jaq
 **3.0.0, 3.1.0 and 3.1.1**; CI pins 3.1.0, the version nixpkgs 26.05 ships and
@@ -224,25 +230,26 @@ pass rates; `V=1` lists every failure.
 
 | File | Owns |
 |---|---|
-| `src/jqargs.rs` | jq's argv grammar, transcribed from jq's `src/main.c`. Hand-rolled; clap cannot express it. |
-| `src/scan.rs` | The jq token scanner — the crate's only real algorithm. Strings, `\(…)` interpolation nesting, comments, module headers. |
-| `src/prelude.rs` | Polyfill and repair definitions, and the evidence for each. |
-| `src/program.rs` | Program assembly: module header, prelude, `$ARGS` wrap, `$__loc__`. |
-| `src/translate.rs` | jq argv → jaq argv. The only module that knows both dialects. |
-| `src/post.rs` | `-a` and `--seq` byte transforms. |
-| `src/inputs.rs` | Several input files: opened before jaq starts, described to it in `PATHFINDER_INPUTS`, fed as one stream. |
-| `src/native.rs` | `--explain` / `--version` / `--install-shim`, their text and JSON reports, and structured errors; reachable only under the native name. |
-| `src/mode.rs` | The native verbs' output-mode cascade (CLI Standard §5). |
-| `src/json.rs` | Minimal JSON writer (RFC 8259 escaping) for the native reports; std-only. |
-| `src/syntax/lex.rs`, `parse.rs` | jq's lexer and grammar, transcribed. Every node keeps its span. |
-| `src/regex.rs` | Facts about literal regexes for the regex repairs: group naming (mirrors the prelude's run-time scan), whether a group can be skipped, whether the regex can match empty. |
-| `src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
-| `src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
-| `src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
+| `Cargo.toml` | The workspace: members, `default-members`, the shared lint set (`[workspace.lints]`) and the release profile. One `Cargo.lock`, at the root. |
+| `crates/pathfinder/src/jqargs.rs` | jq's argv grammar, transcribed from jq's `src/main.c`. Hand-rolled; clap cannot express it. |
+| `crates/pathfinder/src/scan.rs` | The jq token scanner — the crate's only real algorithm. Strings, `\(…)` interpolation nesting, comments, module headers. |
+| `crates/pathfinder/src/prelude.rs` | Polyfill and repair definitions, and the evidence for each. |
+| `crates/pathfinder/src/program.rs` | Program assembly: module header, prelude, `$ARGS` wrap, `$__loc__`. |
+| `crates/pathfinder/src/translate.rs` | jq argv → jaq argv. The only module that knows both dialects. |
+| `crates/pathfinder/src/post.rs` | `-a` and `--seq` byte transforms. |
+| `crates/pathfinder/src/inputs.rs` | Several input files: opened before jaq starts, described to it in `PATHFINDER_INPUTS`, fed as one stream. |
+| `crates/pathfinder/src/native.rs` | `--explain` / `--version` / `--install-shim`, their text and JSON reports, and structured errors; reachable only under the native name. |
+| `crates/pathfinder/src/mode.rs` | The native verbs' output-mode cascade (CLI Standard §5). |
+| `crates/pathfinder/src/json.rs` | Minimal JSON writer (RFC 8259 escaping) for the native reports; std-only. |
+| `crates/pathfinder/src/syntax/lex.rs`, `parse.rs` | jq's lexer and grammar, transcribed. Every node keeps its span. |
+| `crates/pathfinder/src/regex.rs` | Facts about literal regexes for the regex repairs: group naming (mirrors the prelude's run-time scan), whether a group can be skipped, whether the regex can match empty. |
+| `crates/pathfinder/src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
+| `crates/pathfinder/src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
+| `crates/pathfinder/src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
 | `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`, path expressions, `l // r` as a path, `%`, parse errors, lazy input reading, file names in error locations), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); verified to apply and pass on 3.1.0, which Bravais builds by making this flake follow its stable nixpkgs. `0008`, `0013` and `0015` have a 3.1.0 cut, picked by version, because 3.1.0's `real_main` differs on the lines they replace. MIT, like jaq; never sent upstream. |
-| `tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
-| `tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
-| `tests/native.rs` | The native surface: mode cascade, JSON shapes, exit codes, and that the `jq` name is unchanged under an agent environment. |
+| `crates/pathfinder/tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
+| `crates/pathfinder/tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
+| `crates/pathfinder/tests/native.rs` | The native surface: mode cascade, JSON shapes, exit codes, and that the `jq` name is unchanged under an agent environment. |
 | `SKILL.md` | Agent-facing description of the shim. Frontmatter first, so its licence is in `REUSE.toml`; keep `description` ≤ 1000 rendered characters. |
 
 ## Forbidden patterns

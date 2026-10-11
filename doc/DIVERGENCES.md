@@ -10,13 +10,13 @@ Where Pathfinder cannot make `jaq` behave like `jq`, and why.
 Everything here was measured, not inferred: **jq 1.8.1** (the declared baseline,
 fetched with `nix build nixpkgs#jq`) against **jaq 3.0.0, 3.1.0 and 3.1.1**. The
 cases Pathfinder *does* fix are mostly not listed here — they are in the
-differential suite (`tests/differential.rs`), which asserts byte-for-byte
+differential suite (`crates/pathfinder/tests/differential.rs`), which asserts byte-for-byte
 agreement on 156 invocations.
 
 ## Assignment, deletion and syntax: repaired by rewriting
 
 Pathfinder parses the filter with a transcription of jq 1.8.1's grammar
-(`src/syntax/`) and rewrites what jaq would run differently. Untouched text is
+(`crates/pathfinder/src/syntax/`) and rewrites what jaq would run differently. Untouched text is
 copied byte for byte; a filter that needs nothing is passed through unchanged.
 
 | What | jq 1.8.1 | bare jaq | Pathfinder |
@@ -254,7 +254,7 @@ The packaged jaq prints a decimal literal the way jq's decNumber does (`1E+3`,
 no slower: printing 500,000 objects took 2.8–3.1 s against stock jaq's
 3.3 s (jq: 4.2 s), measured interleaved on a loaded host. Its `--version`
 reads `jaq 3.1.1+pathfinder.3`, and the conformance suite holds it to its own
-ratchet, `tests/jq-suite/FLOOR-patched`.
+ratchet, `crates/pathfinder/tests/jq-suite/FLOOR-patched`.
 
 ## Unsupported, with a diagnostic
 
@@ -352,7 +352,7 @@ jq 1.8.1's own definition, or wraps jaq's builtin, only when the filter uses it:
 
 The regex repairs need to know which capture groups can go unmatched and
 whether a regex can match empty. For regexes written as literals in the filter
-that is worked out once, in `src/regex.rs`; a regex computed at run time is
+that is worked out once, in `crates/pathfinder/src/regex.rs`; a regex computed at run time is
 scanned on every call. Measured on 100,000 lines (pre-repair time in brackets,
 jq 1.8.1 in parentheses): `match` with a group 2.6 s [2.1 s] (0.8 s), `capture`
 2.9 s [2.5 s] (1.4 s), `sub` 2.8 s [2.1 s] (2.5 s), `gsub("[0-9]"; "#")`

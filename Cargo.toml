@@ -1,44 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-[package]
-name = "pathfinder-jq"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.88"
-license = "GPL-3.0-or-later"
-description = "jq-compatible shim over jaq: translates jq's command line and filter syntax, then execs jaq"
-homepage = "https://Pathfinder.SpacecraftSoftware.org/"
-repository = "https://github.com/Spacecraft-Software/pathfinder"
-authors = ["Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
-categories = ["command-line-utilities"]
-keywords = ["jq", "jaq", "json", "shim", "compatibility"]
-
-[[bin]]
-name = "pathfinder"
-path = "src/main.rs"
-
-# No runtime dependencies, deliberately.
+# The Pathfinder workspace (PLAN P-048).
 #
-# Pathfinder's whole job is to hand off to `jaq` as fast as possible: the common
-# path is parse-argv-then-execve, which std covers completely. Pulling in clap
-# would also be actively wrong — jq's command line is positional and
-# order-sensitive in ways clap cannot express (see `src/jqargs.rs`). This
-# mirrors `doas-rs/crates/sudo-shim`, which is a shim for the same reason.
+# `crates/pathfinder` is the shim binary. The engine crates imported from jaq
+# (`crates/pathfinder-core`, `-std`, `-json`, `-fmts`; see crates/UPSTREAM.md)
+# join it from M18 on.
 #
-# M-MIMALLOC-APPS is deliberately NOT applied: the process allocates a few
-# hundred bytes of argv strings and then replaces its own image with execve.
-# There is no allocating hot path for mimalloc to improve, and linking it would
-# add startup cost to a binary whose entire value proposition is being
-# unmeasurable next to the jaq run it fronts (Standard §3.2 trade-off note).
-[dependencies]
+# `default-members` keeps a bare `cargo build` / `cargo test` / `cargo clippy`
+# at the root -- and so the Makefile, CI and the Nix check phase -- on the shim
+# alone; `--workspace` reaches every crate.
+[workspace]
+members = ["crates/*"]
+default-members = ["crates/pathfinder"]
+resolver = "2"
 
-[dev-dependencies]
-assert_cmd = "2"
-predicates = "3"
-# Conformance runner only: parses jq's expected outputs as JSON values.
-serde_json = "1"
-
+# Profiles are honoured only at the workspace root.
 [profile.release]
 # LTO "thin": reliable on this toolchain and on the NixOS host. Full "fat" LTO
 # is disabled — this binary is a few thousand lines with no cross-crate hot
@@ -48,7 +25,9 @@ codegen-units = 1
 # -C target-cpu=native intentionally NOT set: release binaries must stay
 # portable across machines. Opt in via RUSTFLAGS for a local-only build.
 
-[lints.rust]
+# Pathfinder's lint set. Members opt in with `[lints] workspace = true`; the
+# imported engine crates do not yet (TODO T-006).
+[workspace.lints.rust]
 ambiguous_negative_literals = "warn"
 missing_debug_implementations = "warn"
 redundant_imports = "warn"
@@ -58,7 +37,7 @@ unsafe_code = "forbid"
 unsafe_op_in_unsafe_fn = "warn"
 unused_lifetimes = "warn"
 
-[lints.clippy]
+[workspace.lints.clippy]
 cargo = { level = "warn", priority = -1 }
 complexity = { level = "warn", priority = -1 }
 correctness = { level = "warn", priority = -1 }

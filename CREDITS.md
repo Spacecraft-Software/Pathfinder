@@ -15,14 +15,14 @@ acknowledgement to be explicit rather than left to SPDX metadata.
 
 Pathfinder reproduces jq's command-line grammar, its option semantics, its exit
 codes, and its diagnostic wording. The argument-parsing rules in
-`src/jqargs.rs` are transcribed from jq's `src/main.c` (`isoptish`, `isoption`,
-and the option loop), and `src/embed/jq-help.txt` is jq 1.8.1's `--help` output
+`crates/pathfinder/src/jqargs.rs` are transcribed from jq's `src/main.c` (`isoptish`, `isoption`,
+and the option loop), and `crates/pathfinder/src/embed/jq-help.txt` is jq 1.8.1's `--help` output
 reproduced verbatim so that `jq --help` through the shim answers exactly as jq
-does. The polyfill definitions in `src/prelude.rs` are taken from jq's
+does. The polyfill definitions in `crates/pathfinder/src/prelude.rs` are taken from jq's
 `src/builtin.jq`, adapted only where jaq's semantics required it — each such
 adaptation is noted at the definition.
 
-`tests/jq-suite/` vendors jq 1.8.1's own test files (`jq.test`, `man.test`,
+`crates/pathfinder/tests/jq-suite/` vendors jq 1.8.1's own test files (`jq.test`, `man.test`,
 the regex, base64 and URI suites) unchanged. They are the conformance measure:
 written by jq's maintainers, they judge Pathfinder by a standard its author did
 not choose.
