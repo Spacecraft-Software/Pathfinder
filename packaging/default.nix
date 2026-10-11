@@ -67,6 +67,7 @@ let
             else
               ./jaq/0015-file-locations.patch
           )
+          ./jaq/0016-trailing-comment.patch
         ];
         # jaq's own tests assert jaq's number format (`1.0`, `NaN`), which the
         # patches change on purpose. Pathfinder's check phase runs jq's suite

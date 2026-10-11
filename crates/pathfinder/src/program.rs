@@ -276,6 +276,33 @@ mod tests {
         assert_eq!(a.injected, Vec::<String>::new());
     }
 
+    /// The parser's depth bounds (TODO T-019) cost nothing below them: deep
+    /// programs are still rewritten, and every pass over their trees survives
+    /// in a debug build. Past them, a program reaches jaq as written. Run on a
+    /// thread sized like the main one, which the bounds were measured on.
+    #[test]
+    fn depth_bounds_rewrite_below_and_pass_through_above() {
+        std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(|| {
+                let nested = |n: usize| format!("{}.a.b = 1{}", "[".repeat(n), "]".repeat(n));
+                let chain = |n: usize| format!(".a.b = (1{})", " + 1".repeat(n));
+                for src in [nested(900), chain(2900)] {
+                    let a = plain(&src);
+                    assert!(a.syntax_rewritten, "{}", &src[..40]);
+                }
+                for src in [nested(5000), chain(5000)] {
+                    let a = plain(&src);
+                    assert!(!a.rewritten, "{}", &src[..40]);
+                    assert_eq!(a.text, src);
+                    assert!(a.compile_error.is_none());
+                }
+            })
+            .expect("spawns")
+            .join()
+            .expect("no overflow, no panic");
+    }
+
     #[test]
     fn a_polyfilled_name_pulls_in_its_definition() {
         let a = plain("[tostream]");

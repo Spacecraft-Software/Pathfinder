@@ -1,0 +1,1 @@
+[first(range(.)), last(range(.))]

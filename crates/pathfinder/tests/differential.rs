@@ -599,6 +599,12 @@ static PATCHED_CASES: &[Case] = &[
              try has(3) catch ., try path(.[3]) catch ., try .[3:4] catch .]",
         ],
     ),
+    // An unclosed delimiter before a comment that runs to the end of the
+    // program: a compile error, exit 3, where jaq panicked (patch 0016;
+    // found by fuzzing).
+    c("null", &["[1 #"]),
+    c("null", &["(1 #"]),
+    c("null", &["{a #"]),
 ];
 
 /// Patched-engine cases compared on stderr too: an uncaught error is reported

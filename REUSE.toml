@@ -31,17 +31,18 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 
 # Build/VCS metadata that cannot carry meaningful authorship.
 [[annotations]]
-path = [".gitignore", "Cargo.lock", "flake.lock"]
+path = [".gitignore", "Cargo.lock", "flake.lock", "fuzz/Cargo.lock"]
 SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
 # Data captured from upstream jq 1.8.1 and reproduced verbatim: its `--help`
 # text, so the shim's usage output is byte-identical to the tool it stands in
-# for, and its `builtins` list, so `builtins` answers what jq answers. Upstream
+# for, and its `builtins` list, so `builtins` answers what jq answers; its test
+# suite, and the fuzz seeds lifted from it (programs and inputs). Upstream
 # jq is MIT (Standard §4.2: third-party-derived artifacts keep their upstream
 # license).
 [[annotations]]
-path = ["crates/pathfinder/src/embed/jq-help.txt", "crates/pathfinder/src/embed/jq-builtins.json", "crates/pathfinder/tests/jq-suite/*.test"]
+path = ["crates/pathfinder/src/embed/jq-help.txt", "crates/pathfinder/src/embed/jq-builtins.json", "crates/pathfinder/tests/jq-suite/*.test", "fuzz/seeds/syntax/**", "fuzz/seeds/engine/**"]
 SPDX-FileCopyrightText = "2012 Stephen Dolan and jq contributors"
 SPDX-License-Identifier = "MIT"
 
@@ -54,6 +55,13 @@ SPDX-License-Identifier = "MIT"
 path = ["packaging/jaq/*.patch"]
 SPDX-FileCopyrightText = ["Michael Färber <michael.faerber@gedenkt.at> and jaq contributors", "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
 SPDX-License-Identifier = "MIT AND (GPL-3.0-or-later OR MIT)"
+
+# Fuzz seeds for jq's command line: NUL-separated argv, which cannot carry a
+# header.
+[[annotations]]
+path = ["fuzz/seeds/jqargs/**"]
+SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
+SPDX-License-Identifier = "GPL-3.0-or-later"
 
 # The pass-count ratchet for the patched engine.
 [[annotations]]

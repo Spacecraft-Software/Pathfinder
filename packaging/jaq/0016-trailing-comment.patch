@@ -1,0 +1,24 @@
+Pathfinder patch for jaq 3.1.1: Keep a comment at the end of the program inside it.
+
+An unclosed delimiter before a comment that runs to the end of the program
+(`[1 #`) made the error report panic (exit 101) where jq reports a compile
+error (exit 3). Found by fuzzing (TODO T-019). Applies to 3.1.0 too.
+
+Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
+
+diff --git a/jaq-core/src/load/lex.rs b/jaq-core/src/load/lex.rs
+index 9cd94cf..38c0da5 100644
+--- a/jaq-core/src/load/lex.rs
++++ b/jaq-core/src/load/lex.rs
+@@ -160,7 +160,10 @@ impl<'a> Lexer<&'a str> {
+             }
+             // ignore all lines that end with an odd number of backslashes
+             loop {
+-                let (before, after) = self.i.split_once('\n').unwrap_or((self.i, ""));
++                // Pathfinder: the rest is the empty end of the input, not a
++                // `""` from elsewhere, so that spans into it stay inside it.
++                let end = &self.i[self.i.len()..];
++                let (before, after) = self.i.split_once('\n').unwrap_or((self.i, end));
+                 let before = before.strip_suffix('\r').unwrap_or(before);
+                 self.i = after;
+                 // does the line end with an even number of backslashes?

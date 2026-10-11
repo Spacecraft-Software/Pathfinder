@@ -1,0 +1,1 @@
+map(.[1] as $needle | .[0] | contains($needle))

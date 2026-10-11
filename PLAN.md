@@ -44,7 +44,7 @@ rewriter and prelude still run; only the hand-off changes.
 - [x] P-058 `PATHFINDER_ENGINE=native|jaq` selects the engine; CI runs both suites on both
 - [x] P-059 `FLOOR-native` ratchet at least 815/820
 - [ ] P-060 Benchmarks (`bench/`): startup, parse, filter and output sets; R-011 holds
-- [ ] P-061 Fuzz targets for the jq-argv parser, the filter parser and the evaluator; no panic
+- [x] P-061 Fuzz targets for the jq-argv parser, the filter parser and the evaluator; no panic
 
 ## M20 — jq's semantics in the engine
 

@@ -1,0 +1,1 @@
+try ltrimstr("x") catch "x", try rtrimstr("x") catch "x" | "ok"

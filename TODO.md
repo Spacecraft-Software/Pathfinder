@@ -32,8 +32,8 @@ serves. Later milestones are broken down when they start, not before.
 - [x] T-015 (P-058) `PATHFINDER_ENGINE` switch; `--version`/`--explain` report the engine in use
 - [x] T-016 (P-058) CI matrix: differential and conformance on `native` and on `jaq`
 - [x] T-017 (P-059) `tests/jq-suite/FLOOR-native`; the conformance runner selects it for the native engine
-- [ ] T-018 (P-060) `bench/`: startup (`-n .`), 30 MB single-line and line-delimited input, a filter-heavy set, an output-heavy set; record jq 1.8.1, jaq 3.1.1 and native figures
-- [ ] T-019 (P-061) `cargo fuzz` targets: `jqargs::parse`, `syntax::parse`, and evaluation of fuzzed filters over fuzzed input with a step limit
+- [x] T-018 (P-060) `bench/`: startup (`-n .`), 30 MB single-line and line-delimited input, a filter-heavy set, an output-heavy set; record jq 1.8.1, jaq 3.1.1 and native figures
+- [x] T-019 (P-061) `cargo fuzz` targets: `jqargs::parse`, `syntax::parse`, and evaluation of fuzzed filters over fuzzed input with a step limit
 
 ## Standing
 

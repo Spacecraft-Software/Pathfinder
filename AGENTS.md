@@ -195,6 +195,15 @@ print. To keep the `jq` name untouched:
   parser. Only a construct *proven* to be a jq compile error exits 3: a constant
   non-string object key (by jq's own folding rules, `check.rs`), non-constant or
   non-object `module` metadata, and a parse failure *at* a `?//` token.
+- **Depth is bounded, because every pass recurses on the native stack.**
+  The lexer stops at `MAX_INTERP` nested interpolations, the parser at
+  `MAX_NESTING` recursive calls, `MAX_FOLDS` chain links (`,`, binary
+  operators, postfixes) in all, and a tree `MAX_DEPTH` deep. Past any of them
+  the program is a parse failure and passes through; the error is at offset
+  0, never at a `?//`. Unbounded, a few thousand levels aborted the shim. A
+  new recursive pass over the tree must stay within `MAX_DEPTH`; a new
+  grammar cycle must pass through `query`, `term` or `pattern`, or be wrapped
+  in `Parser::nested` where it recurses (as `//` is in `expr`).
 - **Assignment is vivify-then-native.** Prepare the containers (inline guard for
   a literal target, `_pf_vivify` otherwise), then let jaq's own operator run —
   it matches jq once the containers exist. jq's `_modify` transcribed into jaq
@@ -283,6 +292,42 @@ pass rates; `V=1` lists every failure.
   after (`V=1`), not just the count. The first `match`/`test`/`capture` repair
   raised the total while breaking nine cases, two of them real call sites.
 
+## Fuzzing
+
+`fuzz/` is a `cargo fuzz` crate with its own Cargo root, outside the
+workspace. It has no lib target to link against, so `fuzz/src/lib.rs`
+includes the shim's modules by `#[path]` (`jqargs`, `scan`, `regex`,
+`prelude`, `program`, `syntax`); a new `crate::` dependency of those needs a
+line there. Three targets:
+
+| Target | Input | `-max_len` |
+|---|---|---|
+| `jqargs` | argv, NUL-separated, any bytes | 512 |
+| `syntax` | a jq program: lex, parse, print, `program::assemble` | 4096 |
+| `engine` | `filter NUL json`: assembled, compiled, run through the engine crates | 1024 |
+
+```sh
+cd fuzz
+env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/syntax -- \
+  -fork=2 -ignore_crashes=1 -ignore_timeouts=1 -ignore_ooms=1 \
+  -max_total_time=300 -timeout=10 -rss_limit_mb=2048 -max_len=4096
+```
+
+- `-s none` builds on stable: everything is `unsafe`-free, so a sanitizer
+  adds nothing, and only `-Zsanitizer` needs a nightly. `env -u CFLAGS` keeps
+  the host's `-flto=auto` out of libFuzzer's C++ build.
+- `engine` skips filters that can run without end or end the process
+  (`def`, `repeat`, `while`, `until`, `recurse(`, `halt`, `debug`, `stderr`,
+  numbers of four digits or with an exponent) and caps inputs and outputs;
+  what remains unbounded is cut off by `-timeout`/`-rss_limit_mb`, so a
+  timeout or OOM there is not a finding without a bounded reproducer. Its
+  first finding, a panic on `[1 #`, is fixed (patch `0016`).
+- A crash is reproduced with `cargo fuzz run -s none <target> <artifact>`.
+  A shim crash gets a fix and a unit test; an engine crash lands twice (see
+  Conformance).
+- `fuzz/seeds/` is committed (jq's suite for `syntax`/`engine`); `corpus/`,
+  `artifacts/` and `target/` are not.
+
 ## Layout
 
 | File | Owns |
@@ -304,13 +349,14 @@ pass rates; `V=1` lists every failure.
 | `crates/pathfinder/src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
 | `crates/pathfinder/src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
 | `crates/pathfinder/src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
-| `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`, path expressions, `l // r` as a path, `%`, parse errors, lazy input reading, file names in error locations), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); verified to apply and pass on 3.1.0, which Bravais builds by making this flake follow its stable nixpkgs. `0008`, `0013` and `0015` have a 3.1.0 cut, picked by version, because 3.1.0's `real_main` differs on the lines they replace. MIT, like jaq; never sent upstream. |
+| `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`, path expressions, `l // r` as a path, `%`, parse errors, lazy input reading, file names in error locations, a comment at the end of the program), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); verified to apply and pass on 3.1.0, which Bravais builds by making this flake follow its stable nixpkgs. `0008`, `0013` and `0015` have a 3.1.0 cut, picked by version, because 3.1.0's `real_main` differs on the lines they replace. MIT for jaq's text, Pathfinder's changes GPL-3.0-or-later OR MIT; never sent upstream. |
 | `crates/pathfinder-core`, `-std`, `-json`, `-fmts` | jaq 3.1.1's engine crates, imported with the patch set applied (`crates/UPSTREAM.md`). Library names stay `jaq_core`, … so the sources stay diffable against upstream. |
 | `crates/pathfinder-all` | jaq 3.1.1's `jaq-all` (lib `jaq_all`): compiling, running, reading and writing on the engine crates. |
 | `crates/pathfinder-jaq` | jaq 3.1.1's CLI, with the CLI hunks of the patch set, as the library `jaq` the native engine runs (`jaq::run`) and as the binary `pathfinder-jaq`, run as `PATHFINDER_JAQ` to check the crates against the packaged jaq. `publish = false`; never installed. |
 | `crates/pathfinder/tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
 | `crates/pathfinder/tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
 | `crates/pathfinder/tests/native.rs` | The native surface: mode cascade, JSON shapes, exit codes, and that the `jq` name is unchanged under an agent environment. |
+| `fuzz/` | `cargo fuzz` targets for jq's argv, the front end, and evaluation through the engine crates; see Fuzzing. Its own Cargo root. |
 | `SKILL.md` | Agent-facing description of the shim. Frontmatter first, so its licence is in `REUSE.toml`; keep `description` ≤ 1000 rendered characters. |
 
 ## Forbidden patterns

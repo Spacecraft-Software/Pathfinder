@@ -48,13 +48,52 @@ enum Assoc {
     None,
 }
 
+/// How deep the parser may recurse, counted in [`Parser::query`],
+/// [`Parser::term`] and [`Parser::pattern`] calls: about two per bracket level.
+///
+/// The parser, and every pass over its tree, recurses on the native stack;
+/// without a bound, `[[[…]]]` four thousand deep overflows it and aborts the
+/// shim. Beyond the bound the program is a parse failure, so it reaches jaq
+/// unrewritten (see [`MAX_DEPTH`]).
+const MAX_NESTING: usize = 2000;
+
+/// How deep a parsed tree may be.
+///
+/// Left-associative chains (`1 + 1 + …`, `a, b, …`, `.a.b…`) are built by
+/// loops, not recursion, so [`MAX_NESTING`] does not bound them; the passes
+/// over the tree recurse on them all the same. Measured on the 8 MiB main
+/// thread, a `+` chain overflows the rewriter between 6000 and 8000 deep
+/// (release) and bracket nesting overflows the parser between 3000 and 4000
+/// (debug); this keeps about half of that. jq itself stops at a parser stack
+/// of 10000 ("memory exhausted", about 3300 bracket levels) but takes flat
+/// chains of any length, so a deeper program is not jq's error: it is passed
+/// through, as any parse failure is.
+const MAX_DEPTH: usize = 3000;
+
+/// How many links the loops that build chains (`,`, binary operators,
+/// postfixes) may add in all, across the whole program.
+///
+/// Those links are the only tree depth [`MAX_NESTING`] does not bound, so this
+/// bounds every tree the parser builds, rejected ones included, to about
+/// `MAX_FOLDS` plus a few nodes per nesting level. That matters because a
+/// tree is dropped recursively: built in full, `1 + 1 + …` overflowed the
+/// stack while being dropped at 200000 links, and a tree too deep for
+/// [`MAX_DEPTH`] is still built and dropped. A program with more links than
+/// this is passed through, as any parse failure is.
+const MAX_FOLDS: usize = 20_000;
+
 /// Parse a program body: no `module`/`import`/`include` header.
 pub fn parse(src: &str) -> Result<Node> {
     let toks = lex(src).map_err(|e| ParseError {
         at: e.0,
         what: "invalid token".to_owned(),
     })?;
-    let mut p = Parser { toks, pos: 0 };
+    let mut p = Parser {
+        toks,
+        pos: 0,
+        nesting: 0,
+        folds: 0,
+    };
     if matches!(
         p.peek(),
         Tok::Keyword(Kw::Module | Kw::Import | Kw::Include)
@@ -63,12 +102,44 @@ pub fn parse(src: &str) -> Result<Node> {
     }
     let node = p.query()?;
     p.expect_eof()?;
+    if deeper_than(&node, MAX_DEPTH) {
+        return Err(too_deep());
+    }
     Ok(node)
+}
+
+/// The error for a program past [`MAX_NESTING`] or [`MAX_DEPTH`]. It points
+/// at offset 0, never at a `?//` token: a failure there is jq's syntax error
+/// (`check::program`), and this one is not.
+fn too_deep() -> ParseError {
+    ParseError {
+        at: 0,
+        what: "nesting too deep".to_owned(),
+    }
+}
+
+/// Whether `root` has a path longer than `max` nodes. Iterative, so that it
+/// holds for the trees the recursive passes cannot.
+fn deeper_than(root: &Node, max: usize) -> bool {
+    let mut stack = vec![(root, 1usize)];
+    while let Some((node, depth)) = stack.pop() {
+        if depth > max {
+            return true;
+        }
+        stack.extend(node.children().into_iter().map(|c| (c, depth + 1)));
+    }
+    false
 }
 
 struct Parser {
     toks: Vec<Token>,
     pos: usize,
+    /// Calls of the recursive productions now active; see [`MAX_NESTING`].
+    /// A string interpolation's sub-parser starts from its parent's count.
+    nesting: usize,
+    /// Links added to chains so far; see [`MAX_FOLDS`]. Shared with an
+    /// interpolation's sub-parser.
+    folds: usize,
 }
 
 impl Parser {
@@ -158,8 +229,36 @@ impl Parser {
 
     // --- Query --------------------------------------------------------------
 
-    /// `Query: Query '|' Query` (right-associative, lowest).
+    /// Run one of the recursive productions `f`, counted against
+    /// [`MAX_NESTING`]. Every cycle in the grammar passes through `query`,
+    /// `term` or `pattern`, each entered through here, or is wrapped in this
+    /// where it recurses, as the right-associative `//` is in `expr`.
+    fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        if self.nesting >= MAX_NESTING {
+            return Err(too_deep());
+        }
+        self.nesting += 1;
+        let out = f(self);
+        self.nesting -= 1;
+        out
+    }
+
+    /// Count one more link of a chain a loop builds, against [`MAX_FOLDS`].
+    fn fold(&mut self) -> Result<()> {
+        self.folds += 1;
+        if self.folds > MAX_FOLDS {
+            Err(too_deep())
+        } else {
+            Ok(())
+        }
+    }
+
     fn query(&mut self) -> Result<Node> {
+        self.nested(Self::pipe)
+    }
+
+    /// `Query: Query '|' Query` (right-associative, lowest).
+    fn pipe(&mut self) -> Result<Node> {
         let start = self.here();
         let lhs = self.comma()?;
         if self.eat_op("|") {
@@ -177,6 +276,7 @@ impl Parser {
         let start = self.here();
         let mut lhs = self.operand()?;
         while self.eat_op(",") {
+            self.fold()?;
             let rhs = self.operand()?;
             lhs = Node::new(
                 Span::new(start, rhs.span.end),
@@ -288,12 +388,15 @@ impl Parser {
                 break;
             }
             self.bump();
+            self.fold()?;
             let next = if assoc == Assoc::Right {
                 prec
             } else {
                 prec + 1
             };
-            let rhs = self.expr(next)?;
+            // Counted: a right-associative chain (`a // b // …`) recurses
+            // here without passing through `term`.
+            let rhs = self.nested(|p| p.expr(next))?;
             lhs = Node::new(
                 Span::new(start, rhs.span.end),
                 Kind::Binary {
@@ -313,6 +416,11 @@ impl Parser {
     // --- Term ---------------------------------------------------------------
 
     fn term(&mut self) -> Result<Node> {
+        self.nested(Self::postfix)
+    }
+
+    /// A primary and the postfix chain after it (`.a`, `[i]`, `?`, …).
+    fn postfix(&mut self) -> Result<Node> {
         let mut node = self.primary()?;
         loop {
             let start = node.span.start;
@@ -352,6 +460,7 @@ impl Parser {
                 }
                 _ => break,
             }
+            self.fold()?;
         }
         Ok(node)
     }
@@ -601,9 +710,15 @@ impl Parser {
                         tok: Tok::Eof,
                         span: Span::empty(end),
                     });
-                    let mut sub = Self { toks, pos: 0 };
+                    let mut sub = Self {
+                        toks,
+                        pos: 0,
+                        nesting: self.nesting,
+                        folds: self.folds,
+                    };
                     let q = sub.query()?;
                     sub.expect_eof()?;
+                    self.folds = sub.folds;
                     segs.push(StrSeg::Interp(Box::new(q)));
                 }
             }
@@ -740,6 +855,10 @@ impl Parser {
     }
 
     fn pattern(&mut self) -> Result<Pattern> {
+        self.nested(Self::one_pattern)
+    }
+
+    fn one_pattern(&mut self) -> Result<Pattern> {
         match self.peek().clone() {
             Tok::Binding(name) => {
                 self.bump();
@@ -1016,6 +1135,40 @@ mod tests {
             rejected.len(),
             rejected.join("\n")
         );
+    }
+
+    /// Found by fuzzing (TODO T-019): nesting or a flat chain a few thousand
+    /// deep overflowed the stack and aborted the shim. Past the bounds the
+    /// program is a parse failure instead. Run on a thread sized like the
+    /// main one, which the bounds were measured on.
+    #[test]
+    fn programs_past_the_depth_bounds_fail_to_parse_without_overflowing() {
+        let too_deep = [
+            format!("{}{}", "[".repeat(5000), "]".repeat(5000)),
+            format!("1{}", " + 1".repeat(super::MAX_DEPTH + 1)),
+            format!("1{}", " // 1".repeat(200_000)),
+            format!("1{}", ", 1".repeat(200_000)),
+            ".a".repeat(200_000),
+            format!(". as {}$x{} | $x", "[".repeat(5000), "]".repeat(5000)),
+            "label $x | ".repeat(5000) + "1",
+            format!(
+                "{}1{}",
+                "(".repeat(150),
+                (" + 1".repeat(2000) + ")").repeat(150)
+            ),
+        ];
+        std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(move || {
+                for src in &too_deep {
+                    let e = parse(src).expect_err("past the bound");
+                    assert_eq!(e.what, "nesting too deep", "{}", &src[..40]);
+                    assert_eq!(e.at, 0, "never at a `?//`, which would be jq's error");
+                }
+            })
+            .expect("spawns")
+            .join()
+            .expect("no overflow, no panic");
     }
 
     #[test]

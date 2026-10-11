@@ -181,6 +181,7 @@ are identical to it but for their manifests. A following commit runs
 | 0013 parse errors | `pathfinder-json`: `funs.rs`, `lib.rs`, `parse_error.rs`, `read.rs` |
 | 0014 lazy input | `pathfinder-fmts`: `read/formats.rs`, `read/mod.rs`; `pathfinder-json`: `read.rs` |
 | 0015 file locations | none (CLI only) |
+| 0016 trailing comment | `pathfinder-core`: `load/lex.rs` (added after M18: an upstream bug found by fuzzing, T-019) |
 
 ### CLI hunks, applied in T-010
 

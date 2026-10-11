@@ -160,7 +160,10 @@ impl<'a> Lexer<&'a str> {
             }
             // ignore all lines that end with an odd number of backslashes
             loop {
-                let (before, after) = self.i.split_once('\n').unwrap_or((self.i, ""));
+                // Pathfinder: the rest is the empty end of the input, not a
+                // `""` from elsewhere, so that spans into it stay inside it.
+                let end = &self.i[self.i.len()..];
+                let (before, after) = self.i.split_once('\n').unwrap_or((self.i, end));
                 let before = before.strip_suffix('\r').unwrap_or(before);
                 self.i = after;
                 // does the line end with an even number of backslashes?

@@ -1,0 +1,1 @@
+"foo" | try ((try . catch "caught too much") | error) catch "caught just right"

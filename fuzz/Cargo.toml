@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# `cargo fuzz` targets (TODO T-019, PLAN P-061, PRD R-010). AGENTS.md,
+# "Fuzzing", says how to run them.
+#
+# Its own Cargo root: the empty `[workspace]` keeps it out of the main
+# workspace, whose `members = ["crates/*"]` does not reach it anyway.
+[package]
+name = "pathfinder-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+# The shim's modules, compiled in with `#[path]` (src/lib.rs). The shim is a
+# binary with no lib target; growing one only for fuzzing would widen its
+# surface.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# The engine, as `crates/pathfinder-all`'s library. No mimalloc: a second
+# allocator would hide allocations from libFuzzer's `-rss_limit_mb` and
+# `-malloc_limit_mb` accounting.
+jaq_all = { package = "pathfinder-all", path = "../crates/pathfinder-all" }
+
+[[bin]]
+name = "jqargs"
+path = "fuzz_targets/jqargs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "syntax"
+path = "fuzz_targets/syntax.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "engine"
+path = "fuzz_targets/engine.rs"
+test = false
+doc = false
+bench = false
