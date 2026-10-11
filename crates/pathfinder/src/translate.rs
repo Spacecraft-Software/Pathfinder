@@ -30,11 +30,16 @@ const INTERNAL_PREFIX: &str = "__pathfinder_";
 /// `-f`; only a filter inside an included module reports its own path.
 const LOC_FILE: &str = "<top-level>";
 
-/// Everything needed to run jaq on the user's behalf.
-#[derive(Debug, Clone)]
+/// Everything needed to run the engine on the user's behalf.
+#[derive(Debug)]
 pub struct Plan {
-    /// Arguments for jaq, excluding `argv[0]`.
+    /// Arguments for a jaq binary, excluding `argv[0]` (`PATHFINDER_ENGINE=jaq`).
     pub argv: Vec<OsString>,
+    /// The in-process engine's run options (`PATHFINDER_ENGINE=native`),
+    /// built from jq's command line directly rather than parsed back out of
+    /// [`Plan::argv`]: no flag disguises, no `--` subtleties. Input files
+    /// that [`Plan::concat_inputs`] holds are not among its files.
+    pub cli: jaq::Cli,
     /// The stdout transform; [`Post::is_identity`] decides exec versus pipe.
     pub post: Post,
     /// Set when `--seq` requires stdin's RS separators to be stripped.
@@ -199,16 +204,20 @@ pub fn plan(
     // renamed the way files can, so that case binds each one by name instead,
     // the same mechanism `--jsonargs` (which jaq lacks entirely) always uses.
     let dashed_positional = args.positional.iter().any(starts_with_dash);
-    let wrap = match args.positional_mode {
+    let (wrap, bound) = match args.positional_mode {
         PositionalMode::Strings if dashed_positional => {
-            Some(positional_wrap(&mut argv, args, "--arg"))
+            let (wrap, bound) = positional_wrap(&mut argv, args, "--arg");
+            (Some(wrap), bound)
         }
         PositionalMode::Strings => {
             push!("--args");
-            None
+            (None, Vec::new())
         }
-        PositionalMode::Json => Some(positional_wrap(&mut argv, args, "--argjson")),
-        PositionalMode::Files => None,
+        PositionalMode::Json => {
+            let (wrap, bound) = positional_wrap(&mut argv, args, "--argjson");
+            (Some(wrap), bound)
+        }
+        PositionalMode::Files => (None, Vec::new()),
     };
 
     let ctx = prelude::Context {
@@ -249,8 +258,16 @@ pub fn plan(
         argv.extend(args.positional.iter().cloned());
     }
 
+    let program = if f.from_file && !rewritten {
+        jaq::Program::FromFile(args.program.clone().unwrap_or_default().into())
+    } else {
+        jaq::Program::Inline(assembly.text.clone())
+    };
+    let cli = run_options(args, program, &bound, concat.is_some());
+
     Ok(Plan {
         argv,
+        cli,
         post,
         strip_input_rs: f.seq,
         concat_inputs: concat,
@@ -345,23 +362,109 @@ fn post_plan(f: &Flags) -> Post {
     clippy::similar_names,
     reason = "`args` and `argv` are the domain's own names"
 )]
-fn positional_wrap(argv: &mut Vec<OsString>, args: &JqArgs, flag: &str) -> Wrap {
+fn positional_wrap(
+    argv: &mut Vec<OsString>,
+    args: &JqArgs,
+    flag: &'static str,
+) -> (Wrap, Vec<(&'static str, String, OsString)>) {
     let mut names: Vec<String> = Vec::with_capacity(args.positional.len());
+    let mut bound = Vec::with_capacity(args.positional.len());
     for (i, value) in args.positional.iter().enumerate() {
         let name = format!("{INTERNAL_PREFIX}p{i}");
         argv.push(OsString::from(flag));
         argv.push(OsString::from(&name));
         argv.push(value.clone());
         names.push(format!("${name}"));
+        bound.push((flag, name, value.clone()));
     }
     // Extend jaq's own $ARGS rather than rebuilding it, so `--arg`/`--argjson`
     // bindings survive in `.named` — but drop the internal bindings this
     // emulation just added, which jq would never have put there.
-    Wrap(format!(
+    let wrap = Wrap(format!(
         "($ARGS | .positional = [{}] \
          | .named |= with_entries(select(.key | startswith(\"{INTERNAL_PREFIX}\") | not))) as $ARGS |",
         names.join(", ")
-    ))
+    ));
+    (wrap, bound)
+}
+
+/// The in-process engine's run options for a jq command line: the same
+/// decisions [`plan`] renders as jaq's argv, as fields.
+///
+/// `bound` are the positionals [`positional_wrap`] binds by name, as
+/// `(flag, name, value)`; `concatenated` says the input files are fed as one
+/// stream ([`Plan::concat_inputs`]) rather than named here. A value that is
+/// not UTF-8 reaches the engine lossily converted, where jaq's argv parser
+/// refuses it.
+fn run_options(
+    args: &JqArgs,
+    program: jaq::Program,
+    bound: &[(&'static str, String, OsString)],
+    concatenated: bool,
+) -> jaq::Cli {
+    use jaq::Format;
+    let f = &args.flags;
+    let text = |s: &OsString| s.to_string_lossy().into_owned();
+    let mut cli = jaq::Cli {
+        null_input: f.null_input,
+        slurp: f.slurp,
+        sort_keys: f.sort_keys,
+        color_output: f.color,
+        monochrome_output: f.monochrome,
+        exit_status: f.exit_status,
+        filter: Some(program),
+        ..jaq::Cli::default()
+    };
+    if f.raw_input {
+        cli.from = Some(Format::Raw);
+    }
+    // As in `plan`: `-a` takes the raw modes over itself (`post_plan`).
+    if !f.ascii_output {
+        if f.raw_output0 {
+            cli.to = Some(Format::Raw0);
+        } else if f.join_output {
+            cli.join_output = true;
+            cli.to = Some(Format::Raw);
+        } else if f.raw_output {
+            cli.to = Some(Format::Raw);
+        }
+    }
+    match f.output_format {
+        Some(OutputFormat::Compact) => cli.compact_output = true,
+        Some(OutputFormat::Tab | OutputFormat::Indent(-1)) => cli.tab = true,
+        // jq's range is -1..=7, so the conversion cannot fail.
+        Some(OutputFormat::Indent(n)) => cli.indent = usize::try_from(n).ok(),
+        None => {}
+    }
+    cli.library_path = f.lib_paths.iter().map(std::path::PathBuf::from).collect();
+    for (name, value) in &args.named {
+        match value {
+            NamedValue::Str(v) => cli.arg.push((name.clone(), text(v))),
+            NamedValue::Json(v) => cli.argjson.push((name.clone(), text(v))),
+            NamedValue::RawFile(v) => cli.rawfile.push((name.clone(), v.clone())),
+            NamedValue::SlurpFile(v) => cli.slurpfile.push((name.clone(), v.clone())),
+        }
+    }
+    for (flag, name, value) in bound {
+        let binding = (name.clone(), text(value));
+        if *flag == "--arg" {
+            cli.arg.push(binding);
+        } else {
+            cli.argjson.push(binding);
+        }
+    }
+    if matches!(args.positional_mode, PositionalMode::Strings) && bound.is_empty() {
+        cli.args = args.positional.iter().map(text).collect();
+    }
+    // A lone input `-` is stdin, which the engine reads when it has no files.
+    // Several are concatenated, `-` among them (`inputs::open`).
+    if !concatenated {
+        cli.files = (args.files.iter())
+            .filter(|f| *f != "-")
+            .map(std::path::PathBuf::from)
+            .collect();
+    }
+    cli
 }
 
 /// Get the filter text, reading it from disk when `-f` was used.
@@ -605,6 +708,52 @@ mod tests {
             .into_iter()
             .find(|a| a.contains("def ") || a.starts_with('.') || a.contains('|'))
             .expect("program present")
+    }
+
+    /// The run options are the decisions `Plan::argv` renders, as fields:
+    /// jaq's own argv parser, given the argv, makes the same `Cli`, once the
+    /// argv's flag disguises (` -1`, `./-5`) and a lone `-` are allowed for.
+    #[test]
+    fn run_options_agree_with_jaqs_reading_of_the_argv() {
+        let cases: &[&[&str]] = &[
+            &["."],
+            &["-n", "-r", "-S", "-e", "-c", ".a"],
+            &["-j", "--tab", "."],
+            &["--raw-output0", "--indent", "3", "."],
+            &["-R", "-s", "-M", "--indent", "-1", "."],
+            &["-C", "-L/a", "-L", "/b", "."],
+            &["--arg", "x", "1", "--argjson", "y", "{}", "$x, $y"],
+            &["--rawfile", "r", "f.txt", "--slurpfile", "s", "g.json", "."],
+            &["-n", "$ARGS", "--args", "a", "b"],
+            &["-n", "$ARGS", "--args", "a", "-5"],
+            &["-n", "$ARGS", "--jsonargs", "1", "{\"a\":2}"],
+            &["-ra", "."],
+            &["--seq", "-c", "."],
+            &[".", "one.json"],
+            &["-c", "[tostream]", "x.json"],
+            &["-s", ".", "a.json", "b.json"],
+            &[".a.b = 1"],
+        ];
+        for parts in cases {
+            let p = planned(parts);
+            let mut from_argv = jaq::Cli::parse_from(p.argv.clone()).expect("jaq parses its argv");
+            if let Some(jaq::Program::Inline(text)) = &mut from_argv.filter
+                && let Some(rest) = text.strip_prefix(' ')
+            {
+                *text = rest.to_owned();
+            }
+            for f in &mut from_argv.files {
+                if let Ok(rest) = f.strip_prefix("./") {
+                    *f = rest.to_path_buf();
+                }
+            }
+            from_argv.files.retain(|f| f.as_os_str() != "-");
+            assert_eq!(
+                format!("{:?}", p.cli),
+                format!("{from_argv:?}"),
+                "for {parts:?}"
+            );
+        }
     }
 
     #[test]

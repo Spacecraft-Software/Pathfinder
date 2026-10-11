@@ -16,7 +16,18 @@
   # Cut against jaq 3.1.1; they also apply to 3.1.0, which Bravais builds
   # (its nixpkgs is followed), and pass the check phase there.
   withPatchedJaq ? true,
+  # The engine a `jq` call runs on when PATHFINDER_ENGINE is unset: "jaq", the
+  # pinned jaq binary, or "native", the engine crates in process. "jaq" until
+  # the native engine replaces it (PLAN P-081); PATHFINDER_ENGINE overrides
+  # it at run time either way.
+  defaultEngine ? "jaq",
 }:
+
+assert lib.assertOneOf "defaultEngine" defaultEngine [
+  "jaq"
+  "native"
+];
+
 
 let
   engine =
@@ -79,6 +90,8 @@ rustPlatform.buildRustPackage rec {
   # wrapper script would fork a shell before every `jq` call. PATHFINDER_JAQ
   # still overrides it at run time.
   env.PATHFINDER_DEFAULT_JAQ = "${engine}/bin/jaq";
+  # Compiled in for the same reason (`BUILT_IN` in crates/pathfinder/src/engine.rs).
+  env.PATHFINDER_DEFAULT_ENGINE = defaultEngine;
 
   # The differential suite needs a real jq 1.8.1, which is not a build input
   # here. It skips cleanly when none is found; CI is where it actually runs.
@@ -89,7 +102,7 @@ rustPlatform.buildRustPackage rec {
   '';
 
   meta = with lib; {
-    description = "jq-compatible shim over jaq";
+    description = "jq 1.8.1-compatible jq on a fork of jaq's engine";
     homepage = "https://Pathfinder.SpacecraftSoftware.org/";
     license = licenses.gpl3Plus;
     maintainers = [ ];

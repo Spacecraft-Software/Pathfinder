@@ -41,7 +41,8 @@ with `diff -r` and is identical to that store path.
 | `crates/pathfinder-std` | `jaq-std/` | 3.0.1 |
 | `crates/pathfinder-json` | `jaq-json/` | 2.0.2 |
 | `crates/pathfinder-fmts` | `jaq-fmts/`, whole | 0.1.1 |
-| `crates/pathfinder-jaq` | `jaq-all/src/` as its library, `jaq/src/` as its binary (T-010, below) | 0.3.0 / 3.1.1 |
+| `crates/pathfinder-all` | `jaq-all/src/` (in `pathfinder-jaq` until M19, below) | 0.3.0 |
+| `crates/pathfinder-jaq` | `jaq/src/` (T-010, below; a library since M19) | 3.1.1 |
 
 `jaq-play`, `jaq-all`'s examples and the `jaq` crate's `tests/` (golden tests
 of the CLI, mostly of the formats and `--in-place` that M18 removes) were not
@@ -333,3 +334,61 @@ crate's tests now load the JSON natives too. A standalone user of the std
 crate would be. Two ways to repair it in the sources: move `halt_error` into
 `pathfinder-json/src/defs.jq`, next to `tojson`, or merge the crates when the
 engine's crate layout is settled.
+
+## M19: the CLI as a library
+
+M19 (PLAN P-055–P-057) runs the engine in the `pathfinder` binary's own
+process, through jaq's CLI. To make that CLI a library, `crates/pathfinder-jaq`
+was split:
+
+| Now | Was | Holds |
+|---|---|---|
+| `crates/pathfinder-all/src/` | `crates/pathfinder-jaq/src/jaq-all/` | `jaq-all`, lib `jaq_all`, unchanged |
+| `crates/pathfinder-jaq/src/{cli,filter,jq,tests}.rs`, `help.txt` | `crates/pathfinder-jaq/src/jaq/` | jaq's CLI modules |
+| `crates/pathfinder-jaq/src/lib.rs` | `crates/pathfinder-jaq/src/jaq/main.rs` | the driver, lib `jaq` |
+| `crates/pathfinder-jaq/src/main.rs` | — | the `pathfinder-jaq` binary: mimalloc and `jaq::main()` |
+
+The CLI sources keep their `crate::` and `jaq_all::` paths, so they still diff
+cleanly against `jaq/src/` in the patched tree. The changes, all marked
+`Pathfinder:` in the source:
+
+- `main.rs` → `lib.rs`. `main` is `jaq::main`, minus the global allocator,
+  which only a binary may set. The logger set-up is `init_logging`. The new
+  `run(cli, input, segments, out) -> u8` is `real_main` plus jaq's error
+  report: stdin is any `Read`, the concatenated files' `Segment`s are passed
+  in rather than read from `PATHFINDER_INPUTS`, and stdout is any `Write`,
+  buffered by the caller (`main_io` keeps jaq's `with_stdout` choice). `halt`
+  and `halt_error` return their status (its low byte, as the operating system
+  keeps it) instead of calling `process::exit`, so the caller can flush first.
+- `cli.rs`: `Cli::parse_from` parses any argument list; `Cli::parse` reads
+  `std::env::args_os()` through it.
+- `jq.rs`: `Segment::new`.
+
+`jq.rs`, `filter.rs` and `Error`'s rendering are untouched, so the CLI hunks
+of patches 0008, 0013 and 0015 above still describe the code. A fix to them
+lands twice, as AGENTS.md says. The driver-only changes above have no
+counterpart in `packaging/jaq/`: they change no behaviour of a jaq binary,
+which `pathfinder-jaq` run as `PATHFINDER_JAQ` keeps checking.
+
+### mimalloc
+
+jaq's binary sets mimalloc as its global allocator; the `pathfinder` binary
+now does too (its `mimalloc` feature, on by default). Measured with
+`perf stat -e cycles:u` on 200 000 objects (22 MB NDJSON),
+`-s 'group_by(.tags[2]) | map(length)'` took 5.1e9 user cycles on glibc's
+allocator and 2.5e9 with mimalloc, level with `pathfinder-jaq` (2.4e9). The
+system allocator would break PRD R-011's 10% budget against jaq by a factor of
+two. mimalloc is the dependency jaq already had, at the version locked at the
+import base.
+
+## Licence of Pathfinder's changes
+
+The text taken from jaq keeps jaq's MIT licence and its copyright notice
+(Standard §4.2). Pathfinder's changes to it, the patch set in
+`packaging/jaq/` and the files Pathfinder added among the imported ones (for
+example `pathfinder-json/src/parse_error.rs`, `pathfinder-jaq/src/jq.rs`)
+are offered under `GPL-3.0-or-later OR MIT`, at the recipient's choice.
+`REUSE.toml` records each such file as `MIT AND (GPL-3.0-or-later OR MIT)`:
+as a whole, every file under `crates/pathfinder-{core,std,json,fmts,all,jaq}`
+can always be used under MIT, as jaq can. The shim crate, `crates/pathfinder`,
+is `GPL-3.0-or-later` only.

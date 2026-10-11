@@ -25,13 +25,13 @@ serves. Later milestones are broken down when they start, not before.
 
 ## M19 — In-process evaluation
 
-- [ ] T-011 (P-055) A run-options struct built from `jqargs::JqArgs`; delete the jq-to-jaq argv translation for the native engine only
-- [ ] T-012 (P-056) Input readers (stdin, files as one stream, `-R`, `-s`, `-n`, `--seq`, `--raw-input0` refusal kept) in-process, with jq's error locations
-- [ ] T-013 (P-056) Output writer with jq's formatting options (`-c`, `--indent`, `--tab`, `-S`, `-C`, `-j`, `-r`, `-a`, `--seq`) in-process; `src/post.rs` retired for the native engine
-- [ ] T-014 (P-057) Exit status, uncaught errors, `halt`, `halt_error` and broken-pipe handling in-process
-- [ ] T-015 (P-058) `PATHFINDER_ENGINE` switch; `--version`/`--explain` report the engine in use
-- [ ] T-016 (P-058) CI matrix: differential and conformance on `native` and on `jaq`
-- [ ] T-017 (P-059) `tests/jq-suite/FLOOR-native`; the conformance runner selects it for the native engine
+- [x] T-011 (P-055) A run-options struct built from `jqargs::JqArgs`; delete the jq-to-jaq argv translation for the native engine only
+- [x] T-012 (P-056) Input readers (stdin, files as one stream, `-R`, `-s`, `-n`, `--seq`, `--raw-input0` refusal kept) in-process, with jq's error locations
+- [x] T-013 (P-056) Output writer with jq's formatting options (`-c`, `--indent`, `--tab`, `-S`, `-C`, `-j`, `-r`, `-a`, `--seq`) in-process; `src/post.rs` retired for the native engine
+- [x] T-014 (P-057) Exit status, uncaught errors, `halt`, `halt_error` and broken-pipe handling in-process
+- [x] T-015 (P-058) `PATHFINDER_ENGINE` switch; `--version`/`--explain` report the engine in use
+- [x] T-016 (P-058) CI matrix: differential and conformance on `native` and on `jaq`
+- [x] T-017 (P-059) `tests/jq-suite/FLOOR-native`; the conformance runner selects it for the native engine
 - [ ] T-018 (P-060) `bench/`: startup (`-n .`), 30 MB single-line and line-delimited input, a filter-heavy set, an output-heavy set; record jq 1.8.1, jaq 3.1.1 and native figures
 - [ ] T-019 (P-061) `cargo fuzz` targets: `jqargs::parse`, `syntax::parse`, and evaluation of fuzzed filters over fuzzed input with a step limit
 

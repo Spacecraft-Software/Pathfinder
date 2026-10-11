@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Nix flake for Pathfinder --- a jq-compatible shim over jaq.
+# Nix flake for Pathfinder --- a jq 1.8.1-compatible jq on a fork of jaq's engine.
 #
 # Usage:
 #   nix run . -- -r '.a' in.json   # run without installing (as `pathfinder`)
@@ -9,10 +9,13 @@
 #   nix develop                    # development shell
 #   nix flake check                # build + unit tests
 #
-# Two packages, on purpose:
+# Three packages, on purpose:
 #
 #   packages.default / .pathfinder   the `pathfinder` binary only
 #   packages.pathfinder-jq           the same, plus `bin/jq -> pathfinder`
+#   packages.pathfinder-native       `pathfinder-jq` with the native engine as
+#                                    its default (PLAN M19-M24; PATHFINDER_ENGINE
+#                                    overrides either default at run time)
 #
 # Taking over the `jq` name is a choice the consumer makes explicitly; adding
 # the default package to a profile never silently shadows a real jq.
@@ -21,7 +24,7 @@
 # Built through this flake, its `../.` source is the git-tracked tree only, so
 # untracked local state (target/, chat/) never reaches the store.
 {
-  description = "Pathfinder --- a jq-compatible shim over jaq";
+  description = "Pathfinder --- a jq 1.8.1-compatible jq on a fork of jaq's engine";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -40,11 +43,15 @@
         pkgs = nixpkgs.legacyPackages.${system};
         pathfinder = pkgs.callPackage ./packaging/default.nix { };
         pathfinder-jq = pkgs.callPackage ./packaging/default.nix { withJqShim = true; };
+        pathfinder-native = pkgs.callPackage ./packaging/default.nix {
+          withJqShim = true;
+          defaultEngine = "native";
+        };
       in
       {
         packages = {
           default = pathfinder;
-          inherit pathfinder pathfinder-jq;
+          inherit pathfinder pathfinder-jq pathfinder-native;
         };
 
         apps.default = {
@@ -56,6 +63,7 @@
         # differential suite skips there (no real jq in the sandbox); CI runs it
         # against a pinned, checksum-verified jq 1.8.1.
         checks.default = pathfinder;
+        checks.native = pathfinder-native;
 
         devShells.default = pkgs.mkShell {
           name = "pathfinder-dev";
@@ -64,7 +72,7 @@
             rustc
             clippy
             rustfmt
-            jaq # the engine Pathfinder hands off to
+            jaq # the jaq engine (PATHFINDER_ENGINE=jaq)
             reuse # section 4.3 gate
             texinfo # section 8 --- makeinfo doc/pathfinder.texi
             gnumake

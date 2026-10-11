@@ -7,6 +7,13 @@ SPDX-License-Identifier: CC-BY-SA-4.0
 
 Where Pathfinder cannot make `jaq` behave like `jq`, and why.
 
+Since M19 Pathfinder has two engines (`PATHFINDER_ENGINE`): `native`, its
+fork of jaq's engine run in process, and `jaq`, a jaq binary. The native
+engine is built from the same patched sources as the packaged jaq, and both
+pass the same suites (815/820 of jq's own); where this document says "the
+packaged jaq", the native engine behaves the same, except where a section
+names the `exec` hand-off, which only the `jaq` engine has.
+
 Everything here was measured, not inferred: **jq 1.8.1** (the declared baseline,
 fetched with `nix build nixpkgs#jq`) against **jaq 3.0.0, 3.1.0 and 3.1.1**. The
 cases Pathfinder *does* fix are mostly not listed here — they are in the
@@ -119,7 +126,8 @@ Limits:
 
 - With several input files, Pathfinder concatenates them onto jaq's stdin
   (see "Several input files are one stream" below) and describes them to the
-  packaged jaq in `PATHFINDER_INPUTS` (names, byte counts, unreadable files),
+  packaged jaq in `PATHFINDER_INPUTS` (names, byte counts, unreadable files;
+  the native engine is handed the same description directly),
   so the location names the file being read and restarts the count in each,
   as jq does. A stock jaq ignores the variable and reports `<stdin>:N`,
   counted across the files; it also shows the variable in `$ENV`, which the
@@ -287,10 +295,10 @@ worse than the missing name.
 If you need them, define them in your filter; your definition wins over anything
 Pathfinder injects.
 
-## Consequences of the `exec` fast path
+## Consequences of the `exec` fast path (the `jaq` engine)
 
-When no output transform is needed, Pathfinder replaces its own process with
-jaq's. It therefore never sees jaq's exit code or stderr and cannot retouch
+On the `jaq` engine, when no output transform is needed, Pathfinder replaces
+its own process with jaq's. It therefore never sees jaq's exit code or stderr and cannot retouch
 either.
 
 On the packaged jaq this costs nothing, because the exit codes agree: `-e` on

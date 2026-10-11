@@ -103,29 +103,74 @@ impl Splitter {
 /// produced; jaq itself is unbuffered on a pipe and Pathfinder must not
 /// reintroduce the latency it was careful not to add.
 pub fn transform(mut input: impl Read, output: &mut impl Write, post: Post) -> io::Result<()> {
-    let mut splitter = Splitter::default();
-    let mut value: Vec<u8> = Vec::with_capacity(4096);
+    let mut framer = Framer::new(output, post);
+    framer.flush_each = true;
     let mut buf = [0u8; 8192];
-
     loop {
         let n = input.read(&mut buf)?;
         if n == 0 {
             break;
         }
-        for &b in &buf[..n] {
-            if splitter.feed(b) {
-                emit(output, &value, post)?;
-                value.clear();
-            } else {
-                value.push(b);
-            }
+        framer.write_all(&buf[..n])?;
+    }
+    framer.finish()
+}
+
+/// A writer applying `post` to the values written through it.
+///
+/// The in-process engine writes its outputs through one, and
+/// [`transform`] copies jaq's stdout through one, so both engines frame
+/// values with the same code. Call [`Framer::finish`] after the last value.
+pub struct Framer<W: Write> {
+    inner: W,
+    post: Post,
+    splitter: Splitter,
+    value: Vec<u8>,
+    /// Flush `inner` after every value.
+    pub flush_each: bool,
+}
+
+impl<W: Write> Framer<W> {
+    pub fn new(inner: W, post: Post) -> Self {
+        Self {
+            inner,
+            post,
+            splitter: Splitter::default(),
+            value: Vec::with_capacity(4096),
+            flush_each: false,
         }
     }
-    // A final value with no trailing newline still has to be written.
-    if !value.is_empty() {
-        emit(output, &value, post)?;
+
+    /// Write a final value that has no trailing newline, and flush.
+    pub fn finish(&mut self) -> io::Result<()> {
+        if !self.value.is_empty() {
+            emit(&mut self.inner, &self.value, self.post)?;
+            self.value.clear();
+        }
+        self.inner.flush()
     }
-    output.flush()
+}
+
+impl<W: Write> Write for Framer<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        for &b in buf {
+            if self.splitter.feed(b) {
+                emit(&mut self.inner, &self.value, self.post)?;
+                self.value.clear();
+                if self.flush_each {
+                    self.inner.flush()?;
+                }
+            } else {
+                self.value.push(b);
+            }
+        }
+        Ok(buf.len())
+    }
+
+    /// A partial value stays held: only [`Framer::finish`] writes it.
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 /// Write one value with its framing applied.
@@ -139,11 +184,10 @@ fn emit(output: &mut impl Write, value: &[u8], post: Post) -> io::Result<()> {
         output.write_all(value)?;
     }
     match post.terminator {
-        Terminator::Newline => output.write_all(b"\n")?,
-        Terminator::None => {}
-        Terminator::Nul => output.write_all(&[0])?,
+        Terminator::Newline => output.write_all(b"\n"),
+        Terminator::None => Ok(()),
+        Terminator::Nul => output.write_all(&[0]),
     }
-    output.flush()
 }
 
 /// Write `value`, escaping every non-ASCII scalar the way jq's `-a` does.
@@ -230,6 +274,32 @@ pub fn strip_rs(mut input: impl Read, output: &mut impl Write) -> io::Result<()>
         output.flush()?;
     }
     Ok(())
+}
+
+/// A reader dropping the RS bytes that frame json-seq input: [`strip_rs`]
+/// for the in-process engine, which reads rather than being written to.
+pub struct StripRs<R>(pub R);
+
+impl<R: Read> Read for StripRs<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            let n = self.0.read(buf)?;
+            if n == 0 {
+                return Ok(0);
+            }
+            let mut kept = 0;
+            for i in 0..n {
+                if buf[i] != RS {
+                    buf[kept] = buf[i];
+                    kept += 1;
+                }
+            }
+            // A read of nothing but separators is not the end of the input.
+            if kept > 0 {
+                return Ok(kept);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

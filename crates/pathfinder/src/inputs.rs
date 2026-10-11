@@ -188,6 +188,74 @@ pub fn feed(sink: &mut impl Write, inputs: Vec<Input>, strip: bool) -> io::Resul
     Ok(())
 }
 
+/// The inputs as the in-process engine's [`jaq::Segment`]s: what
+/// [`describe`] tells a jaq binary, without the environment.
+pub fn segments(inputs: &[Input]) -> Vec<jaq::Segment> {
+    inputs
+        .iter()
+        .map(|i| {
+            let name = i.name.to_string_lossy().into_owned();
+            jaq::Segment::new(name, i.len(), i.failure().map(str::to_owned))
+        })
+        .collect()
+}
+
+/// The inputs one after another as one stream, as [`feed`] writes them,
+/// for the in-process engine to read.
+pub fn reader(inputs: Vec<Input>, strip: bool) -> impl Read {
+    let parts: Vec<Box<dyn Read>> = inputs
+        .into_iter()
+        .filter_map(|input| -> Option<Box<dyn Read>> {
+            let part: Box<dyn Read> = match input.source {
+                // As in `feed`: exactly the length described.
+                Source::File(file, len) => Box::new(file.take(len)),
+                Source::Bytes(bytes) => return Some(Box::new(io::Cursor::new(bytes))),
+                Source::Stdin => Box::new(io::stdin().lock()),
+                Source::Failed(_) => return None,
+            };
+            Some(if strip {
+                Box::new(post::StripRs(part))
+            } else {
+                part
+            })
+        })
+        .collect();
+    Concat {
+        parts: parts.into_iter(),
+        current: None,
+    }
+}
+
+/// Readers read one after another. Not nested `Read::chain`s, whose depth
+/// would grow with the number of files.
+struct Concat<I> {
+    parts: I,
+    current: Option<Box<dyn Read>>,
+}
+
+impl<I: Iterator<Item = Box<dyn Read>>> Read for Concat<I> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self.current.is_none() {
+                match self.parts.next() {
+                    Some(part) => self.current = Some(part),
+                    None => return Ok(0),
+                }
+            }
+            if let Some(part) = &mut self.current {
+                let n = part.read(buf)?;
+                if n > 0 {
+                    return Ok(n);
+                }
+            }
+            self.current = None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Input, Source, describe, strerror};

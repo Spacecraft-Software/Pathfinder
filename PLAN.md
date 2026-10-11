@@ -38,11 +38,11 @@ out.
 The binary links the engine and evaluates without spawning anything. The
 rewriter and prelude still run; only the hand-off changes.
 
-- [ ] P-055 jq's options map onto the engine's run options directly, not onto jaq's argv
-- [ ] P-056 Inputs, multiple files as one stream, `-a`, `--seq` and output written in-process
-- [ ] P-057 Exit status, uncaught-error reports and `halt` handled in-process
-- [ ] P-058 `PATHFINDER_ENGINE=native|jaq` selects the engine; CI runs both suites on both
-- [ ] P-059 `FLOOR-native` ratchet at least 815/820
+- [x] P-055 jq's options map onto the engine's run options directly, not onto jaq's argv
+- [x] P-056 Inputs, multiple files as one stream, `-a`, `--seq` and output written in-process
+- [x] P-057 Exit status, uncaught-error reports and `halt` handled in-process
+- [x] P-058 `PATHFINDER_ENGINE=native|jaq` selects the engine; CI runs both suites on both
+- [x] P-059 `FLOOR-native` ratchet at least 815/820
 - [ ] P-060 Benchmarks (`bench/`): startup, parse, filter and output sets; R-011 holds
 - [ ] P-061 Fuzz targets for the jq-argv parser, the filter parser and the evaluator; no panic
 

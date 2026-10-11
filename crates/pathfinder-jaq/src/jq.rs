@@ -87,6 +87,12 @@ pub struct Segment {
 }
 
 impl Segment {
+    /// Pathfinder: a file of `len` bytes, reported as `name`; `failure` is
+    /// jq's message for one that could not be read, which holds no bytes.
+    pub fn new(name: String, len: u64, failure: Option<String>) -> Self {
+        Self { name, len, failure }
+    }
+
     /// The files described by [`INPUTS_ENV`], which is removed so that
     /// neither `$ENV` nor `env` shows it. Malformed, it is ignored.
     pub fn take_env() -> Vec<Self> {

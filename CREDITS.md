@@ -34,8 +34,8 @@ corpus was produced by running that version.
 
 <https://github.com/01mf02/jaq> · MIT
 
-jaq is the engine Pathfinder hands off to today; Pathfinder's translation
-layer in front of it implements none of the jq language itself. The
+jaq's engine is the one Pathfinder evaluates with: in process, from the
+engine crates below, or as the jaq binary Pathfinder can still hand off to. The
 divergences recorded in `doc/DIVERGENCES.md` are observations about jaq's
 behaviour, not criticisms of it — jaq does not claim byte-compatibility with
 jq, and several of its choices (strict arithmetic, no auto-vivification) are
@@ -46,16 +46,18 @@ when the Nix package builds the engine it pins. Among them: number output in
 jq's format, jq's double-precision arithmetic above 2^53, jq's spellings of
 NaN and infinity in input, a leading byte-order mark, jq's string repetition, object keys, `%`,
 `halt_error`, path errors, and jq's wording and locations for uncaught and
-parse errors. They are derived from jaq's code and keep its MIT licence
-(Standard §4.2). They are carried in-tree rather than sent upstream (§6.4):
+parse errors. They are derived from jaq's code: the jaq text they carry keeps
+its MIT licence (Standard §4.2), and Pathfinder's changes are offered under
+GPL-3.0-or-later or MIT. They are carried in-tree rather than sent upstream (§6.4):
 they make jaq behave like jq, which is Pathfinder's goal and not necessarily
 jaq's.
 
 ### The engine crates
 
 From M18 on, Pathfinder's engine is a hard fork of jaq. `crates/pathfinder-core`,
-`crates/pathfinder-std`, `crates/pathfinder-json` and `crates/pathfinder-fmts`
-are jaq 3.1.1's `jaq-core`, `jaq-std`, `jaq-json` and `jaq-fmts` (upstream tag
+`crates/pathfinder-std`, `crates/pathfinder-json`, `crates/pathfinder-fmts`,
+`crates/pathfinder-all` and `crates/pathfinder-jaq` are jaq 3.1.1's
+`jaq-core`, `jaq-std`, `jaq-json`, `jaq-fmts`, `jaq-all` and `jaq` (upstream tag
 `v3.1.1`, commit `c866e70303b5dbc37d83a0b0cbacf10e90af9c8c`), with the library
 hunks of the patches above applied. The interpreter, the standard library, the JSON value type and
 its reader and writer are jaq's work: the compiler from jq syntax to jaq's
@@ -66,7 +68,9 @@ the import base, its hash, and every change since.
 The imported files keep jaq's MIT licence and its copyright statement,
 "Michael Färber" as the crates' `authors` field gives it, in `REUSE.toml`;
 jaq ships no per-file headers and no copyright line in its `LICENSE-MIT`, so
-the licence text is the one in `LICENSES/MIT.txt`. Fixes from later jaq
+the licence text is the one in `LICENSES/MIT.txt`. Pathfinder's changes to
+them are offered under GPL-3.0-or-later or MIT (`crates/UPSTREAM.md`), so
+each file stays usable under MIT as a whole. Fixes from later jaq
 releases are ported by hand; nothing goes back upstream (§6.4).
 
 ---

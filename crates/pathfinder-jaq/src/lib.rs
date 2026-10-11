@@ -6,29 +6,39 @@
     clippy::similar_names,
     clippy::too_many_arguments,
     redundant_imports,
-    reason = "jaq 3.1.1's CLI with the patch set's CLI hunks (crates/UPSTREAM.md): a test vehicle that M19 retires, kept to the packaged engine's source so it stays a faithful stand-in for it"
+    reason = "jaq 3.1.1's CLI with the patch set's CLI hunks (crates/UPSTREAM.md): the driver `pathfinder` evaluates with, kept close to the packaged engine's source so that a fix ports between the two by diff"
 )]
 #![expect(
     clippy::needless_pass_by_value,
     clippy::renamed_function_params,
     clippy::trivially_copy_pass_by_ref,
-    reason = "jaq 3.1.1's CLI with the patch set's CLI hunks (crates/UPSTREAM.md): a test vehicle that M19 retires, kept to the packaged engine's source so it stays a faithful stand-in for it"
+    reason = "jaq 3.1.1's CLI with the patch set's CLI hunks (crates/UPSTREAM.md): the driver `pathfinder` evaluates with, kept close to the packaged engine's source so that a fix ports between the two by diff"
 )]
 #![expect(
     clippy::cast_possible_truncation,
-    reason = "jaq 3.1.1's CLI with the patch set's CLI hunks (crates/UPSTREAM.md): a test vehicle that M19 retires, kept to the packaged engine's source so it stays a faithful stand-in for it"
+    reason = "jaq 3.1.1's CLI with the patch set's CLI hunks (crates/UPSTREAM.md): the driver `pathfinder` evaluates with, kept close to the packaged engine's source so that a fix ports between the two by diff"
 )]
 #![expect(
-    clippy::multiple_crate_versions,
-    reason = "syn 2 (jiff-static, under jiff) and syn 3 (serde_derive) are both build-time proc-macro dependencies of third-party crates"
+    clippy::must_use_candidate,
+    reason = "jaq 3.1.1's CLI as a library (M19): its methods return values nobody would drop, and marking them is churn against the packaged engine's source"
 )]
 
-mod cli;
+//! Pathfinder: jaq's command line as a library.
+//!
+//! The `pathfinder` binary evaluates in process with it
+//! (`PATHFINDER_ENGINE=native`): it builds a [`Cli`] from jq's command line
+//! and calls [`run`] with its own stdin, the input files it concatenated
+//! ([`Segment`]) and its own stdout. The `pathfinder-jaq` binary is [`main`],
+//! jaq's command line on the same driver.
+
+pub mod cli;
 mod filter;
 mod jq;
 mod tests;
 
-use cli::{Cli, Format};
+pub use cli::{Cli, Filter as Program, Format};
+pub use jq::Segment;
+
 use core::fmt::{self, Display, Formatter};
 use jaq_all::data::{Filter, Runner};
 use jaq_all::fmts::read;
@@ -37,17 +47,15 @@ use jaq_all::jaq_core::Vars;
 use jaq_all::json::write::{Pp, Styles};
 use jaq_all::json::Val;
 use jaq_all::load::{Color, FileReports, FileReportsDisp, Paint};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Termination};
 
-#[cfg(feature = "mimalloc")]
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 extern crate alloc;
 
-fn main() -> ExitCode {
+/// Pathfinder: send `debug` and `stderr` messages to stderr as jq writes
+/// them. Call once, before [`run`].
+pub fn init_logging() {
     use env_logger::Env;
     env_logger::Builder::from_env(Env::default().filter_or("LOG", "jaq=debug"))
         .format(|buf, record| match record.level() {
@@ -58,6 +66,11 @@ fn main() -> ExitCode {
             level => writeln!(buf, "[\"{}:\",{}]", level, record.args()),
         })
         .init();
+}
+
+/// jaq's `main`: the command line from the process's arguments.
+pub fn main() -> ExitCode {
+    init_logging();
 
     // last line of defense against I/O errors that happen during printing,
     // e.g. catching broken pipes during error printing
@@ -96,11 +109,29 @@ fn main_io(
             None => tests::run(inp.lock()),
         }
     } else {
-        real_main(&cli, inp, out).or_else(|e| {
-            write!(err, "{}", ErrorColor::new(&e, cli.color_errors()))?;
-            Ok(e.report())
-        })
+        // Pathfinder: the files Pathfinder concatenated onto stdin, taken
+        // out of the environment before `$ENV` is made from it.
+        let segments = jq::Segment::take_env();
+        let code = with_stdout(out, |out| run(&cli, inp.lock(), segments, out));
+        Ok(ExitCode::from(code))
     }
+}
+
+/// Pathfinder: run `cli`'s filter as jq 1.8.1 runs it and return the exit
+/// status.
+///
+/// `input` is the standard input; `segments` describe the files
+/// concatenated onto it, if any (their names, lengths and read failures,
+/// reported as jq reports them). Outputs go to `out`, which the caller
+/// buffers and flushes; errors go to stderr, worded as jq words them.
+/// `halt` and `halt_error` return their exit status rather than exiting,
+/// so that the caller can flush `out` first.
+pub fn run(cli: &Cli, input: impl Read, segments: Vec<Segment>, out: &mut dyn Write) -> u8 {
+    real_main(cli, input, segments, out).unwrap_or_else(|e| {
+        // A failure to write the report is not reported in turn.
+        let _ = write!(io::stderr(), "{}", ErrorColor::new(&e, cli.color_errors()));
+        e.code()
+    })
 }
 
 impl Cli {
@@ -140,10 +171,12 @@ impl Cli {
     }
 }
 
-fn real_main(cli: &Cli, inp: &mut io::Stdin, out: &mut io::Stdout) -> Result<ExitCode, Error> {
-    // Pathfinder: the files Pathfinder concatenated onto stdin, taken out of
-    // the environment before `$ENV` is made from it.
-    let segments = jq::Segment::take_env();
+fn real_main(
+    cli: &Cli,
+    inp: impl Read,
+    segments: Vec<Segment>,
+    out: &mut dyn Write,
+) -> Result<u8, Error> {
     let mut var_val = binds(cli)?;
     let input_filename_idx = var_val.len();
     var_val.push(("!input_filename".to_string(), Val::Null));
@@ -175,7 +208,7 @@ fn real_main(cli: &Cli, inp: &mut io::Stdin, out: &mut io::Stdout) -> Result<Exi
 
         let format = unwrap_or_json(cli.from);
         let pos = jq::Position::with_segments(segments);
-        let lines = jq::Lines::new(inp.lock(), &pos);
+        let lines = jq::Lines::new(inp, &pos);
         // Pathfinder: JSON is read as jq reads it, with jq's parse errors.
         let inputs = match format {
             Format::Json => {
@@ -186,26 +219,24 @@ fn real_main(cli: &Cli, inp: &mut io::Stdin, out: &mut io::Stdout) -> Result<Exi
         let location = || pos.location("<stdin>", None);
         let failed = || pos.failed();
         let (es, st) = (cli.exit_status, &mut status);
-        let ran = with_stdout(out, |out| {
-            filter::run_jq(
-                runner,
-                &filter,
-                vars,
-                inputs,
-                es,
-                st,
-                &location,
-                &failed,
-                |v| write(out, writer, &v),
-            )
-        });
+        let ran = filter::run_jq(
+            runner,
+            &filter,
+            vars,
+            inputs,
+            es,
+            st,
+            &location,
+            &failed,
+            |v| write(out, writer, &v),
+        );
         // Pathfinder: a file that could not be read makes jq exit with 2,
         // whatever else happened, `halt_error` included.
         if pos.failed() {
             if let Err(e) = ran {
                 eprint!("{}", ErrorColor::new(&e, cli.color_errors()));
             }
-            return Ok(ExitCode::from(2));
+            return Ok(2);
         }
         ran?;
     } else {
@@ -236,24 +267,22 @@ fn real_main(cli: &Cli, inp: &mut io::Stdin, out: &mut io::Stdout) -> Result<Exi
             let location = || pos.location(&name, in_memory);
             let (es, st) = (cli.exit_status, &mut status);
             let failed = || false;
-            with_stdout(out, |out| {
-                filter::run_jq(
-                    runner,
-                    &filter,
-                    vars.clone(),
-                    inputs,
-                    es,
-                    st,
-                    &location,
-                    &failed,
-                    |v| write(out, writer, &v),
-                )
-            })?;
+            filter::run_jq(
+                runner,
+                &filter,
+                vars.clone(),
+                inputs,
+                es,
+                st,
+                &location,
+                &failed,
+                |v| write(out, writer, &v),
+            )?;
         }
     }
 
     // Pathfinder: jq's exit status, decided by the last input.
-    Ok(ExitCode::from(status.code(cli.exit_status)))
+    Ok(status.code(cli.exit_status))
 }
 
 fn binds(cli: &Cli) -> Result<Vec<(String, Val)>, Error> {
@@ -395,18 +424,25 @@ impl fmt::Display for ErrorColor<'_> {
     }
 }
 
-impl Termination for Error {
-    fn report(self) -> ExitCode {
-        ExitCode::from(match self {
+impl Error {
+    /// Pathfinder: the exit status, `halt`'s included, which the operating
+    /// system truncates to its low byte just as this does.
+    fn code(&self) -> u8 {
+        match self {
             Self::FalseOrNull => 1,
             Self::Io(_, e) if e.kind() == io::ErrorKind::BrokenPipe => 141,
             Self::Io(_, _) | Self::Usage(_) | Self::System(_) => 2,
             Self::Report(_) => 3,
             Self::NoOutput => 4,
             Self::Parse(_) | Self::Jaq(_) => 5,
-            // ExitCode ~= u8, but exit_code: i32
-            Self::Halt(exit_code) => std::process::exit(exit_code),
-        })
+            Self::Halt(exit_code) => exit_code.to_le_bytes()[0],
+        }
+    }
+}
+
+impl Termination for Error {
+    fn report(self) -> ExitCode {
+        ExitCode::from(self.code())
     }
 }
 

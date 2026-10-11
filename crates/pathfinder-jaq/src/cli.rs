@@ -1,7 +1,6 @@
 //! Command-line argument parsing
 use core::fmt;
 pub use jaq_all::fmts::Format;
-use std::env::ArgsOs;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
@@ -81,11 +80,16 @@ impl Cli {
         Ok(())
     }
 
-    fn long(&mut self, mode: &mut Mode, arg: &str, args: &mut ArgsOs) -> Result<(), Error> {
+    fn long(
+        &mut self,
+        mode: &mut Mode,
+        arg: &str,
+        args: &mut dyn Iterator<Item = OsString>,
+    ) -> Result<(), Error> {
         let int = |s: OsString| s.into_string().ok()?.parse().ok();
         match arg {
             // handle all arguments after "--"
-            "" => args.try_for_each(|arg| self.positional(mode, arg))?,
+            "" => Iterator::try_for_each(&mut &mut *args, |arg| self.positional(mode, arg))?,
 
             "from" => self.from = Some(parse_format("--from", args)?),
             "null-input" => self.short('n', args)?,
@@ -120,7 +124,9 @@ impl Cli {
 
             "args" => *mode = Mode::Args,
             //"jsonargs" => *mode = Mode::JsonArgs,
-            "run-tests" => self.run_tests = Some(args.map(PathBuf::from).collect()),
+            "run-tests" => {
+                self.run_tests = Some(Iterator::map(&mut *args, PathBuf::from).collect())
+            }
             "exit-status" => self.short('e', args)?,
             "version" => self.short('V', args)?,
             "help" => self.short('h', args)?,
@@ -130,7 +136,7 @@ impl Cli {
         Ok(())
     }
 
-    fn short(&mut self, arg: char, args: &mut ArgsOs) -> Result<(), Error> {
+    fn short(&mut self, arg: char, args: &mut dyn Iterator<Item = OsString>) -> Result<(), Error> {
         match arg {
             'R' => self.from = Some(Format::Raw),
             'n' => self.null_input = true,
@@ -159,17 +165,24 @@ impl Cli {
     }
 
     pub fn parse() -> Result<Self, Error> {
-        let mut cli = Self::default();
-        let mut mode = Mode::Files;
         let mut args = std::env::args_os();
         args.next();
+        Self::parse_from(args)
+    }
+
+    /// Pathfinder: parse `args`, which exclude the program name.
+    pub fn parse_from(args: impl IntoIterator<Item = OsString>) -> Result<Self, Error> {
+        let mut cli = Self::default();
+        let mut mode = Mode::Files;
+        let mut args = args.into_iter();
+        let args = &mut args as &mut dyn Iterator<Item = OsString>;
         while let Some(arg) = args.next() {
             match arg.to_str() {
                 // we've got a valid UTF-8 argument here
                 Some(s) => match s.strip_prefix("--") {
-                    Some(rest) => cli.long(&mut mode, rest, &mut args)?,
+                    Some(rest) => cli.long(&mut mode, rest, args)?,
                     None => match s.strip_prefix("-") {
-                        Some(rest) => rest.chars().try_for_each(|c| cli.short(c, &mut args))?,
+                        Some(rest) => rest.chars().try_for_each(|c| cli.short(c, args))?,
                         None => cli.positional(&mode, arg)?,
                     },
                 },
@@ -235,13 +248,19 @@ impl From<OsString> for Error {
     }
 }
 
-fn parse_format(arg: &'static str, args: &mut ArgsOs) -> Result<Format, Error> {
+fn parse_format(
+    arg: &'static str,
+    args: &mut dyn Iterator<Item = OsString>,
+) -> Result<Format, Error> {
     let err = || Error::Format(arg);
     let fmt = args.next().and_then(|a| a.into_string().ok());
     Format::parse(&fmt.ok_or_else(err)?).ok_or_else(err)
 }
 
-fn parse_key_val(arg: &'static str, args: &mut ArgsOs) -> Result<(String, OsString), Error> {
+fn parse_key_val(
+    arg: &'static str,
+    args: &mut dyn Iterator<Item = OsString>,
+) -> Result<(String, OsString), Error> {
     let err = || Error::KeyValue(arg);
     let key = args.next().ok_or_else(err)?.into_string()?;
     let val = args.next().ok_or_else(err)?;
