@@ -120,6 +120,54 @@ Hunk headers are those of the 3.1.1 cuts.
 | 0015 | `jaq/src/jq.rs` | `-67,6`, `-95,6`, `-128,13`, `-142,6`, `-184,6`, `-195,6`, `-226,6`, `-239,16`, `-425,3` |
 | 0015 | `jaq/src/main.rs` | `-60,9`, `-119,6`, `-150,7`, `-160,12`, `-216,10` |
 
+## Dependencies
+
+What the import brings in: the direct dependencies of the four imported crates
+(PLAN P-053), at the versions `Cargo.lock` holds. Sibling crates and
+dev-dependencies (`serde_json`, already the shim's) are left out. A dependency
+that only a non-jq format needs is marked for T-004 rather than justified.
+
+| Crate | Version | Used by | Purpose | Disposition |
+|---|---|---|---|---|
+| `dyn-clone` | 1.0.20 | core | Cloning boxed update closures (`filter.rs`) | Kept |
+| `once_cell` | 1.21.4 | core | Lazily evaluated, shared output lists (`rc_lazy_list.rs`) | Kept |
+| `typed-arena` | 2.0.2 | core | Arena that owns the loaded module sources (`load/mod.rs`) | Kept |
+| `arbitrary` | 1.4.2 | core, optional | Generates parser input for fuzzing (`load/arbitrary.rs`); off unless the `arbitrary` feature is on, which only jaq's `fuzz/` crate enables | Kept for T-019 |
+| `bstr` | 1.13.1 | std, json, fmts | Byte strings: jq strings are not required to be valid UTF-8 internally | Kept |
+| `jiff` | 0.2.35 | std, `time` | Date and time builtins (`strftime`, `mktime`, `todate`, …) | Kept |
+| `regex-bites` | 0.1.6 | std, `regex` | `test`, `match`, `capture`, `sub`, … | Kept until M22 replaces it (P-071) |
+| `log` | 0.4.29 | std, `log` | Routes `debug` and `stderr` messages to the CLI's logger | Kept; revisit when M19 writes them in-process |
+| `libm` | 0.2.16 | std, `math` | The C math library functions jq exposes (`ilogb`, `scalbln`, `frexp`, …) | Kept |
+| `aho-corasick` | 1.1.5 | std (`format`), fmts (`tabular`) | Escaping for `@sh`, `@html` and the other `@format`s; CSV/TSV writing in `jaq-fmts` | Kept for std; the fmts use is removed in T-004 |
+| `base64` | 0.22.1 | std (`format`), fmts (`yaml`) | `@base64`, `@base64d`; YAML binary values | Kept for std; the fmts use is removed in T-004 |
+| `urlencoding` | 2.1.3 | std (`format`) | `@uri` | Kept |
+| `bytes` | 1.12.1 | json, fmts | Reference-counted byte buffers behind string values | Kept |
+| `foldhash` | 0.1.5 | json | Hasher for objects' `IndexMap` | Kept |
+| `hifijson` | 0.5.0 | json | The JSON lexer and parser for input and `fromjson` | Kept |
+| `indexmap` | 2.10.0 | json | Objects that keep insertion order | Kept |
+| `num-bigint` | 0.4.8 | json, fmts (`cbor`) | Integers beyond `isize` in literals | Kept for json; the fmts use is removed in T-004 |
+| `num-traits` | 0.2.19 | json | Conversions between the number representations | Kept |
+| `ryu` | 1.0.20 | json | Was jaq's float formatter. **Unused since patch 0002**, which prints numbers jq's way; the line in `pathfinder-json/Cargo.toml` can go | To remove (not done here: dependency lists are edited on the T-004/T-006 branch) |
+| `self_cell` | 1.3.0 | json | Self-referential value that keeps parsed input and its buffer together (`funs.rs`) | Kept |
+| `serde_core` | 1.0.229 | json, optional | `serde` support for `Val`; on only through the `serde` feature, which the crates' tests enable | Kept (tests) |
+| `memmap2` | 0.9.11 | fmts | Maps input files into memory; the only `unsafe` the import needs | Replaced by `std::fs::read` in T-005 |
+| `ciborium-io`, `ciborium-ll` | 0.2.2 | fmts (`cbor`) | CBOR | Removed in T-004 |
+| `saphyr-parser` | 0.0.8 | fmts (`yaml`) | YAML | Removed in T-004 |
+| `toml-span` | 0.7.1 | fmts (`toml`) | TOML | Removed in T-004 |
+| `xmlparser` | 0.13.6 | fmts (`xml`) | XML | Removed in T-004 |
+
+### `cargo audit`
+
+Run 2026-10-11 from the workspace root with `cargo-audit` 0.22.2 (from
+`nixpkgs#cargo-audit`), advisory database fetched on the day: 1296 advisories,
+`RustSec/advisory-db` commit `7eebec69c352c7191b1f13eb95dd510eeca5d1de`
+(2026-10-09). 79 crates scanned in `Cargo.lock`: **no vulnerabilities, no
+warnings** (unmaintained, unsound or yanked).
+
+```sh
+nix shell nixpkgs#cargo-audit -c cargo audit
+```
+
 ## Upstream unit tests after the patches
 
 `cargo test --workspace --exclude pathfinder-jq`: before the patches all 361
