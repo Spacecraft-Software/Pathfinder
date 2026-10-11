@@ -630,7 +630,7 @@ mod tests {
         let mut lines = Lines::new(&b"12"[..], &pos);
         let n = lines.fill_buf().unwrap().len();
         lines.consume(n);
-        assert!(lines.fill_buf().unwrap().is_empty());
+        assert_eq!(lines.fill_buf().unwrap(), []);
         assert_eq!(pos.location("<stdin>", None), "m:0");
         assert!(pos.failed());
     }
