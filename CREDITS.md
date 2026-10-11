@@ -41,6 +41,14 @@ criticisms of it — jaq does not claim byte-compatibility with jq, and several 
 its choices (strict arithmetic, no auto-vivification) are defensible on their
 own terms.
 
+`packaging/jaq/` carries five small patches to jaq 3.1.1's own source, applied
+when the Nix package builds the engine it pins: number output in jq's format,
+jq's double-precision arithmetic above 2^53, jq's spellings of NaN and infinity
+in input, a leading byte-order mark, and jq's string repetition. They are
+derived from jaq's code and keep its MIT licence (Standard §4.2), and they are
+carried in-tree rather than sent upstream (§6.4) — they make jaq behave like
+jq, which is Pathfinder's goal and not necessarily jaq's.
+
 ---
 
 *--- Forged in Spacecraft Software ---*
