@@ -1,0 +1,18 @@
+Pathfinder patch for jaq 3.1.1: Write halt_error's value as jq 1.8.1 does.
+
+Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
+
+diff --git a/jaq-std/src/defs.jq b/jaq-std/src/defs.jq
+index 153ba2a..56ef798 100644
+--- a/jaq-std/src/defs.jq
++++ b/jaq-std/src/defs.jq
+@@ -5,7 +5,8 @@ def debug:       (        debug_empty  as $x | .), .;
+ def debug(msgs): ((msgs | debug_empty) as $x | .), .;
+ 
+ def halt: halt(0);
+-def halt_error($exit_code): stderr_empty, halt($exit_code);
++# Pathfinder: jq 1.8.1 writes a string raw, nothing for null, else JSON and a newline.
++def halt_error($exit_code): (if . == null then empty elif . >= "" and . < [] then . else tojson + "\n" end | stderr_empty), halt($exit_code);
+ def halt_error: halt_error(5);
+ 
+ # Not defined in jq!

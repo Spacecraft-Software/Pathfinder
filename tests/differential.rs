@@ -520,6 +520,21 @@ static CASES: &[Case] = &[
     c("[1,2,3,4]", &["-c", "del(.[.[0] + .[1]])"]),
     c(r#"{"a":1,"b":2,"c":3}"#, &["-c", ".a |= .b + .c"]),
     c("[1,2]", &["-c", "[.[] * .[]]"]),
+    // --- remainder errors: a type error before a zero divisor ---
+    c(
+        "{}",
+        &[
+            "-c",
+            r#"[(null, "a", [], 1) | try (. % 0) catch .], [try ({} % 0.5) catch .]"#,
+        ],
+    ),
+    c(
+        r#"{"x":5,"y":null}"#,
+        &[
+            "-c",
+            "[try (.x %= 0) catch ., try (.y %= 0) catch ., (.x %= 2)]",
+        ],
+    ),
 ];
 
 /// Cases only the packaged, patched jaq (`packaging/jaq/`) answers as jq does:
@@ -555,6 +570,58 @@ static PATCHED_CASES: &[Case] = &[
         "[1, 2.5]",
         &["-c", "map(tostring), (.[1] * 2), (. | tojson)"],
     ),
+    // `nan % 0` is NaN, which only the patched engine prints as `null`.
+    c("null", &["-c", "nan % 0"]),
+    // An object is indexed only with a string.
+    c(
+        r#"{"a":1}"#,
+        &[
+            "-c",
+            "[(3, null, true, [1], {}, nan) as $k | try .[$k] catch .], [.[3]?]",
+        ],
+    ),
+    c(
+        r#"{"a":1}"#,
+        &[
+            "-c",
+            "[try (.[3] = 1) catch ., try (.[3] |= 1) catch ., try del(.[3]) catch ., \
+             try getpath([3]) catch ., try setpath([3]; 1) catch ., try delpaths([[3]]) catch ., \
+             try has(3) catch ., try path(.[3]) catch ., try .[3:4] catch .]",
+        ],
+    ),
+];
+
+/// Patched-engine cases compared on stderr too: an uncaught error is reported
+/// as jq reports it, with its location, and the next input still runs; the
+/// exit status is the last input's. Also `debug` and `halt_error` output.
+static PATCHED_STDERR_CASES: &[Case] = &[
+    c("1 2", &["-c", ".a"]),
+    c(r#"{"a":1} 1"#, &["-c", ".a"]),
+    c(r#"1 {"a":1}"#, &["-c", ".a"]),
+    c("1\n2\n{\"a\":3}\n", &["-c", ".a"]),
+    c("1 \n2\n\n[1,\n2]", &["-c", ".a"]),
+    c("1\r\n2", &["-c", ".a"]),
+    c("1\n2\n", &["-R", ".a"]),
+    c("1\n2\n", &["-s", ".a"]),
+    c("1\n2\n", &["-n", "input | .a"]),
+    c("1", &["-n", ".a"]),
+    c("1 2", &["-c", "3, .a"]),
+    c("1 2", &["-e", "if . == 1 then .a else empty end"]),
+    c("1 {}", &["-e", ".a"]),
+    c("null 2", &["-e", "if . == 2 then .a else . end"]),
+    c(r#""a" 1 null {"message":"m"} 1.0"#, &["-c", "error"]),
+    c("1", &["-c", r#"error("a\u0000b")"#]),
+    c(
+        r#"[1, "abcdefghijklmnop", {"a":true}, "x", {"a":1}, {}]"#,
+        &["-c", ".[] | (.[], (.a | length), . - 1, .[3], .[1:2])"],
+    ),
+    c(r#"{"a":1}"#, &["-c", ".[3] = 1"]),
+    c("null", &["-c", r#"[1, {"a": 2}] | debug | empty"#]),
+    c("null", &["-c", r#""x" | debug("m", 1) | empty"#]),
+    c("1", &["-c", "halt_error"]),
+    c("null", &["-c", r#"{"a": [1, 2]} | halt_error(3)"#]),
+    c("null", &["-c", "halt_error"]),
+    c("null", &["-c", r#""x\n" | halt_error"#]),
 ];
 
 /// Cases needing input files, which are created in a temp dir at run time.
@@ -656,13 +723,24 @@ fn shim(dir: &std::path::Path) -> PathBuf {
 }
 
 fn run(exe: &std::path::Path, cwd: &std::path::Path, case: &Case) -> (Option<i32>, Vec<u8>) {
+    let (code, stdout, _) = run_with(exe, cwd, case, Stdio::null());
+    (code, stdout)
+}
+
+/// [`run`], also returning stderr when `stderr` is piped.
+fn run_with(
+    exe: &std::path::Path,
+    cwd: &std::path::Path,
+    case: &Case,
+    stderr: Stdio,
+) -> (Option<i32>, Vec<u8>, Vec<u8>) {
     use std::io::Write as _;
     let mut child = Command::new(exe)
         .args(case.args.iter().map(OsStr::new))
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(stderr)
         .spawn()
         .expect("spawns");
     // A filter that never reads stdin (`-n`) closes the pipe early; that is a
@@ -673,7 +751,51 @@ fn run(exe: &std::path::Path, cwd: &std::path::Path, case: &Case) -> (Option<i32
         .expect("stdin piped")
         .write_all(case.stdin.as_bytes());
     let out = child.wait_with_output().expect("completes");
-    (out.status.code(), out.stdout)
+    (out.status.code(), out.stdout, out.stderr)
+}
+
+/// On the patched engine, an uncaught error, `debug` and `halt_error` write
+/// what jq writes to stderr, and the exit status is jq's.
+#[test]
+fn patched_engine_reports_errors_as_jq() {
+    let Some(jq) = real_jq() else {
+        skip_or_fail("no usable jq available");
+        return;
+    };
+    if !engine_is_patched() {
+        eprintln!("skipped: the engine is a stock jaq, which reports errors its own way");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("pathfinder-err-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let shim = shim(&dir);
+    let mut failures: Vec<String> = Vec::new();
+    for case in PATCHED_STDERR_CASES {
+        let expected = run_with(&jq, &dir, case, Stdio::piped());
+        let actual = run_with(&shim, &dir, case, Stdio::piped());
+        if expected != actual {
+            let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+            failures.push(format!(
+                "  args {:?} stdin {:?}\n    jq   -> exit {:?} {:?} {:?}\n    shim -> exit {:?} {:?} {:?}",
+                case.args,
+                case.stdin,
+                expected.0,
+                text(&expected.1),
+                text(&expected.2),
+                actual.0,
+                text(&actual.1),
+                text(&actual.2),
+            ));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        failures.is_empty(),
+        "{} of {} stderr cases diverged from jq:\n{}",
+        failures.len(),
+        PATCHED_STDERR_CASES.len(),
+        failures.join("\n")
+    );
 }
 
 #[test]
@@ -750,9 +872,18 @@ fn documented_divergences_still_diverge() {
     let case = c("null", &["-nc", r#""a"*0"#]);
     let expected = run(&jq, &dir, &case);
     let actual = run(&shim, &dir, &case);
-    let _ = std::fs::remove_dir_all(&dir);
-
     assert_eq!(String::from_utf8_lossy(&expected.1).trim(), r#""""#);
     let repaired = if engine_is_patched() { r#""""# } else { "null" };
+    assert_eq!(String::from_utf8_lossy(&actual.1).trim(), repaired);
+
+    // An object indexed with a number is jq's error, and `null` in a stock
+    // jaq (`packaging/jaq/0006-object-keys.patch` repairs it).
+    let case = c(r#"{"a":1}"#, &["-c", "try .[3] catch ."]);
+    let expected = run(&jq, &dir, &case);
+    let actual = run(&shim, &dir, &case);
+    let _ = std::fs::remove_dir_all(&dir);
+    let error = r#""Cannot index object with number""#;
+    assert_eq!(String::from_utf8_lossy(&expected.1).trim(), error);
+    let repaired = if engine_is_patched() { error } else { "null" };
     assert_eq!(String::from_utf8_lossy(&actual.1).trim(), repaired);
 }

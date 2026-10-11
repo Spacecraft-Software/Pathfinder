@@ -1,0 +1,30 @@
+Pathfinder patch for jaq 3.1.1: Index objects only with strings, as jq 1.8.1.
+
+Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
+
+diff --git a/jaq-json/src/lib.rs b/jaq-json/src/lib.rs
+index 4918e62..008ab6c 100644
+--- a/jaq-json/src/lib.rs
++++ b/jaq-json/src/lib.rs
+@@ -204,6 +204,10 @@ impl jaq_core::ValT for Val {
+             return self.map_range(range, opt, f);
+         };
+         match self {
++            // Pathfinder: jq 1.8.1 indexes an object only with a string.
++            Val::Obj(_) if !matches!(index, Val::BStr(_) | Val::TStr(_)) => {
++                opt.fail(self, |v| Exn::from(Error::index(v, index.clone())))
++            }
+             Val::Obj(ref mut o) => {
+                 use indexmap::map::Entry::{Occupied, Vacant};
+                 match Rc::make_mut(o).entry(index.clone()) {
+@@ -495,7 +499,9 @@ impl Val {
+                 let indices = iw.filter_map(|(i, w)| (w == **y).then_some(i));
+                 Some(indices.map(Val::from).collect())
+             }
+-            (Val::Obj(o), i) => o.get(i).cloned(),
++            (Val::Obj(o), i @ (Val::BStr(_) | Val::TStr(_))) => o.get(i).cloned(),
++            // Pathfinder: jq 1.8.1 indexes an object only with a string.
++            (s @ Val::Obj(_), _) => return Err(Error::index(s, index.clone())),
+             (v @ (Val::BStr(_) | Val::TStr(_) | Val::Arr(_)), Val::Obj(o)) => {
+                 use jaq_core::ValT;
+                 let start = o.get(&Val::utf8_str("start"));

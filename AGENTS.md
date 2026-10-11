@@ -165,6 +165,20 @@ print. To keep the `jq` name untouched:
   handler that reads its input in `_pf_err`, which turns jaq's templates back
   into jq's wording; a builtin whose jq message names it gets a guard that runs
   jaq's builtin first and re-raises with jq's text only on a wrong input type.
+- **The packaged jaq words an uncaught error by the same rules.**
+  `packaging/jaq/0008-uncaught-errors.patch` adds `jaq/src/jq.rs`, whose
+  `wording` is a Rust transcription of `_pf_err` (and its `dump` of
+  `_pf_dump`). Change both or neither, then regenerate the patch from the jaq
+  source tree; `patched_engine_reports_errors_as_jq` compares stderr and exit
+  status with real jq.
+- **The error location counts lines the way jq reads them**: `fgets` into a
+  4096-byte buffer, so up to a newline or 4095 bytes at a time, and through
+  the chunk holding the last byte the parser needed (the delimiter after a
+  number or literal, the closing character otherwise). On
+  stdin `jq::Lines` is the only buffer and serves single bytes without a call;
+  a reader layered under std's `Read::bytes` cost up to 66% on one long line.
+  Measure stdin with `perf stat -e cycles:u`, one run per invocation (`-r`
+  gives later runs an empty stdin).
 
 ## Conformance
 
@@ -205,7 +219,7 @@ pass rates; `V=1` lists every failure.
 | `src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
 | `src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
 | `src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
-| `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); verified to apply and pass on 3.1.0, which Bravais builds by making this flake follow its stable nixpkgs. MIT, like jaq; never sent upstream. |
+| `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); verified to apply and pass on 3.1.0, which Bravais builds by making this flake follow its stable nixpkgs. `0008` has a 3.1.0 cut, picked by version, because 3.1.0's `real_main` differs on the lines it replaces. MIT, like jaq; never sent upstream. |
 | `tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
 | `tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
 | `tests/native.rs` | The native surface: mode cascade, JSON shapes, exit codes, and that the `jq` name is unchanged under an agent environment. |

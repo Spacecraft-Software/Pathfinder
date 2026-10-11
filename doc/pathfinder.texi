@@ -179,8 +179,9 @@ behaviour cannot be expressed in jaq's argv and bytes must be reshaped.
 @end table
 
 The cost of @code{exec} is that Pathfinder cannot observe jaq's exit code or
-stderr, and so cannot retouch either. In practice this costs nothing: the exit
-codes already agree in every case tested.
+stderr, and so cannot retouch either. On the packaged jaq this costs nothing:
+the exit codes agree in every case tested. A stock jaq stops at the first
+uncaught error, where jq goes on to the next input.
 
 @section Filter rewriting
 
@@ -249,8 +250,10 @@ rather than builtins. Work around it by seeding the container
 jq and yields @code{Infinity}---invalid JSON---in jaq.
 
 @item Diagnostics
-jaq's error text and @code{debug} spacing differ. stderr is passed through
-untouched so colour, interleaving and @code{debug} output stay correct.
+A stock jaq reports an uncaught error in its own words and stops at it, and
+spaces @code{debug} output differently. stderr is passed through untouched so
+colour and interleaving stay correct; the packaged jaq is patched to report,
+locate and survive the error as jq does.
 
 @item Refused outright
 @option{--stream}, @code{input_line_number}, the module-introspection builtins,

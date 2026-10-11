@@ -124,3 +124,17 @@ command line must stay jq's, byte for byte (see AGENTS.md).
 - [x] P-035 `pathfinder --version`: Pathfinder's version, maintainer and URL
 - [x] P-036 A root `SKILL.md` describing the shim for agents
 - [x] P-037 `--install-shim` reports in the same modes; a refusal is a conflict (exit 5) with a runnable hint
+
+## M17 — jq's uncaught errors and object keys
+
+Requested after step 3; outside proposals 1–6, so not part of the MVP. Fixed
+in the packaged jaq (`packaging/jaq/0006`–`0009`); a stock jaq keeps jaq's
+behaviour, documented in `doc/DIVERGENCES.md`.
+
+- [x] P-038 An object is indexed only with a string: `.[3]`, `.[3] = 1`, `has(3)`, `path(.[3])`, `del`
+- [x] P-039 An uncaught error is reported as jq reports it and the next input runs
+- [x] P-040 The error location counts lines as jq's line-at-a-time reader does
+- [x] P-041 The exit status is the last input's, with and without `-e`
+- [x] P-042 `debug` and `halt_error` write what jq writes
+- [x] P-043 `%` reports a type error before a zero divisor, and `%=` names the value
+- [ ] P-044 Locations name each input file when there are several (optional)

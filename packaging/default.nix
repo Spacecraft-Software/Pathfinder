@@ -9,7 +9,8 @@
   # flake exposes both variants.
   withJqShim ? false,
   # Apply Pathfinder's patch set (packaging/jaq/) to the pinned jaq, so it
-  # prints and reads numbers, and repeats strings, as jq 1.8.1 does. The
+  # prints and reads numbers, repeats strings, indexes objects, and reports
+  # an uncaught error as jq 1.8.1 does. The
   # patches are carried here and never sent upstream (Standard sections 4.2,
   # 6.4). Pathfinder works on a stock jaq too; this only raises fidelity.
   # Cut against jaq 3.1.1; they also apply to 3.1.0, which Bravais builds
@@ -28,6 +29,16 @@ let
           ./jaq/0003-arithmetic-precision.patch
           ./jaq/0004-input-literals.patch
           ./jaq/0005-string-repeat.patch
+          ./jaq/0006-object-keys.patch
+          ./jaq/0007-debug-format.patch
+          # 3.1.0 spells the lines this one replaces differently.
+          (
+            if lib.versionOlder jaq.version "3.1.1" then
+              ./jaq/0008-uncaught-errors-3.1.0.patch
+            else
+              ./jaq/0008-uncaught-errors.patch
+          )
+          ./jaq/0009-halt-error.patch
         ];
         # jaq's own tests assert jaq's number format (`1.0`, `NaN`), which the
         # patches change on purpose. Pathfinder's check phase runs jq's suite

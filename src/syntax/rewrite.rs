@@ -537,6 +537,12 @@ impl Cx<'_> {
     /// 0.06 s, where a test-and-truncate chain took 1.37 s.
     fn arith(&mut self, op: &str, a: &str, b: &str) -> String {
         self.need("_pf_dump");
+        // `%`'s `catch` handler reads the dividend, where `.` is the error.
+        let (bind, a) = if op == "%" && a == "." {
+            (". as $__pf_a | ", "$__pf_a")
+        } else {
+            ("", a)
+        };
         let zero = |what: &str| {
             format!(
                 "error(\"\\({a} | type) (\\({a} | _pf_dump)) and \\({b} | type) \
@@ -553,11 +559,14 @@ impl Cx<'_> {
             let err = zero(" (remainder)");
             // jaq's float `%` by `0.0` is NaN, not an error, so the truncated
             // divisor is tested; a non-number fails in `% 1` and is handed to
-            // jaq's `%`, whose type error `catch` translates.
+            // jaq's `%`, whose type error `catch` translates. A zero divisor
+            // is jq's error only for a number dividend: anything else is a
+            // type error, and NaN is `nan`, as in jq 1.8.1.
             format!(
-                "try (({b} - ({b} % 1)) as $__pf_bi | if $__pf_bi == 0 then error(\"__pf_zero\") \
+                "{bind}try (({b} - ({b} % 1)) as $__pf_bi | if $__pf_bi == 0 then error(\"__pf_zero\") \
                  else ({a} - ({a} % 1)) % $__pf_bi end) \
-                 catch (if . == \"__pf_zero\" then {err} else {a} % {b} end)"
+                 catch (if . == \"__pf_zero\" and {a} > true and {a} < \"\" \
+                 and ({a} | isnan | not) then {err} else {a} % {b} end)"
             )
         }
     }
