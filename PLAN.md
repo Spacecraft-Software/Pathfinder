@@ -29,8 +29,8 @@ out.
 - [ ] P-049 Import jaq 3.1.1 at a recorded commit, with `packaging/jaq/0001`–`0015` applied
 - [ ] P-050 Drop jaq's non-jq formats, `--in-place`, REPL and Windows console code, and their dependencies
 - [ ] P-051 Replace the `mmap` file load with a safe read; `unsafe_code = "forbid"` in every crate
-- [ ] P-052 Imported files keep MIT and upstream copyright in `REUSE.toml`; `CREDITS.md` names the import
-- [ ] P-053 `cargo audit` and a justification for every dependency the import brings in
+- [x] P-052 Imported files keep MIT and upstream copyright in `REUSE.toml`; `CREDITS.md` names the import
+- [x] P-053 `cargo audit` and a justification for every dependency the import brings in
 - [ ] P-054 jaq's own unit tests run in the workspace; those that assert jaq's (non-jq) behaviour are updated with measured jq values
 
 ## M19 — In-process evaluation
