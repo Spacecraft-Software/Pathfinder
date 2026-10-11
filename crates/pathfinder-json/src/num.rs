@@ -68,6 +68,8 @@ impl Num {
         match self {
             Self::Int(i) => Some(*i),
             Self::BigInt(i) => i.to_isize(),
+            // Pathfinder: `0 * -1` is -0 (patch 0003); jq takes it as 0.
+            Self::Float(f) if *f == 0.0 => Some(0),
             _ => None,
         }
     }
@@ -79,6 +81,8 @@ impl Num {
                 .magnitude()
                 .to_usize()
                 .map(|u| PosUsize(i.sign() != Sign::Minus, u)),
+            // Pathfinder: -0 indexes as 0, as in jq.
+            Self::Float(f) if *f == 0.0 => Some(PosUsize(true, 0)),
             _ => None,
         }
     }

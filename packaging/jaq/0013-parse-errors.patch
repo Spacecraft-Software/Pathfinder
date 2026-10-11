@@ -81,7 +81,7 @@ index ed68d7b..4ac98f0 100644
          ("tojson", v(0), |cv| bome(Ok(Val::utf8_str(cv.1.to_json())))),
          ("tobytes", v(0), |cv| {
 diff --git a/jaq-json/src/lib.rs b/jaq-json/src/lib.rs
-index 33d22ae..d2e0624 100644
+index 4cb7038..8c67c1d 100644
 --- a/jaq-json/src/lib.rs
 +++ b/jaq-json/src/lib.rs
 @@ -13,6 +13,8 @@ extern crate std;

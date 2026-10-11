@@ -3,7 +3,7 @@ Pathfinder patch for jaq 3.1.1: Repeat strings as jq 1.8.1 does.
 Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
 
 diff --git a/jaq-json/src/lib.rs b/jaq-json/src/lib.rs
-index 0cc8190..4918e62 100644
+index e1a8dd6..7d99dbc 100644
 --- a/jaq-json/src/lib.rs
 +++ b/jaq-json/src/lib.rs
 @@ -25,8 +25,6 @@ use core::fmt;
@@ -15,7 +15,7 @@ index 0cc8190..4918e62 100644
  
  pub use funs::{bytes_valrs, funs};
  pub use num::Num;
-@@ -553,12 +551,6 @@ impl FromIterator<Self> for Val {
+@@ -555,12 +553,6 @@ impl FromIterator<Self> for Val {
      }
  }
  
@@ -28,7 +28,7 @@ index 0cc8190..4918e62 100644
  impl core::ops::Add for Val {
      type Output = ValR;
      fn add(self, rhs: Self) -> Self::Output {
-@@ -618,23 +610,32 @@ fn obj_merge(l: &mut Rc<Map>, r: Rc<Map>) {
+@@ -620,23 +612,32 @@ fn obj_merge(l: &mut Rc<Map>, r: Rc<Map>) {
  impl core::ops::Mul for Val {
      type Output = ValR;
      fn mul(self, rhs: Self) -> Self::Output {

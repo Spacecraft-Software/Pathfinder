@@ -221,7 +221,7 @@ added unformatted; it changes layout only.
 What the import brings in: the direct dependencies of the four imported crates
 (PLAN P-053), at the versions `Cargo.lock` holds. Sibling crates and
 dev-dependencies (`serde_json`, already the shim's) are left out. A dependency
-that only a non-jq format needs is marked for T-004 rather than justified.
+that only a non-jq format needed was removed in T-004 and is listed as such.
 
 | Crate | Version | Used by | Purpose | Disposition |
 |---|---|---|---|---|
@@ -234,19 +234,19 @@ that only a non-jq format needs is marked for T-004 rather than justified.
 | `regex-bites` | 0.1.6 | std, `regex` | `test`, `match`, `capture`, `sub`, … | Kept until M22 replaces it (P-071) |
 | `log` | 0.4.29 | std, `log` | Routes `debug` and `stderr` messages to the CLI's logger | Kept; revisit when M19 writes them in-process |
 | `libm` | 0.2.16 | std, `math` | The C math library functions jq exposes (`ilogb`, `scalbln`, `frexp`, …) | Kept |
-| `aho-corasick` | 1.1.5 | std (`format`), fmts (`tabular`) | Escaping for `@sh`, `@html` and the other `@format`s; CSV/TSV writing in `jaq-fmts` | Kept for std; the fmts use is removed in T-004 |
-| `base64` | 0.22.1 | std (`format`), fmts (`yaml`) | `@base64`, `@base64d`; YAML binary values | Kept for std; the fmts use is removed in T-004 |
+| `aho-corasick` | 1.1.5 | std (`format`), fmts (`tabular`) | Escaping for `@sh`, `@html` and the other `@format`s; `@csv`/`@tsv` writing in fmts | Kept |
+| `base64` | 0.22.1 | std (`format`), fmts (`yaml`) | `@base64`, `@base64d`; YAML binary values | Kept for std; the fmts use was removed in T-004 |
 | `urlencoding` | 2.1.3 | std (`format`) | `@uri` | Kept |
 | `bytes` | 1.12.1 | json, fmts | Reference-counted byte buffers behind string values | Kept |
 | `foldhash` | 0.1.5 | json | Hasher for objects' `IndexMap` | Kept |
 | `hifijson` | 0.5.0 | json | The JSON lexer and parser for input and `fromjson` | Kept |
 | `indexmap` | 2.10.0 | json | Objects that keep insertion order | Kept |
-| `num-bigint` | 0.4.8 | json, fmts (`cbor`) | Integers beyond `isize` in literals | Kept for json; the fmts use is removed in T-004 |
+| `num-bigint` | 0.4.8 | json, fmts (`cbor`) | Integers beyond `isize` in literals | Kept for json; the fmts use was removed in T-004 |
 | `num-traits` | 0.2.19 | json | Conversions between the number representations | Kept |
-| `ryu` | 1.0.20 | json | Was jaq's float formatter. **Unused since patch 0002**, which prints numbers jq's way; the line in `pathfinder-json/Cargo.toml` can go | To remove (not done here: dependency lists are edited on the T-004/T-006 branch) |
+| `ryu` | 1.0.20 | json | Was jaq's float formatter; unused since patch 0002, which prints numbers jq's way | Removed |
 | `self_cell` | 1.3.0 | json | Self-referential value that keeps parsed input and its buffer together (`funs.rs`) | Kept |
 | `serde_core` | 1.0.229 | json, optional | `serde` support for `Val`; on only through the `serde` feature, which the crates' tests enable | Kept (tests) |
-| `memmap2` | 0.9.11 | fmts | Maps input files into memory; the only `unsafe` the import needs | Replaced by `std::fs::read` in T-005 |
+| `memmap2` | 0.9.11 | fmts | Mapped input files into memory; the only `unsafe` the import needed | Replaced by `std::fs::read` in T-005 |
 | `ciborium-io`, `ciborium-ll` | 0.2.2 | fmts (`cbor`) | CBOR | Removed in T-004 |
 | `saphyr-parser` | 0.0.8 | fmts (`yaml`) | YAML | Removed in T-004 |
 | `toml-span` | 0.7.1 | fmts (`toml`) | TOML | Removed in T-004 |
@@ -266,10 +266,11 @@ nix shell nixpkgs#cargo-audit -c cargo audit
 
 ## Upstream unit tests after the patches
 
-`cargo test -p pathfinder-core -p pathfinder-std -p pathfinder-json -p
-pathfinder-fmts` (unit, integration and doc tests). Before the patches all 361
-pass. After them 111 of 363 failed (0013 adds two to `pathfinder-json`'s unit
-tests); T-009 brought that to 2, both listed below.
+`cargo test --workspace` (unit, integration and doc tests). Before the
+patches all 361 of the imported tests pass. After them 111 of 363 failed
+(0013 adds two to `pathfinder-json`'s unit tests). T-009 brought that to 2,
+and both are now gone: `pathfinder-fmts`' format tests left with the formats
+in T-004, and the `-0` bug below is repaired. None fails.
 
 Every changed expectation names its patch in a comment and was measured with
 jq 1.8.1. Where the original program is an error in jq, the program changed
@@ -291,41 +292,30 @@ jq says `number (-2) and number (0) cannot be divided (remainder) because the
 divisor is zero`). The patches did not change it; the engine takes jq's
 wording in M20 (P-062).
 
-### Still failing
+### The `-0` bug from patch 0003, repaired
 
-| Test | Kind | Why |
-|---|---|---|
-| `pathfinder-fmts` `formats::cbor` | Removed feature | A CBOR round trip whose JSON side has a non-string object key, a parse error since 0013. CBOR goes in T-004, and the test with it. |
-| `pathfinder-std` `defs::significand_range` | **Bug from patch 0003** | See below. |
+T-009 found it: `defs::significand_range` failed. 0003 makes `0 * -1` the
+float `-0` (`impl Mul for Num`), so that it prints as jq's `-0`, and
+`Num::as_isize`/`as_pos_usize` accepted only `Int` and `BigInt`, so every
+builtin or index that wants an integer rejected it with `cannot use -0 as
+integer`. jq has no integers and takes it as 0. `significand` is
+`scalbln(.; ilogb | -1 * .)`, so it failed on every input whose exponent is 0,
+through the shim too.
 
-**Patch 0003 makes `-1 * 0` a float, and integer arguments reject it.** In
-`pathfinder-json/src/num.rs`, `impl Mul for Num`, 0003 adds the arm
-`(Int(x), Int(y)) if (x == 0 || y == 0) && (x < 0) != (y < 0) => Float(-0.0)`,
-so that the product prints as jq's `-0`. A builtin that wants an integer
-(`try_as_isize` in `pathfinder-std/src/lib.rs`, over `Num::as_isize` in
-`num.rs`, which accepts only `Int` and `BigInt`) then rejects that value with
-`cannot use -0 as integer`, where jq, which has no
-integers, takes it as 0. `significand` is defined as
-`scalbln(.; ilogb | -1 * .)`, so it fails on every input whose exponent is 0.
-Measured on the packaged engine (`jaq 3.1.1+pathfinder.3`) and on the shim with
-it as `PATHFINDER_JAQ`, against jq 1.8.1 and stock jaq 3.1.1:
+0003 now takes a zero float as the integer 0 in `as_isize` and
+`as_pos_usize`, and indexes an array with it (`index_opt`). The repair is in
+`packaging/jaq/0003-arithmetic-precision.patch` as well as in
+`pathfinder-json`, so the packaged engine has it too. Measured against jq
+1.8.1, and pinned by a `PATCHED_CASES` case in `tests/differential.rs`:
 
-| Program (`-n`) | jq 1.8.1 | stock jaq | packaged jaq | shim (`jq`) |
-|---|---|---|---|---|
-| `1 \| significand` | `1` | `1.0` | error | error |
-| `ldexp(1; 0 * -1)` | `1` | | error | error |
-| `scalbln(1; 0 * -1)` | `1` | `1.0` | error | |
-| `"abc" \| .[0 * -1:]` | `"abc"` | | error | `"abc"` |
-| `[1, 2] \| .[0 * -1]` | `1` | | error (`Cannot index array with number`) | `1` |
-| `[1, 2] \| del(.[0 * -1])` | `[2]` | | error | `[2]` |
-| `[0 * -1] \| implode` | `"\u0000"` | | error | `"\u0000"` |
-
-Empty cells were not measured. The rewriter's index normalisation hides the
-index cases from `jq` calls, but `significand` and `ldexp` fail through the
-shim today with the engine main pins. Minimal reproduction:
-`jaq -nc '1 | significand'` with the packaged engine. The repair belongs in
-the engine (T-004/T-006 own the crate sources on the parallel branch) and its
-cases in `tests/differential.rs`.
+| Program | jq 1.8.1 | before | after |
+|---|---|---|---|
+| `1 \| significand` | `1` | error | `1` |
+| `ldexp(1; 0 * -1)` | `1` | error | `1` |
+| `[1, 2] \| .[0 * -1]` | `1` | error (`Cannot index array with number`) | `1` |
+| `"abc" \| .[0 * -1:]` | `"abc"` | error | `"abc"` |
+| `[1, 2] \| del(.[0 * -1])` | `[2]` | error | `[2]` |
+| `[0 * -1] \| implode` | `"\u0000"` | error | `"\u0000"` |
 
 ### Known coupling: `pathfinder-std` needs `pathfinder-json`
 

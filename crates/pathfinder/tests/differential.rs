@@ -570,6 +570,15 @@ static PATCHED_CASES: &[Case] = &[
         "[1, 2.5]",
         &["-c", "map(tostring), (.[1] * 2), (. | tojson)"],
     ),
+    // `0 * -1` is -0, which jq takes as 0 wherever it needs an integer.
+    c(
+        "[1,2]",
+        &[
+            "-c",
+            "(0 * -1) as $z | [.[$z], .[$z:], del(.[$z]), ([$z] | implode), \
+             (1 | significand), ldexp(1; $z), ($z | tostring)]",
+        ],
+    ),
     // `nan % 0` is NaN, which only the patched engine prints as `null`.
     c("null", &["-c", "nan % 0"]),
     // An object is indexed only with a string.

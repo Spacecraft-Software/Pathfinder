@@ -31,7 +31,7 @@ out.
 - [x] P-051 Replace the `mmap` file load with a safe read; `unsafe_code = "forbid"` in every crate
 - [x] P-052 Imported files keep MIT and upstream copyright in `REUSE.toml`; `CREDITS.md` names the import
 - [x] P-053 `cargo audit` and a justification for every dependency the import brings in
-- [ ] P-054 jaq's own unit tests run in the workspace; those that assert jaq's (non-jq) behaviour are updated with measured jq values
+- [x] P-054 jaq's own unit tests run in the workspace; those that assert jaq's (non-jq) behaviour are updated with measured jq values
 
 ## M19 — In-process evaluation
 

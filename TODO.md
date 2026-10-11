@@ -20,7 +20,7 @@ serves. Later milestones are broken down when they start, not before.
 - [x] T-006 (P-051) Add `unsafe_code = "forbid"` and Pathfinder's lint set to each new crate; fix or justify every lint
 - [x] T-007 (P-052) `REUSE.toml` entries for the imported paths (MIT, jaq's copyright); `LICENSES/MIT.txt`; `CREDITS.md` section for the engine
 - [x] T-008 (P-053) `cargo audit`; list each imported dependency with its purpose in `crates/UPSTREAM.md`
-- [ ] T-009 (P-054) Run jaq's unit tests; replace assertions of jaq-only behaviour with values measured from jq 1.8.1, or delete tests of removed features
+- [x] T-009 (P-054) Run jaq's unit tests; replace assertions of jaq-only behaviour with values measured from jq 1.8.1, or delete tests of removed features
 - [x] T-010 (P-049) Build a `jaq`-compatible binary from the imported crates and run the existing suites against it as `PATHFINDER_JAQ`: identical to the packaged jaq
 
 ## M19 — In-process evaluation

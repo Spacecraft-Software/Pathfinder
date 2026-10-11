@@ -393,7 +393,6 @@ dependencies = [
  "num-traits",
  "pathfinder-core",
  "pathfinder-std",
- "ryu",
  "self_cell",
  "serde_core",
  "serde_json",
@@ -513,12 +512,6 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
-
-[[package]]
-name = "ryu"
-version = "1.0.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "self_cell"

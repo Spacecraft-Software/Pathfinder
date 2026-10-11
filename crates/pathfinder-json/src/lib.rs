@@ -531,6 +531,8 @@ impl Val {
                 .as_pos_usize()
                 .and_then(|i| abs_index(i, a.len()))
                 .map(|i| a[i].clone()),
+            // Pathfinder: `0 * -1` is -0 (patch 0003); jq indexes with it as 0.
+            (Val::Arr(a), Val::Num(Num::Float(f))) if *f == 0.0 => a.first().cloned(),
             (Val::Arr(_), Val::Arr(y)) if y.is_empty() => Some(Val::Arr(Default::default())),
             (Val::Arr(x), Val::Arr(y)) => {
                 // adapted from the implementation of the `indices` filter
