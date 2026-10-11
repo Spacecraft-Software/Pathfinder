@@ -35,6 +35,21 @@ serves. Later milestones are broken down when they start, not before.
 - [x] T-018 (P-060) `bench/`: startup (`-n .`), 30 MB single-line and line-delimited input, a filter-heavy set, an output-heavy set; record jq 1.8.1, jaq 3.1.1 and native figures
 - [x] T-019 (P-061) `cargo fuzz` targets: `jqargs::parse`, `syntax::parse`, and evaluation of fuzzed filters over fuzzed input with a step limit
 
+## M20 — jq's semantics in the engine
+
+Each move: pin the behaviour with differential cases measured on jq 1.8.1
+(several repairs have none today), give the engine the behaviour, switch the
+repair off for the native engine (`Rewrites::NATIVE`, `prelude::NATIVE`),
+and keep it for the jaq engine until P-078.
+
+- [ ] T-022 (P-062) Engine errors in jq's wording (indexing, iteration, arithmetic, types); the `catch_wording` rewrite and `_pf_err` off for native
+- [ ] T-023 (P-062) Builtins whose jq error names them (`startswith`, `endswith`, `ltrimstr`, `test`, `implode`, …) raise jq's error natively
+- [ ] T-024 (P-063) Assignment creates missing containers and raises jq's errors natively; the `assignment` rewrite, `_pf_vivify` and the `setpath` repair off for native
+- [ ] T-025 (P-064) `del`, `delpaths` and `L |= empty` keep jq's order and semantics natively; the `delete` rewrite and `_pf_delpaths` off for native
+- [ ] T-026 (P-065) Fractional indices, `null` and fractional slices, operand order, `/` and `%`, unary minus as jq has them; their rewrites off for native
+- [ ] T-027 (P-066) The engine's builtins are jq 1.8.1's: names jq lacks removed, the polyfilled ones defined natively
+- [ ] T-028 (P-067) The native engine's prelude holds only definitions jq's `builtin.jq` has, each justified; `input_filename` from the driver as jq answers it
+
 ## Standing
 
 - [ ] T-020 Review jaq's releases after the import quarterly; port fixes by hand, never send anything upstream (§6.4)
