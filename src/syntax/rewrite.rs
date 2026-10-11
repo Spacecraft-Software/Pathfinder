@@ -110,9 +110,10 @@ fn worth_parsing(src: &str) -> bool {
             // negation, which has its own error message; `catch`: a handler,
             // which sees jq's wording for errors.
             // `/` and `%`: jq's zero-divisor errors and integer remainder.
+            // `+`, `*` and the comparisons: jq's operand order.
             Tok::Op(
                 "=" | "|=" | "+=" | "-=" | "*=" | "/=" | "%=" | "//=" | "?//" | "[" | "-" | "/"
-                | "%",
+                | "%" | "+" | "*" | "==" | "!=" | "<" | "<=" | ">" | ">=",
             )
             | Tok::Keyword(Kw::Reduce | Kw::Foreach | Kw::Catch)
             | Tok::Binding(_) => true,
@@ -233,6 +234,20 @@ impl Cx<'_> {
                     format!("(({l}) as {a} | try (({a} - ({a} % 1)) % {r}) catch ({a} % {r}))"),
                     true,
                 )
+            }
+            // jq evaluates the right operand in the outer loop, jaq the left.
+            // The difference shows in the order of outputs, of effects
+            // (`input - input`) and of errors (`.a + .b` raises `.b`'s) — and
+            // in none of them when either operand is inert.
+            Kind::Binary { op, lhs, rhs }
+                if matches!(*op, "+" | "-" | "*" | "==" | "!=" | "<" | "<=" | ">" | ">=")
+                    && !inert(lhs)
+                    && !inert(rhs) =>
+            {
+                let (l, _) = self.emit(lhs);
+                let (r, _) = self.emit(rhs);
+                let t = self.temp();
+                (format!("(({r}) as {t} | ({l}) {op} {t})"), true)
             }
             // `.5`: jaq reads only `0.5`.
             Kind::Number if self.src[node.span.start..].starts_with('.') => (
@@ -1288,6 +1303,21 @@ fn single_valued(node: &Node) -> bool {
     }
 }
 
+/// Whether an operand yields exactly one value, without error or effect, so
+/// that when it is evaluated cannot be observed.
+fn inert(n: &Node) -> bool {
+    match &n.kind {
+        Kind::Identity | Kind::Number | Kind::Var(_) | Kind::Loc => true,
+        Kind::Str(s) => plain_string(s),
+        Kind::Neg(m) => matches!(m.kind, Kind::Number),
+        Kind::Paren(m) => inert(m),
+        Kind::Call { name, args } => {
+            args.is_empty() && matches!(name.as_str(), "null" | "true" | "false")
+        }
+        _ => false,
+    }
+}
+
 /// A filter that raises jq's error where `pat` would index an object by
 /// position, or `None` when the pattern has no array part. It yields `.`
 /// otherwise; the caller discards it.
@@ -1552,13 +1582,33 @@ mod tests {
     #[test]
     fn compound_reduce_sources_are_parenthesised() {
         assert_eq!(
-            rw("reduce .[] * .[] as $i (0; . + $i)").as_deref(),
-            Some("reduce (.[] * .[]) as $i (0; . + $i)")
+            rw("reduce .[] * 2 as $i (0; . + $i)").as_deref(),
+            Some("reduce (.[] * 2) as $i (0; . + $i)")
         );
         assert_eq!(
             rw("reduce .[] as $i (0; . + $i)"),
             None,
             "a simple source is left alone"
+        );
+    }
+
+    #[test]
+    fn operands_are_reordered_only_where_the_order_shows() {
+        // An inert operand — one value, no error, no effect — hides the order.
+        assert_eq!(rw(". * 2 == $x and .a < \"b\" or null != -1"), None);
+        assert_eq!(rw("(.a) + (true)"), None);
+        assert_eq!(
+            rw(".a + .b").as_deref(),
+            Some("((.b) as $__pf_t0 | (.a) + $__pf_t0)")
+        );
+        assert_eq!(
+            rw("[input - input]").as_deref(),
+            Some("[((input) as $__pf_t0 | (input) - $__pf_t0)]")
+        );
+        // The comparisons too, nested operands included.
+        assert_eq!(
+            rw("(1,2) <= (.[] + .[])").as_deref(),
+            Some("(((((.[]) as $__pf_t0 | (.[]) + $__pf_t0))) as $__pf_t1 | ((1,2)) <= $__pf_t1)")
         );
     }
 
