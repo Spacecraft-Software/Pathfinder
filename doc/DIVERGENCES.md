@@ -104,9 +104,11 @@ exit status is jq's: 5 when the last input failed, whatever came before, and
 under `-e` the last input's result, else the last input with output's.
 
 The location is jq's: `<stdin>` or the file name, then the number of complete
-lines read when the error is reported. jq reads a line at a time, so `1 2 3`
-with no newline reports `:0` for each value, and `1 \n2` reports `:1` for
-both. Before any input is read, under `-n`, it is `<unknown>`. The message
+lines read when the error is reported. jq reads with `fgets`, up to a newline
+or 4095 bytes at a time, so `1 2 3` with no newline reports `:0` for each
+value, `1 \n2` reports `:1` for both, and a value followed by 4094 more bytes
+on its line is reported a line earlier. Before any input is read, under `-n`,
+it is `<unknown>`. The message
 is translated by the same rules as a `catch` handler's (`jaq/src/jq.rs` in
 `packaging/jaq/0008-uncaught-errors.patch`), so the two always agree.
 
@@ -122,9 +124,12 @@ Limits:
 - When stdout and stderr are the same file, jq writes its outputs in blocks
   and jaq per value, so the two interleave differently. Each stream on its
   own is jq's.
+- On stdin, a top-level `true`, `false` or `null` that ends exactly at a
+  4095-byte boundary of a longer line is reported a line short: jaq's lexer
+  does not read the byte after a literal, which jq's does.
 - Counting lines costs nothing measurable on file input and on line-delimited
-  stdin (14 MB of JSON lines: 5% *fewer* cycles than before); one 29 MB
-  single-line document on stdin takes 6–11% more.
+  stdin (14 MB of JSON lines: 3–5% *fewer* cycles than before); one 29 MB
+  single-line document on stdin takes about 5–10% more.
 
 ## Error messages a script can see
 

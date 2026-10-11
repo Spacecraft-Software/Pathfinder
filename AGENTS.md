@@ -171,8 +171,10 @@ print. To keep the `jq` name untouched:
   `_pf_dump`). Change both or neither, then regenerate the patch from the jaq
   source tree; `patched_engine_reports_errors_as_jq` compares stderr and exit
   status with real jq.
-- **The error location counts lines the way jq reads them**: a line at a time,
-  so the count is the complete lines fetched when the error is reported. On
+- **The error location counts lines the way jq reads them**: `fgets` into a
+  4096-byte buffer, so up to a newline or 4095 bytes at a time, and through
+  the chunk holding the last byte the parser needed (the delimiter after a
+  number or literal, the closing character otherwise). On
   stdin `jq::Lines` is the only buffer and serves single bytes without a call;
   a reader layered under std's `Read::bytes` cost up to 66% on one long line.
   Measure stdin with `perf stat -e cycles:u`, one run per invocation (`-r`

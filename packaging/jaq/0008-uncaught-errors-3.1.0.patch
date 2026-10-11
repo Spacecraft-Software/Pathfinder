@@ -99,10 +99,10 @@ index d346656..50a5db1 100644
          name: "input_filename",
 diff --git a/jaq/src/jq.rs b/jaq/src/jq.rs
 new file mode 100644
-index 0000000..1e13b84
+index 0000000..9fb9180
 --- /dev/null
 +++ b/jaq/src/jq.rs
-@@ -0,0 +1,294 @@
+@@ -0,0 +1,329 @@
 +//! Pathfinder: an uncaught error, reported and survived as jq 1.8.1 does.
 +//!
 +//! jq writes an error that escapes the filter as
@@ -111,8 +111,13 @@ index 0000000..1e13b84
 +//! is decided by the last input (`process` and `main` in jq's `src/main.c`).
 +//!
 +//! The line in the location is the number of complete lines jq's reader has
-+//! fetched when the error is reported: jq feeds its parser a line at a time,
-+//! so the line holding the end of the current value has been read whole.
++//! fetched when the error is reported. jq reads with `fgets` into a 4096-byte
++//! buffer, so it fetches up to a newline or 4095 bytes at a time, and fetches
++//! the chunk holding the last byte its parser needed: the closing character
++//! of a string, array or object, the delimiter after a number or literal.
++//! (On a stream jaq's lexer needs no delimiter after `true`, `false` or
++//! `null`, so one that ends exactly at a 4095-byte boundary of a longer line
++//! is reported a line short of jq.)
 +use core::cell::Cell;
 +use jaq_all::json::{Error, Val};
 +use std::io::{self, BufRead, Read};
@@ -164,15 +169,19 @@ index 0000000..1e13b84
 +    }
 +}
 +
++/// The most jq's `fgets` fetches at once.
++const CHUNK: usize = 4095;
++
 +/// How far the input has been read, for the location of an error.
 +#[derive(Default)]
 +pub struct Position {
 +    /// Complete lines fetched from a stream; `None` until it is first read.
 +    lines: Cell<Option<usize>>,
-+    /// Offset read up to in an in-memory file, and the newlines before the
-+    /// offset last counted (errors arrive in reading order).
++    /// Offset read up to in an in-memory file.
 +    at: Cell<Option<usize>>,
-+    counted: Cell<(usize, usize)>,
++    /// Offset last counted to, the newlines before it, and where its line
++    /// starts (errors arrive in reading order).
++    counted: Cell<(usize, usize, usize)>,
 +}
 +
 +impl Position {
@@ -190,16 +199,29 @@ index 0000000..1e13b84
 +        lines.map_or_else(|| "<unknown>".into(), |n| format!("{name}:{n}"))
 +    }
 +
-+    /// Complete lines up to the end of the line that holds offset `at`.
++    /// The lines jq has fetched when its parser has read up to offset `at`.
 +    fn file_lines(&self, bytes: &[u8], at: usize) -> usize {
 +        let at = at.min(bytes.len());
-+        let (from, before) = match self.counted.get() {
-+            (from, n) if from <= at => (from, n),
-+            _ => (0, 0),
++        // The last byte jq needed: a value that closes itself ends at `at`;
++        // a number or literal is ended by the byte after it.
++        let last = match at.checked_sub(1).map(|i| bytes[i]) {
++            Some(b']' | b'}' | b'"') => at - 1,
++            _ => at,
 +        };
-+        let before = before + bytes[from..at].iter().filter(|&&b| b == b'\n').count();
-+        self.counted.set((at, before));
-+        before + usize::from(bytes[at..].contains(&b'\n'))
++        let (from, mut before, mut start) = match self.counted.get() {
++            c @ (from, ..) if from <= last => c,
++            _ => (0, 0, 0),
++        };
++        for (i, &b) in bytes[from..last].iter().enumerate() {
++            if b == b'\n' {
++                before += 1;
++                start = from + i + 1;
++            }
++        }
++        self.counted.set((last, before, start));
++        // The `fgets` chunk that holds `last`, counted from its line's start.
++        let end = (start + ((last - start) / CHUNK + 1) * CHUNK).min(bytes.len());
++        before + usize::from(bytes[last..end].contains(&b'\n'))
 +    }
 +}
 +
@@ -233,22 +255,35 @@ index 0000000..1e13b84
 +}
 +
 +impl<R: Read> BufRead for Lines<'_, R> {
++    /// The next chunk as `fgets` fetches it: up to a newline or [`CHUNK`]
++    /// bytes, reading on until one of them, or the end, is there.
 +    fn fill_buf(&mut self) -> io::Result<&[u8]> {
 +        if self.pos == self.line_end {
-+            if self.pos == self.filled {
-+                self.filled = self.inner.read(&mut self.buf)?;
-+                (self.pos, self.line_end) = (0, 0);
-+            }
 +            let mut lines = self.at.lines.get().unwrap_or(0);
-+            let rest = &self.buf[self.pos..self.filled];
-+            self.line_end = self.pos
-+                + match newline(rest) {
-+                    Some(i) => {
-+                        lines += 1;
-+                        i + 1
-+                    }
-+                    None => rest.len(),
++            loop {
++                let rest = &self.buf[self.pos..self.filled];
++                if let Some(i) = newline(&rest[..rest.len().min(CHUNK)]) {
++                    self.line_end = self.pos + i + 1;
++                    lines += 1;
++                    break;
++                }
++                if rest.len() >= CHUNK {
++                    self.line_end = self.pos + CHUNK;
++                    break;
++                }
++                // Keep the partial chunk and read on behind it.
++                self.buf.copy_within(self.pos..self.filled, 0);
++                (self.filled, self.pos) = (self.filled - self.pos, 0);
++                let n = match self.inner.read(&mut self.buf[self.filled..]) {
++                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
++                    r => r?,
 +                };
++                if n == 0 {
++                    self.line_end = self.filled;
++                    break;
++                }
++                self.filled += n;
++            }
 +            self.at.lines.set(Some(lines));
 +        }
 +        Ok(&self.buf[self.pos..self.line_end])
