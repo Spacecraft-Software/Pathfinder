@@ -15,6 +15,16 @@ members = ["crates/*"]
 default-members = ["crates/pathfinder"]
 resolver = "2"
 
+# The engine crates imported from jaq 3.1.1 (crates/UPSTREAM.md). Renamed as
+# packages only: each keeps its jaq name as a dependency key, so the imported
+# sources still say `jaq_core`, `jaq_std`, `jaq_json` and stay diffable
+# against upstream. Versions are upstream's.
+[workspace.dependencies]
+jaq-core = { package = "pathfinder-core", version = "3.1.0", path = "crates/pathfinder-core", default-features = false }
+jaq-std  = { package = "pathfinder-std",  version = "3.0.1", path = "crates/pathfinder-std",  default-features = false }
+jaq-json = { package = "pathfinder-json", version = "2.0.2", path = "crates/pathfinder-json", default-features = false }
+jaq-fmts = { package = "pathfinder-fmts", version = "0.1.1", path = "crates/pathfinder-fmts", default-features = false }
+
 # Profiles are honoured only at the workspace root.
 [profile.release]
 # LTO "thin": reliable on this toolchain and on the NixOS host. Full "fat" LTO
