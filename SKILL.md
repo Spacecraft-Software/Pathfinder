@@ -56,9 +56,17 @@ would receive. To see the engine's own behaviour without any rewriting:
 printf '{}' | PATHFINDER_NO_REWRITE=1 jq -c '.a.b = 1'
 ```
 
+## Discover the surface
+
+`pathfinder --describe --json` lists every command, the environment variables
+and the conventions in one document. `pathfinder --schema` prints each
+command's JSON Schema (Draft 2020-12); `pathfinder --schema --format
+anthropic` (or `openai`, `gemini`, `mcp`) gives them as that provider's tool
+definitions, and `pathfinder --schema pathfinder_explain` just one.
+
 ## Output mode of the native verbs
 
-`--explain`, `--version` and `--install-shim` print one JSON document
+`--explain`, `--version`, `--install-shim` and `--describe` print one JSON document
 (`{"metadata":…,"data":…}`) when given `--json`, when `AI_AGENT` or `AGENT`
 is set to anything non-empty, when `CI` is set and not `false`/`0`, or when
 stdout is not a terminal; otherwise text. Any failure of those verbs in JSON
