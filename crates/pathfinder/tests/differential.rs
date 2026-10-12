@@ -231,6 +231,12 @@ static CASES: &[Case] = &[
         &["-c", "reduce .[] as {$a: [$b]} (0; . + $b)"],
     ),
     c("null", &["-c", "{(0):1}"]),
+    // `def f($a)` binds `a` as a filter too (jq's `a as $a` desugaring).
+    c("null", &["-c", "def f($a; $b): [$a,$b]; f(1,2; 3,4)"]),
+    c("null", &["-c", "def f($a; g): [a, $a, g]; f(1,2; 9)"]),
+    c("null", &["-c", "def f($a): def a: 5; [a, $a]; f(1)"]),
+    c("null", &["-c", "def f($a): [a]; f(empty)"]),
+    c("null", &["-c", "def f($length): length; f(9)"]),
     // Functions only the engine defines are jq's compile error, in reachable
     // code only (PRD R-004).
     c("null", &["isarray"]),

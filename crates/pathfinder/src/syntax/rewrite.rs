@@ -354,6 +354,46 @@ impl Cx<'_> {
                     true,
                 )
             }
+            // `def f($a): body` binds `a` as a filter too in jq, which compiles
+            // it as `def f(a): a as $a | body`; jaq binds only `$a`. Written
+            // out only when the body calls a value parameter as a filter.
+            Kind::Def { def, rest }
+                if def.params.iter().any(|p| match p {
+                    super::Param::Value(v) => calls(&def.body, v.trim_start_matches('$')),
+                    super::Param::Filter(_) => false,
+                }) =>
+            {
+                let names: Vec<&str> = def
+                    .params
+                    .iter()
+                    .map(|p| match p {
+                        super::Param::Filter(n) | super::Param::Value(n) => {
+                            n.trim_start_matches('$')
+                        }
+                    })
+                    .collect();
+                let binds: String = def
+                    .params
+                    .iter()
+                    .filter_map(|p| match p {
+                        super::Param::Value(v) => {
+                            let v = v.trim_start_matches('$');
+                            Some(format!("{v} as ${v} | "))
+                        }
+                        super::Param::Filter(_) => None,
+                    })
+                    .collect();
+                let (body, _) = self.emit(&def.body);
+                let (rest, _) = self.emit(rest);
+                (
+                    format!(
+                        "(def {}({}): {binds}({body}); {rest})",
+                        def.name,
+                        names.join("; ")
+                    ),
+                    true,
+                )
+            }
             Kind::Reduce { source, .. } | Kind::Foreach { source, .. } if is_compound(source) => {
                 (self.splice_wrapping(node, Some(source.span)).0, true)
             }
@@ -1494,6 +1534,12 @@ fn has_comma(node: &Node) -> bool {
     matches!(node.kind, Kind::Comma(..)) || node.children().into_iter().any(has_comma)
 }
 
+/// Whether `node` calls `name` with no arguments anywhere.
+fn calls(node: &Node, name: &str) -> bool {
+    matches!(&node.kind, Kind::Call { name: n, args } if n == name && args.is_empty())
+        || node.children().into_iter().any(|c| calls(c, name))
+}
+
 fn is_assignment(op: &str) -> bool {
     matches!(op, "=" | "|=" | "+=" | "-=" | "*=" | "/=" | "%=" | "//=")
 }
@@ -1634,6 +1680,16 @@ mod tests {
         let out = rw("[.a += 1, 2]").expect("rewritten");
         assert!(out.starts_with("[((1) as $__pf_t0 |"), "{out}");
         assert!(out.ends_with("), 2]"), "{out}");
+    }
+
+    #[test]
+    fn a_value_parameter_called_as_a_filter_is_desugared() {
+        assert_eq!(
+            rw("def f($a; g): [a, $a, g]; f(1)").as_deref(),
+            Some("(def f(a; g): a as $a | ([a, $a, g]); f(1))")
+        );
+        // Not called as a filter: left as written.
+        assert_eq!(rw("def f($a): $a + 1; f(1)"), None);
     }
 
     #[test]
