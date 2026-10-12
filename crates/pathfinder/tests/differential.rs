@@ -849,6 +849,18 @@ static PATCHED_STDERR_CASES: &[Case] = &[
 /// file it has open, where the jaq engine's prelude can only define a
 /// constant `input_filename`.
 static NATIVE_CASES: &[Case] = &[
+    // C's `(int)` cast for math functions' integer arguments, and C's
+    // `scalb` (M20, T-026).
+    c("null", &["-c", "ldexp(1;2.5)"]),
+    c("null", &["-c", "ldexp(1;-1.5)"]),
+    c("null", &["-c", "ldexp(1;1e10)"]),
+    c("null", &["-c", "ldexp(1;nan)"]),
+    c("null", &["-c", "scalbln(1;2.5)"]),
+    c("null", &["-c", "jn(1.5;2)"]),
+    c("null", &["-c", "[scalb(1;2.5,2,-1.5)]"]),
+    c("null", &["-c", "[scalb(1,2;3,4)]"]),
+    c("null", &["-c", "[(1,2) * (3,4)]"]),
+    c("null", &["-c", "[{a: (1,2), b: (3,4)}]"]),
     // The engine's own errors in jq's words (M20, T-022): indexing,
     // iteration, arithmetic, types, keys, containment, formats.
     c("null", &["-c", "try (1|.[]) catch ."]),

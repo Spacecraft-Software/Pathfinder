@@ -261,6 +261,21 @@ trait ValTx: ValT + Sized {
         Error::typ(self.clone(), "string")
     }
 
+    /// Pathfinder: a number as C's `(int)` cast makes it for jq 1.8.1's math
+    /// functions taking an `int` (`ldexp`, `scalbln`, `jn`, `yn`): truncated,
+    /// and `INT_MIN` for NaN or a value outside `int`, as on x86-64.
+    fn try_as_c_int(&self) -> Result<i32, Error<Self>> {
+        let f = self.try_as_f64()?;
+        let t = f.trunc();
+        Ok(
+            if t.is_finite() && t >= f64::from(i32::MIN) && t <= f64::from(i32::MAX) {
+                t as i32
+            } else {
+                i32::MIN
+            },
+        )
+    }
+
     /// Pathfinder: an array for a function jq writes as a loop over it
     /// (`sort_by`, `group_by`, `min_by`, …), which fails as `.[]` does.
     fn into_vec_iter(self) -> Result<Vec<Self>, Error<Self>> {

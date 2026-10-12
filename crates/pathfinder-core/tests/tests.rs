@@ -21,7 +21,8 @@ fn update_assign() {
 
 // here, jaq diverges from jq, which returns [3,6,4,8]!
 // idem for other arithmetic operations
-yields!(cartesian_arith, "[(1,2) * (3,4)]", [3, 4, 6, 8]);
+// Pathfinder: jq 1.8.1 runs the right operand in the outer loop.
+yields!(cartesian_arith, "[(1,2) * (3,4)]", [3, 6, 4, 8]);
 
 #[test]
 fn add() {
@@ -166,7 +167,8 @@ yields!(interpolation, r#"1 | "yields \(.+1)!""#, "yields 2!");
 yields!(
     interpolation_many,
     r#"2 | ["\(., .+1) \(., .*2)"]"#,
-    ["2 2", "2 4", "3 2", "3 4"]
+    // Pathfinder: jq 1.8.1's order.
+    ["2 2", "3 2", "2 4", "3 4"]
 );
 // this does not work in jq, because jq does not allow for defining formatters
 yields!(

@@ -36,7 +36,8 @@ def significand:
 def pow10:            pow(10.0; .);
 def drem($l; r):      remainder($l; r) | if . == 0 then copysign(.; $l) end;
 def nexttoward(x; y): nextafter(x; y);
-def scalb(x; e):      x * pow(2.0; e);
+# Pathfinder: C's `scalb`, NaN for an exponent that is no integer, as in jq.
+def scalb(x; e):      e as $e | x as $x | if $e == ($e | trunc) or ($e | isinfinite) then $x * pow(2.0; $e) else nan end;
 def gamma: tgamma;
 
 # Type

@@ -308,6 +308,20 @@ fn cartesian<'a, D: DataT>(l: &'a Id, r: &'a Id, cv: Cv<'a, D>) -> Pairs<'a, Val
     })
 }
 
+/// Pathfinder: [`cartesian`] with the right operand in the outer loop, as
+/// jq 1.8.1 evaluates arithmetic and comparisons: `(1,2) + (10,20)` is 11,
+/// 12, 21, 22, `input - input` reads the right operand first, and of two
+/// failing operands the right one's error is raised.
+fn cartesian_rl<'a, D: DataT>(
+    l: &'a Id,
+    r: &'a Id,
+    cv: Cv<'a, D>,
+) -> Pairs<'a, ValX<'a, D::V<'a>>> {
+    flat_map_with(r.run(cv.clone()), cv, move |r, cv| {
+        map_with(l.run(cv), r, |l, r| (l, r))
+    })
+}
+
 fn fold_update<'a, D: DataT>(
     fold_type: &'a Fold<Id>,
     path: &'a Id,
@@ -578,10 +592,16 @@ impl Id {
                     Box::new(r.run(cv).map(|r| Ok(D::V::from(r?.as_bool()))))
                 }
             }),
-            Ast::Math(l, op, r) => Box::new(cartesian(l, r, cv).map(|(x, y)| Ok(op.run(x?, y?)?))),
-            Ast::Cmp(l, op, r) => {
-                Box::new(cartesian(l, r, cv).map(|(x, y)| Ok(D::V::from(op.run(&x?, &y?)))))
-            }
+            Ast::ObjCat(l, r) => Box::new(cartesian(l, r, cv).map(|(x, y)| Ok((x? + y?)?))),
+            // Pathfinder: the right operand first, its error included.
+            Ast::Math(l, op, r) => Box::new(cartesian_rl(l, r, cv).map(|(x, y)| {
+                let y = y?;
+                Ok(op.run(x?, y)?)
+            })),
+            Ast::Cmp(l, op, r) => Box::new(cartesian_rl(l, r, cv).map(|(x, y)| {
+                let y = y?;
+                Ok(D::V::from(op.run(&x?, &y)))
+            })),
 
             Ast::Fold(xs, pat, init, update, fold_type) => {
                 let xs = rc_lazy_list::List::from_iter(run_and_bind(xs, cv.clone(), pat));
@@ -625,7 +645,7 @@ impl Id {
             Ast::ToString => lose(self, cv),
             Ast::Int(_) | Ast::Num(_) | Ast::Str(_) => lose(self, cv),
             Ast::ObjEmpty | Ast::ObjSingle(..) => lose(self, cv),
-            Ast::Logic(..) | Ast::Math(..) | Ast::Cmp(..) => lose(self, cv),
+            Ast::Logic(..) | Ast::Math(..) | Ast::ObjCat(..) | Ast::Cmp(..) => lose(self, cv),
             // Pathfinder: jq 1.8.1 collects `[f]` and negates `-f` without
             // leaving the path expression, so `f` runs as one, and a path
             // operation in it on a value with a lost path fails.
@@ -743,7 +763,9 @@ impl Id {
             Ast::ToString => err(cv.1),
             Ast::Int(_) | Ast::Num(_) | Ast::Str(_) => err(cv.1),
             Ast::Arr(_) | Ast::ObjEmpty | Ast::ObjSingle(..) => err(cv.1),
-            Ast::Neg(_) | Ast::Logic(..) | Ast::Math(..) | Ast::Cmp(..) => err(cv.1),
+            Ast::Neg(_) | Ast::Logic(..) | Ast::Math(..) | Ast::ObjCat(..) | Ast::Cmp(..) => {
+                err(cv.1)
+            }
             Ast::Update(..) | Ast::Assign(..) => err(cv.1),
             Ast::UpdateMath(..) | Ast::UpdateAlt(..) => err(cv.1),
             // jq implements updates on `try ... catch` and `label`, but

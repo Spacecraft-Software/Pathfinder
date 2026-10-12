@@ -417,6 +417,13 @@ changes land once, in the crates, not in `packaging/jaq/`.
   now expect jq's.
 - `input_line_number` is a native function on `Data::line_number`, the
   reader position's line count (`Position::line_number`).
+- Arithmetic and comparisons run the right operand in the outer loop, its
+  error first, as jq does (`cartesian_rl`); object construction keeps the
+  first entry outer through a term of its own, `Term::ObjCat`, where jaq
+  summed the entries with `+`. Math functions taking a C `int` (`ldexp`,
+  `scalbln`, `jn`, `yn`) truncate their argument as C's cast does, and
+  `scalb` is C's (NaN for an exponent that is no integer). jaq's tests of
+  those orders and of `scalb` now expect jq's answers.
 
 ## Licence of Pathfinder's changes
 

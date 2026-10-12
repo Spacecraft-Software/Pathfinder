@@ -124,6 +124,7 @@ impl Rewrites {
     /// What the native engine still needs.
     pub const NATIVE: Self = Self {
         catch_wording: false,
+        operand_order: false,
         ..Self::ALL
     };
 }
