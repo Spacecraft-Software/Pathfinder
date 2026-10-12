@@ -125,6 +125,10 @@ impl Rewrites {
     pub const NATIVE: Self = Self {
         catch_wording: false,
         operand_order: false,
+        division: false,
+        negation: false,
+        index: false,
+        slice: false,
         ..Self::ALL
     };
 }

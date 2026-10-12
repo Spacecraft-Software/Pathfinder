@@ -69,7 +69,12 @@ fn range_access() {
     give(json!([0, 1, 2]), ".[1:0]", json!([]));
     give(json!([0, 1, 2]), ".[4:5]", json!([]));
 
-    give(json!([0, 1, 2]), ".[0:2,3.14]?", json!([0, 1]));
+    // Pathfinder: jq 1.8.1 rounds a fractional end up.
+    give(
+        json!([0, 1, 2]),
+        "[.[0:2,3.14]?]",
+        json!([[0, 1], [0, 1, 2]]),
+    );
 }
 
 #[test]
@@ -162,7 +167,8 @@ fn range_update() {
     give(
         json!([0, 1, 2]),
         ".[:2,3.0]? |= [.[] | .+1]",
-        json!([1, 2, 2]),
+        // Pathfinder: jq 1.8.1 takes the bound 3.0 as 3.
+        json!([2, 3, 3]),
     );
 }
 

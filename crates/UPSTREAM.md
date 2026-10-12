@@ -424,6 +424,15 @@ changes land once, in the crates, not in `packaging/jaq/`.
   `scalbln`, `jn`, `yn`) truncate their argument as C's cast does, and
   `scalb` is C's (NaN for an exponent that is no integer). jaq's tests of
   those orders and of `scalb` now expect jq's answers.
+- Numbers as indices and bounds, as jq 1.8.1 takes them (T-026): a
+  fractional index is truncated and NaN, infinite or too large indexes
+  nothing (`Num::as_jq_index`), in reads, paths (`path(.[1.5])` is
+  `[1.5]`) and updates; slice bounds round outwards after a negative one is
+  counted from the end, NaN is no bound and a non-number is jq's error
+  (`Num::as_jq_bound`); `null` slices to `null` and updates as `[]`. `/` by
+  zero is jq's error, so `nan` and `infinite` are native rather than `0/0`
+  and `1/0`; unary minus words jq's error; `range` with no step yields
+  nothing. jaq's tests of those now expect jq's answers.
 
 ## Licence of Pathfinder's changes
 

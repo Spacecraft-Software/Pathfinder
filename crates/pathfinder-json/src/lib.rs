@@ -124,8 +124,7 @@ enum Type {
     /// `"1" | sin` or `pow(2; "3")` or `fma(2; 3; "4")`
     Float,
     */
-    /// `-"a"`, `"a" | round`
-    Num,
+    // Pathfinder: `Num` (`-"a"`) is gone: negation words jq's own error.
     /// `{(0): 1}` or `0 | fromjson` or `0 | explode` or `"a b c" | split(0)`
     Str,
     /// `0 | sort` or `0 | implode` or `[] | .[0:] = 0`
@@ -141,7 +140,6 @@ impl Type {
         match self {
             Self::Int => "integer",
             //Self::Float => "floating-point number",
-            Self::Num => "number",
             Self::Str => "string",
             Self::Arr => "array",
             Self::Iter => "iterable (array or object)",
@@ -227,6 +225,8 @@ impl jaq_core::ValT for Val {
             Val::Arr(a) => Self::range_int(range)
                 .map(|range| skip_take(range, a.len()))
                 .map(|(skip, take)| a.iter().skip(skip).take(take).cloned().collect()),
+            // Pathfinder: jq slices `null` to `null`.
+            Val::Null => Ok(Val::Null),
             _ => Err(Error::typ(self, Type::Range.as_str())),
         }
     }
@@ -288,7 +288,12 @@ impl jaq_core::ValT for Val {
             Val::Arr(ref mut a) => {
                 let oob = || Error::str(format_args!("index {index} out of bounds"));
                 let abs_or = |i| abs_index(i, a.len()).ok_or_else(oob);
-                let i = match index.as_pos_usize().and_then(abs_or) {
+                // Pathfinder: a fractional index is truncated, as in jq.
+                let i = match index {
+                    Val::Num(n) => n.as_jq_index().ok_or_else(oob),
+                    _ => index.as_pos_usize(),
+                };
+                let i = match i.and_then(abs_or) {
                     Ok(i) => i,
                     Err(e) => return opt.fail(self, |_| Exn::from(e)),
                 };
@@ -312,6 +317,10 @@ impl jaq_core::ValT for Val {
         opt: path::Opt,
         f: impl Fn(Self) -> I,
     ) -> ValX<'a> {
+        // Pathfinder: jq updates a slice of `null` as of an empty array.
+        if let Val::Null = self {
+            self = Val::Arr(Rc::default());
+        }
         let fs = |b: Bytes, range, skip_take: SkipTakeFn, from: ValBytesFn, into: BytesValFn| {
             let (skip, take) = match Self::range_int(range) {
                 Ok(range) => skip_take(range, &b),
@@ -522,14 +531,16 @@ impl Val {
         }
     }
 
+    /// Pathfinder: jq 1.8.1's slice bounds: `null` or NaN is none, a
+    /// fractional bound is rounded outwards (`Num::as_jq_bound`), and any
+    /// other value is jq's error.
     fn range_int(range: val::Range<&Self>) -> Result<val::Range<num::PosUsize>, Error> {
-        let f = |i: Option<&Self>| {
-            i.as_ref()
-                .filter(|i| !matches!(i, Val::Null))
-                .map(|i| i.as_pos_usize())
-                .transpose()
+        let f = |i: Option<&Self>, end: bool| match i {
+            None | Some(Val::Null) => Ok(None),
+            Some(Val::Num(n)) => Ok(n.as_jq_bound(end)),
+            Some(_) => Err(Error::str("Array/string slice indices must be integers")),
         };
-        Ok(f(range.start)?..f(range.end)?)
+        Ok(f(range.start, false)?..f(range.end, true)?)
     }
 
     fn to_json(&self) -> Vec<u8> {
@@ -549,8 +560,12 @@ impl Val {
                 .as_pos_usize()
                 .and_then(|i| abs_index(i, a.len()))
                 .map(|i| a[i].clone()),
-            // Pathfinder: `0 * -1` is -0 (patch 0003); jq indexes with it as 0.
-            (Val::Arr(a), Val::Num(Num::Float(f))) if *f == 0.0 => a.first().cloned(),
+            // Pathfinder: a fractional index is truncated, and NaN, infinite
+            // or too large indexes nothing, as in jq 1.8.1 (`-0` is 0).
+            (Val::Arr(a), Val::Num(n @ (Num::Float(_) | Num::Dec(_)))) => n
+                .as_jq_index()
+                .and_then(|i| abs_index(i, a.len()))
+                .map(|i| a[i].clone()),
             (Val::Arr(_), Val::Arr(y)) if y.is_empty() => Some(Val::Arr(Default::default())),
             (Val::Arr(x), Val::Arr(y)) => {
                 // adapted from the implementation of the `indices` filter
@@ -739,6 +754,10 @@ impl core::ops::Div for Val {
             split(&x, &y).map(|s| into(x.slice_ref(s))).collect()
         };
         match (self, rhs) {
+            // Pathfinder: a zero divisor is jq 1.8.1's error, not infinity.
+            (Self::Num(x), Self::Num(y)) if y.as_f64() == 0.0 => {
+                Err(Error::math(Self::Num(x), ops::Math::Div, Self::Num(y)))
+            }
             (Self::Num(x), Self::Num(y)) => Ok(Self::Num(x / y)),
             (Self::TStr(x), Self::TStr(y)) => Ok(fs(*x, *y, Val::utf8_str)),
             (Self::BStr(x), Self::BStr(y)) => Ok(fs(*x, *y, Val::byte_str)),
@@ -767,7 +786,14 @@ impl core::ops::Neg for Val {
     fn neg(self) -> Self::Output {
         match self {
             Self::Num(n) => Ok(Self::Num(-n)),
-            x => Err(Error::typ(x, Type::Num.as_str())),
+            // Pathfinder: jq 1.8.1's message.
+            x => {
+                use jaq_core::ValT;
+                Err(Error::str(format_args!(
+                    "{} cannot be negated",
+                    x.jq_quoted()
+                )))
+            }
         }
     }
 }

@@ -671,6 +671,8 @@ where
         // Pathfinder: `min` and `max` natively, with jq's message for a value
         // that is no array; of equal values, `min` keeps the first and `max`
         // the last, as jq does.
+        ("nan", v(0), |_| bome(Ok(D::V::from(f64::NAN)))),
+        ("infinite", v(0), |_| bome(Ok(D::V::from(f64::INFINITY)))),
         ("min", v(0), |cv| bome(min_max(cv.1, false))),
         ("max", v(0), |cv| bome(min_max(cv.1, true))),
         // Pathfinder: `@sh` natively, with jq's message for a value that

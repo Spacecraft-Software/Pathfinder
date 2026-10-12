@@ -78,7 +78,9 @@ fn range<V: ValT>(mut from: ValX<V>, to: V, by: V) -> impl Iterator<Item = ValX<
         Ok(x) => match cmp {
             Greater => x < to,
             Less => x > to,
-            Equal => x != to,
+            // Pathfinder: no step yields nothing, as in jq 1.8.1, where jaq
+            // repeated `from` for ever.
+            Equal => false,
         }
         .then(|| core::mem::replace(&mut from, (x + by.clone()).map_err(Exn::from))),
         e @ Err(_) => {

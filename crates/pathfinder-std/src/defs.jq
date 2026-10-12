@@ -15,8 +15,7 @@ def isarray:   . >= []  and . < {};
 def isobject:  . >= {};
 
 # Numbers
-def nan:      0 / 0;
-def infinite: 1 / 0;
+# Pathfinder: `nan` and `infinite` are native: `/` by zero is an error.
 def isnan:      . < nan and nan < .;
 def isinfinite: . == infinite or  . == -infinite;
 def isfinite:   isnumber and (isinfinite | not);
