@@ -71,7 +71,8 @@ def max_by(f): reduce max_by_or_empty(f) as $x (null; $x);
 def min: min_by(.);
 def max: max_by(.);
 def unique_by(f): [group_by(f)[] | .[0]];
-def unique: unique_by(.);
+# Pathfinder: jq's `unique` sorts, and fails as `sort` does.
+def unique: if . < [] or . >= {} then sort else unique_by(.) end;
 
 # Paths
 def pick(f):

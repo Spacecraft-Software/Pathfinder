@@ -387,6 +387,24 @@ system allocator would break PRD R-011's 10% budget against jaq by a factor of
 two. mimalloc is the dependency jaq already had, at the version locked at the
 import base.
 
+## M20: jq's semantics in the engine
+
+Repairs move from the prelude and the rewriter into the crates, for the
+native engine; the jaq engine keeps the text repairs until P-078, so these
+changes land once, in the crates, not in `packaging/jaq/`.
+
+- `pathfinder-std`'s `ValT` gains `jq_type` and `jq_quoted` (jq's
+  `number (1)`, `array ([1,2,3,4,5,...)`), which builtins use to raise
+  jq 1.8.1's messages where they fail: the regex builtins (input, regex
+  and flags of the wrong type, an unknown flag string), `explode`,
+  `ascii_downcase`/`ascii_upcase`, `startswith`/`endswith`/`ltrimstr`/
+  `rtrimstr`, `implode`, `sort`, `sort_by`/`group_by`/`min_by`/`max_by`,
+  `strptime`. `reverse` and `implode` follow jq's definitions (`reverse` of
+  a non-array; U+FFFD for an invalid code point, where jaq read a negative
+  number as a byte). In `defs.jq`, `unique` fails as `sort` does and
+  `getpath` names a path that is no array. jaq's unit test of `implode`
+  now expects jq's answer.
+
 ## Licence of Pathfinder's changes
 
 The text taken from jaq keeps jaq's MIT licence and its copyright notice

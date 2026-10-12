@@ -43,7 +43,7 @@ repair off for the native engine (`Rewrites::NATIVE`, `prelude::NATIVE`),
 and keep it for the jaq engine until P-078.
 
 - [ ] T-022 (P-062) Engine errors in jq's wording (indexing, iteration, arithmetic, types); the `catch_wording` rewrite and `_pf_err` off for native
-- [ ] T-023 (P-062) Builtins whose jq error names them (`startswith`, `endswith`, `ltrimstr`, `test`, `implode`, …) raise jq's error natively
+- [x] T-023 (P-062) Builtins whose jq error names them (`startswith`, `endswith`, `ltrimstr`, `test`, `implode`, …) raise jq's error natively
 - [ ] T-024 (P-063) Assignment creates missing containers and raises jq's errors natively; the `assignment` rewrite, `_pf_vivify` and the `setpath` repair off for native
 - [ ] T-025 (P-064) `del`, `delpaths` and `L |= empty` keep jq's order and semantics natively; the `delete` rewrite and `_pf_delpaths` off for native
 - [ ] T-026 (P-065) Fractional indices, `null` and fractional slices, operand order, `/` and `%`, unary minus as jq has them; their rewrites off for native

@@ -526,7 +526,7 @@ static REPAIRS: &[Def] = &[
     // regex without `(` is matched as it is.
     Def {
         name: "match",
-        deps: &["_pf_regex_lit"],
+        deps: &["_pf_regex_lit", "_pf_dump"],
         src: Some(concat!(
             r#"def _pf_match0(re; mode): match(re; mode); def _pf_match01(re): match(re); "#,
             // What is known about a regex: the table for a literal (from
@@ -544,7 +544,9 @@ static REPAIRS: &[Def] = &[
             r#"elif ($t.string | .[:3] == "(?<" or .[:4] == "(?P<") "#,
             r#"then ($t.string | if .[2:3] == "P" then .[4:-1] else .[3:-1] end) as $n "#,
             r#"| .groups += [[$n, $n]] | .dict[$n] = $n else . end) | .re += $re[.at:] end; "#,
-            r#"def _pf_regex($re; $mode): if $mode == null then ($__pf_rl[$re] // _pf_scanre($re)) "#,
+            // A regex that is no string is jq's error, not a failed lookup.
+            r#"def _pf_regex($re; $mode): if $re < "" or $re >= [] then error("\($re | type) (\($re | _pf_dump)) is not a string") "#,
+            r#"elif $mode == null then ($__pf_rl[$re] // _pf_scanre($re)) "#,
             r#"elif ($mode | contains("x")) then _pf_scanre($re) else ($__pf_rl[$re] // _pf_scanre($re)) end; "#,
             // jaq's global matching drops an empty match that starts where a
             // non-empty one ended (`"ab1" | match("[a-z]*"; "g")` misses the
@@ -1112,6 +1114,16 @@ pub static NATIVE: &[&str] = &[
     // The driver answers from its reader's position: `null` before any
     // input is read, then the file the reader has open (`jq::Position`).
     "input_filename",
+    // The engine raises jq's message for a non-string input or argument
+    // (`startswith() requires string inputs`; `ltrimstr`/`rtrimstr` are
+    // written with `startswith`/`endswith` in jq 1.8.1).
+    "startswith",
+    "endswith",
+    "ltrimstr",
+    "rtrimstr",
+    // The engine truncates a fractional code point, writes U+FFFD for an
+    // invalid one, and raises jq's messages.
+    "implode",
 ];
 
 fn find<'a>(name: &str, table: &'a [Def]) -> Option<&'a Def> {

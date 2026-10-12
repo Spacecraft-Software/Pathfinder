@@ -25,7 +25,8 @@ def until(cond; update): def rec: if cond then . else update | rec end; rec;
 # Paths
 def paths:    skip(1; path      (..));
 def paths(p): skip(1; path_value(..)) | if .[1] | p then .[0] else empty end;
-def getpath($path): reduce $path[] as $p (.; .[$p]);
+# Pathfinder: jq's message for a path that is no array.
+def getpath($path): if $path < [] or $path >= {} then error("Path must be specified as an array") else reduce $path[] as $p (.; .[$p]) end;
 def setpath($path; $x): getpath($path) = $x;
 def delpaths($paths): reduce $paths[] as $path (.; getpath($path) |= empty);
 

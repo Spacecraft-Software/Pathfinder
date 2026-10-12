@@ -373,6 +373,17 @@ impl jaq_std::ValT for Val {
         }
     }
 
+    fn jq_type(&self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Bool(_) => "boolean",
+            Self::Num(_) => "number",
+            Self::BStr(_) | Self::TStr(_) => "string",
+            Self::Arr(_) => "array",
+            Self::Obj(_) => "object",
+        }
+    }
+
     fn as_sub_str(&self, sub: &[u8]) -> Self {
         match self {
             Self::BStr(b) => Self::byte_str(b.slice_ref(sub)),

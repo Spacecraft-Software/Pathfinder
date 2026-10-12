@@ -85,7 +85,8 @@ fn explode_implode() {
     give(json!("y̆"), "explode | implode", json!("y̆"));
 }
 
-yields!(implode_invalid, "[1114112] | try implode catch -1", -1);
+// Pathfinder: jq 1.8.1 writes U+FFFD for a code point outside Unicode.
+yields!(implode_invalid, "[1114112] | implode", "\u{FFFD}");
 
 yields!(
     encode_base64,
