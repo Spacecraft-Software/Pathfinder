@@ -17,10 +17,11 @@
 //! - `module` metadata that is not a constant object.
 //! - `?//` anywhere but between destructuring patterns: jq's lexer reads
 //!   `.a?//1` as `.a ?// 1`, a syntax error, where jaq reads `.a? // 1`.
-//! - A call, in reachable code, to a function jq does not define but the
-//!   engine does: jaq's own helpers (`isarray`, `tobytes`, `halt/1`, …) are
-//!   callable from a filter, and jq answers `isarray/0 is not defined`
-//!   ([`undefined_calls`], PRD R-004).
+//! - A call, in reachable code, to a function jq does not define: jq answers
+//!   `isarray/0 is not defined`. The engine defines helpers of its own
+//!   (`isarray`, `tobytes`, `halt/1`, …) that a filter could otherwise call
+//!   (PRD R-004), and it words an unknown name its own way
+//!   ([`undefined_calls`]).
 //!
 //! jq's folding is narrow, and so is this module's: literals, `$__loc__`,
 //! arrays and objects of constants, parentheses, `c | .`, and arithmetic or
@@ -132,54 +133,64 @@ pub fn module_header(src: &str) -> Option<CompileError> {
     })
 }
 
-/// Functions the engine defines and jq 1.8.1 does not, as `(name, arity)`.
-///
-/// Measured: every name and arity the engine crates define (their `defs.jq`
-/// files and native functions) against `jq -n builtins`, then each one
-/// called under jq 1.8.1, which answers `name/arity is not defined`. They are
-/// jaq's helpers and extensions; jaq's own definitions call several of them,
-/// so the engine keeps them and a filter may not call them.
-const ENGINE_ONLY: &[(&str, usize)] = &[
-    ("capture_of_match", 0),
-    ("debug_empty", 0),
-    ("decode_base64", 0),
-    ("decode_uri", 0),
-    ("encode_base64", 0),
-    ("encode_uri", 0),
-    ("error_empty", 0),
-    ("escape_html", 0),
-    ("escape_sh", 0),
-    ("halt", 1),
-    ("ilogb", 0),
-    ("isarray", 0),
-    ("isboolean", 0),
-    ("isnumber", 0),
-    ("isobject", 0),
-    ("isstring", 0),
-    ("key_values", 0),
-    ("matches", 2),
-    ("max_by_or_empty", 1),
-    ("min_by_or_empty", 1),
-    ("path_value", 1),
-    ("pow10", 0),
-    ("split_", 2),
-    ("split_matches", 2),
-    ("stderr_empty", 0),
-    ("tobytes", 0),
-    ("totype", 2),
-    ("unescape_html", 0),
-];
+/// Whether jq 1.8.1 defines `name/arity` without the program's help: one of
+/// its `builtins` (`prelude::JQ_BUILTINS`, captured from jq), a literal, or
+/// a name starting with `_`. jq leaves its internal `_` builtins out of
+/// `builtins` (`_modify/2` runs), so those are left to the engine.
+fn defined_by_jq(name: &str, arity: usize) -> bool {
+    static BUILTINS: std::sync::OnceLock<Vec<(String, usize)>> = std::sync::OnceLock::new();
+    let builtins = BUILTINS.get_or_init(|| {
+        crate::prelude::JQ_BUILTINS
+            .split('"')
+            .filter_map(|entry| {
+                let (n, a) = entry.rsplit_once('/')?;
+                Some((n.to_owned(), a.parse().ok()?))
+            })
+            .collect()
+    });
+    name.starts_with('_')
+        || (arity == 0 && matches!(name, "true" | "false" | "null"))
+        || builtins.iter().any(|(n, a)| n == name && *a == arity)
+}
 
-/// Whether the tokens name a function of [`ENGINE_ONLY`] anywhere: the cheap
-/// test before [`undefined_calls`] parses.
-pub fn has_engine_only_name(toks: &[Token]) -> bool {
-    toks.iter().any(|t| match &t.tok {
-        Tok::Ident(name) => ENGINE_ONLY.iter().any(|(n, _)| n == name),
+/// Whether the tokens may call a name jq does not define: the cheap test
+/// before [`undefined_calls`] parses. Each identifier is taken as a call
+/// with the arguments the tokens after it give it, counted as the `;`s at
+/// the depth of a `(` that follows it. Identifiers that are no calls (object
+/// keys, `def` names) can only make it parse when it need not; a program
+/// calling only builtins, the common case, is never parsed for this.
+pub fn has_unknown_name(toks: &[Token]) -> bool {
+    toks.iter().enumerate().any(|(i, t)| match &t.tok {
+        Tok::Ident(name) => !defined_by_jq(name, call_arity(&toks[i + 1..])),
         Tok::Str(parts) => parts
             .iter()
-            .any(|p| matches!(p, StrPart::Interp(inner, _) if has_engine_only_name(inner))),
+            .any(|p| matches!(p, StrPart::Interp(inner, _) if has_unknown_name(inner))),
         _ => false,
     })
+}
+
+/// The arguments of a call whose name precedes `after`: none without a `(`,
+/// else one more than its `;`s at the parenthesis' own depth.
+fn call_arity(after: &[Token]) -> usize {
+    if !matches!(after.first().map(|t| &t.tok), Some(Tok::Op("("))) {
+        return 0;
+    }
+    let mut depth = 0usize;
+    let mut arity = 1;
+    for t in after {
+        match &t.tok {
+            Tok::Op("(" | "[" | "{") => depth += 1,
+            Tok::Op(")" | "]" | "}") => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            Tok::Op(";") if depth == 1 => arity += 1,
+            _ => {}
+        }
+    }
+    arity
 }
 
 /// A name bound where a call is resolved: a definition, or a parameter.
@@ -208,8 +219,8 @@ fn bind<'a>(
     })
 }
 
-/// The calls jq rejects as undefined because only the engine defines them,
-/// in the order jq reports them; spans are relative to the parsed text.
+/// The calls jq rejects as undefined, in the order jq reports them; spans
+/// are relative to the parsed text.
 ///
 /// jq checks only reachable code: it drops a definition nothing calls before
 /// it looks for undefined names, so `def f: isarray; 1` runs and
@@ -262,7 +273,7 @@ fn walk_calls<'a>(
                         walk_calls(&def.body, &inner, seen, out);
                     }
                 }
-                None if ENGINE_ONLY.contains(&(name.as_str(), args.len())) => {
+                None if !defined_by_jq(name, args.len()) => {
                     out.push(CompileError {
                         message: format!("{name}/{} is not defined", args.len()),
                         span: Span::new(n.span.start, n.span.start + name.len()),

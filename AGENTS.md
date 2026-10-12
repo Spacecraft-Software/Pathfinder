@@ -204,12 +204,14 @@ print. To keep the `jq` name untouched:
   parser. Only a construct *proven* to be a jq compile error exits 3: a constant
   non-string object key (by jq's own folding rules, `check.rs`), non-constant or
   non-object `module` metadata, a parse failure *at* a `?//` token, and a
-  reachable call to a function only the engine defines (`check::ENGINE_ONLY`,
-  `undefined_calls`: jaq's helpers such as `isarray` and `tobytes`, which a
-  filter could otherwise call). That last check follows jq's scoping: a
-  definition counts only once something reachable calls it, arguments always
-  count, and an `import`/`include` or a `~/.jq` file turns it off. A new
-  engine-only name found by `ENGINE_ONLY`'s measurement goes into that list.
+  reachable call to a name/arity that is neither one of jq 1.8.1's
+  `builtins` (`prelude::JQ_BUILTINS`), a literal, a `_` name, nor defined by
+  the program (`check::undefined_calls`). That covers jaq's own helpers
+  (`isarray`, `tobytes`, `halt/1`, …), which a filter could otherwise call,
+  and replaces jaq's report of an unknown name, which quoted the whole
+  prelude. It follows jq's scoping: a definition counts only once something
+  reachable calls it, arguments always count, and an `import`/`include` or a
+  `~/.jq` file turns it off.
 - **Depth is bounded, because every pass recurses on the native stack.**
   The lexer stops at `MAX_INTERP` nested interpolations, the parser at
   `MAX_NESTING` recursive calls, `MAX_FOLDS` chain links (`,`, binary

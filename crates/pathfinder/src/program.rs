@@ -232,7 +232,7 @@ fn compile_error(src: &str, header_end: usize) -> Option<CompileError> {
     } else {
         None
     };
-    if e.is_none() && check::has_engine_only_name(&toks) && !definitions_elsewhere(header_end) {
+    if e.is_none() && check::has_unknown_name(&toks) && !definitions_elsewhere(header_end) {
         let tree = crate::syntax::parse::parse(body).ok()?;
         let mut found = check::undefined_calls(&tree).into_iter();
         e = found.next().map(|mut first| {

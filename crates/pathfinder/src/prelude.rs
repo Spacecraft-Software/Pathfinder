@@ -47,7 +47,7 @@ use std::fmt::Write as _;
 /// Deliberately jq's list rather than a description of what actually resolves
 /// under Pathfinder: scripts call `builtins` to feature-probe *jq*, so jq's
 /// answer is the compatible one.
-const JQ_BUILTINS: &str = include_str!("embed/jq-builtins.json");
+pub const JQ_BUILTINS: &str = include_str!("embed/jq-builtins.json");
 
 /// The body of an auto-vivifying `setpath`, and the reason this module exists.
 ///
