@@ -101,36 +101,67 @@ impl<V> Error<V> {
             Part::Val(v),
         ])))
     }
+}
 
-    /// Create a type error.
+/// Pathfinder: type, arithmetic and indexing errors in jq 1.8.1's words,
+/// where jaq said `cannot use 1 as number`, `cannot calculate 1 + "a"` and
+/// `cannot index 1 with "a"`.
+impl<V: crate::ValT> Error<V> {
+    /// Create a type error: `v` is not a `typ`. The types jq has one
+    /// message for get it; any other keeps jaq's, as jq's message for those
+    /// depends on the function.
     pub fn typ(v: V, typ: &'static str) -> Self {
         use Part::{Str, Val};
-        [Str("cannot use "), Val(v), Str(" as "), Str(typ)]
-            .into_iter()
-            .collect()
+        let jq = match typ {
+            "iterable (array or object)" => alloc::format!("Cannot iterate over {}", v.jq_quoted()),
+            "number" => alloc::format!("{} number required", v.jq_quoted()),
+            "rangeable (array or string)" => {
+                alloc::format!("Cannot index {} with object", v.jq_type())
+            }
+            _ => {
+                return [Str("cannot use "), Val(v), Str(" as "), Str(typ)]
+                    .into_iter()
+                    .collect()
+            }
+        };
+        Self::new(V::from(jq))
     }
 
-    /// Create a math error.
+    /// Create a math error: `{l} and {r} cannot be added`, …, with jq's
+    /// remark on a zero divisor (one that `%` truncates to zero included).
     pub fn math(l: V, op: crate::ops::Math, r: V) -> Self {
-        use Part::{Str, Val};
-        [
-            Str("cannot calculate "),
-            Val(l),
-            Str(" "),
-            Str(op.as_str()),
-            Str(" "),
-            Val(r),
-        ]
-        .into_iter()
-        .collect()
+        use crate::ops::Math;
+        let verb = match op {
+            Math::Add => "cannot be added",
+            Math::Sub => "cannot be subtracted",
+            Math::Mul => "cannot be multiplied",
+            Math::Div => "cannot be divided",
+            Math::Rem => "cannot be divided (remainder)",
+        };
+        let numbers = l.jq_type() == "number" && r.jq_type() == "number";
+        let zero = numbers
+            && matches!(op, Math::Div | Math::Rem)
+            && r > V::from(-1_isize)
+            && r < V::from(1_isize);
+        let why = if zero {
+            " because the divisor is zero"
+        } else {
+            ""
+        };
+        let msg = alloc::format!("{} and {} {verb}{why}", l.jq_quoted(), r.jq_quoted());
+        Self::new(V::from(msg))
     }
 
-    /// Create an indexing error.
+    /// Create an indexing error: `Cannot index number with string "a"`, the
+    /// key's text shown when it is a string of fewer than 30 bytes.
     pub fn index(l: V, r: V) -> Self {
-        use Part::{Str, Val};
-        [Str("cannot index "), Val(l), Str(" with "), Val(r)]
-            .into_iter()
-            .collect()
+        let msg = match r.jq_string() {
+            Some(k) if k.len() < 30 => {
+                alloc::format!("Cannot index {} with string \"{k}\"", l.jq_type())
+            }
+            _ => alloc::format!("Cannot index {} with {}", l.jq_type(), r.jq_type()),
+        };
+        Self::new(V::from(msg))
     }
 }
 

@@ -263,12 +263,14 @@ yields!(
 yields!(
     try_catch_short_circuit,
     r#"[try ("1", "2", []["3"], "4") catch .]"#,
-    ["1", "2", r#"cannot index [] with "3""#]
+    // Pathfinder: jq 1.8.1's message.
+    ["1", "2", r#"Cannot index array with string "3""#]
 );
 yields!(
     try_catch_nested,
     r#"try try []["a"] catch []["b"] catch ."#,
-    r#"cannot index [] with "b""#
+    // Pathfinder: jq 1.8.1's message.
+    r#"Cannot index array with string "b""#
 );
 yields!(
     try_catch_multi_valued,

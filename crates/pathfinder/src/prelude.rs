@@ -72,13 +72,13 @@ const SETPATH_BODY: &str = concat!(
     "if ($p|length) == 0 then $v else ($p[0]) as $k | ($k|type) as $kt ",
     // The container, created from null by key type, or the type error jq gives.
     "| (if . == null then (if $kt == \"number\" or $kt == \"object\" then [] ",
-    "elif $kt == \"string\" then {} else error(\"Cannot index null with \\($kt)\") end) ",
+    "elif $kt == \"string\" then {} else error(\"Cannot index null with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\") end) ",
     "elif type == \"object\" then (if $kt == \"string\" then . ",
-    "else error(\"Cannot index object with \\($kt)\") end) ",
+    "else error(\"Cannot index object with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\") end) ",
     "elif type == \"array\" then (if $kt == \"number\" or $kt == \"object\" then . ",
-    "else error(\"Cannot update field at \\($kt) index of array\") end) ",
+    "else error(if $kt == \"array\" then \"Cannot update field at array index of array\" else \"Cannot index array with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\" end) end) ",
     "elif type == \"string\" and $kt == \"object\" then error(\"Cannot update string slices\") ",
-    "else error(\"Cannot index \\(type) with \\($kt)\") end) as $c ",
+    "else error(\"Cannot index \\(type) with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\") end) as $c ",
     // A slice key: both bounds must be numbers; the slice is replaced by an array.
     "| if $kt == \"object\" then ",
     "(if ($k|has(\"start\") and has(\"end\")) and ([$k.start, $k.end] | all(type == \"number\" or type == \"null\")) | not ",
@@ -912,11 +912,11 @@ static INTERNAL: &[Def] = &[
              else . end \
              elif $ct == \"null\" then \
              (if $kt == \"string\" then setpath($p[:$i]; {}) elif $kt == \"object\" then setpath($p[:$i]; []) \
-             else error(\"Cannot index null with \\($kt)\") end) \
-             elif $ct == \"object\" then (if $kt == \"string\" then . else error(\"Cannot index object with \\($kt)\") end) \
-             elif $ct == \"array\" then (if $kt == \"object\" then . else error(\"Cannot update field at \\($kt) index of array\") end) \
+             else error(\"Cannot index null with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\") end) \
+             elif $ct == \"object\" then (if $kt == \"string\" then . else error(\"Cannot index object with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\") end) \
+             elif $ct == \"array\" then (if $kt == \"object\" then . else error(if $kt == \"array\" then \"Cannot update field at array index of array\" else \"Cannot index array with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\" end) end) \
              elif $ct == \"string\" and $kt == \"object\" then error(\"Cannot update string slices\") \
-             else error(\"Cannot index \\($ct) with \\($kt)\") end); \
+             else error(\"Cannot index \\($ct) with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\") end); \
              def _pf_vivify(paths): reduce path(paths) as $p (.; \
              if ($p|length) > 0 and (try (($p[-1]) as $k | getpath($p[:-1]) \
              | (type == \"object\" and ($k|type) == \"string\") \
@@ -1226,10 +1226,11 @@ fn json_string(s: &str) -> String {
 /// Names that are missing from jaq but cannot be expressed in the jq language.
 ///
 /// Returned so the caller can emit one precise diagnostic naming the construct,
-/// rather than letting jaq answer the less helpful `undefined filter`.
-pub fn inexpressible(name: &str) -> Option<&'static str> {
+/// rather than letting jaq answer the less helpful `undefined filter`. The
+/// native engine has `input_line_number` (from its reader's position).
+pub fn inexpressible(name: &str, native: bool) -> Option<&'static str> {
     match name {
-        "input_line_number" => {
+        "input_line_number" if !native => {
             Some("jaq tracks no input position, so there is no line number to report")
         }
         "modulemeta" | "get_search_list" | "get_jq_origin" | "get_prog_origin" => {
@@ -1487,9 +1488,10 @@ mod tests {
 
     #[test]
     fn inexpressible_names_are_named_not_polyfilled() {
-        assert!(inexpressible("input_line_number").is_some());
-        assert!(inexpressible("modulemeta").is_some());
-        assert!(inexpressible("tostream").is_none());
+        assert!(inexpressible("input_line_number", false).is_some());
+        assert!(inexpressible("input_line_number", true).is_none());
+        assert!(inexpressible("modulemeta", true).is_some());
+        assert!(inexpressible("tostream", false).is_none());
     }
 
     #[test]

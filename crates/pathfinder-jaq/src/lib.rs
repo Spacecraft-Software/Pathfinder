@@ -215,6 +215,7 @@ fn real_main(
         };
         let location = || pos.location("<stdin>", None);
         let filename = || pos.filename("<stdin>");
+        let line_number = || pos.line_number(None);
         let failed = || pos.failed();
         let (es, st) = (cli.exit_status, &mut status);
         let ran = filter::run_jq(
@@ -226,6 +227,7 @@ fn real_main(
             st,
             &location,
             &filename,
+            &line_number,
             &failed,
             |v| write(out, writer, &v),
         );
@@ -263,6 +265,7 @@ fn real_main(
             let in_memory = matches!(format, Format::Json).then_some(&bytes[..]);
             let location = || pos.location(&name, in_memory);
             let filename = || pos.filename(&name);
+            let line_number = || pos.line_number(in_memory);
             let (es, st) = (cli.exit_status, &mut status);
             let failed = || false;
             filter::run_jq(
@@ -274,6 +277,7 @@ fn real_main(
                 st,
                 &location,
                 &filename,
+                &line_number,
                 &failed,
                 |v| write(out, writer, &v),
             )?;

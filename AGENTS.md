@@ -252,10 +252,13 @@ print. To keep the `jq` name untouched:
   `and`/`or` (several µs each) are expensive; comparisons (`. < ""` is "not a
   string, number or later type"), nested `if`s, inline text and `label`/`break`
   are cheap. Type tests in a per-element path are written as comparisons.
-- **Error text reaches scripts only through `catch`.** The rewriter wraps a
-  handler that reads its input in `_pf_err`, which turns jaq's templates back
-  into jq's wording; a builtin whose jq message names it gets a guard that runs
-  jaq's builtin first and re-raises with jq's text only on a wrong input type.
+- **Error text reaches scripts only through `catch`.** The native engine
+  words its errors as jq does (M20): the core's `Error::typ`/`math`/`index`
+  and the builtins raise jq 1.8.1's messages, built with `ValT::jq_quoted`.
+  On the jaq engine the rewriter wraps a handler that reads its input in
+  `_pf_err`, which turns jaq's templates back into jq's wording, and a
+  builtin whose jq message names it gets a guard that runs jaq's builtin
+  first and re-raises with jq's text only on a wrong input type.
 - **The packaged jaq words an uncaught error by the same rules.**
   `packaging/jaq/0008-uncaught-errors.patch` adds `jaq/src/jq.rs`, whose
   `wording` is a Rust transcription of `_pf_err` (and its `dump` of

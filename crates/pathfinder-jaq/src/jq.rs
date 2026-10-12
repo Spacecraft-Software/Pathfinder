@@ -231,6 +231,16 @@ impl Position {
         lines.map_or_else(|| "<unknown>".into(), |n| format!("{name}:{n}"))
     }
 
+    /// Pathfinder: what `input_line_number` answers: the lines jq's reader
+    /// has fetched from the input being read, the line of [`Self::location`]
+    /// (0 before any input is read).
+    pub fn line_number(&self, bytes: Option<&[u8]>) -> usize {
+        match (bytes, self.at.get()) {
+            (Some(bytes), Some(at)) => self.file_lines(bytes, at),
+            _ => self.lines.get().unwrap_or(0),
+        }
+    }
+
     /// Pathfinder: what `input_filename` answers: the file being read, or
     /// `None` before any input has been read, as in jq 1.8.1. In a stream of
     /// several files it is the one the reader has entered, which can be the

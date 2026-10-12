@@ -118,7 +118,7 @@ fn assemble_here(
     let inexpressible: Vec<(String, &'static str)> = info
         .called
         .iter()
-        .filter_map(|n| prelude::inexpressible(n).map(|why| (n.clone(), why)))
+        .filter_map(|n| prelude::inexpressible(n, ctx.native).map(|why| (n.clone(), why)))
         .collect();
 
     let header = &src[..info.header_end];

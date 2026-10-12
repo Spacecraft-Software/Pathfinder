@@ -170,26 +170,6 @@ pub trait ValT: jaq_core::ValT + Ord + From<f64> + From<usize> {
 
     /// Interpret bytes as UTF-8 string value.
     fn from_utf8_bytes(b: impl AsRef<[u8]> + Send + 'static) -> Self;
-
-    /// Pathfinder: the value's type as jq names it (`"number"`, `"object"`).
-    fn jq_type(&self) -> &'static str;
-
-    /// Pathfinder: the value as jq's error messages show it, its type and
-    /// its JSON text cut short: `array ([1,2,3,4,5,...)`.
-    fn jq_quoted(&self) -> String {
-        let s = self.to_string();
-        if s.len() <= 14 {
-            return alloc::format!("{} ({s})", self.jq_type());
-        }
-        // jq keeps the first 11 bytes, never splitting a character.
-        let end = s
-            .char_indices()
-            .map(|(i, c)| i + c.len_utf8())
-            .take_while(|&end| end <= 11)
-            .last()
-            .unwrap_or(0);
-        alloc::format!("{} ({}...)", self.jq_type(), &s[..end])
-    }
 }
 
 /// Convenience trait for implementing the core functions.
@@ -411,6 +391,89 @@ impl Iterator for Explode<'_> {
     }
 }
 
+/// Pathfinder: the array a `…_by(f)` function works on, failing as jq's
+/// does. jq writes them as `_impl(map([f]))`: on an object `map` succeeds and
+/// the implementation fails with both (`object ({}) and array ([]) cannot be
+/// sorted, as they are not both arrays`); anything else fails in `map`.
+fn by_input<'a, V: ValT + 'a>(
+    v: V,
+    f: &dyn Fn(V) -> ValXs<'a, V>,
+    verb: &str,
+) -> Result<Vec<V>, Exn<'a, V>> {
+    let v = match v.into_seq() {
+        Ok(a) => return Ok(a),
+        Err(v) => v,
+    };
+    if v.jq_type() != "object" {
+        let q = v.jq_quoted();
+        return Err(Exn::from(Error::str(alloc::format!(
+            "Cannot iterate over {q}"
+        ))));
+    }
+    let mut mapped = Vec::new();
+    for x in v.clone().values() {
+        let outputs: Vec<V> = f(x?).collect::<Result<_, _>>()?;
+        mapped.push(V::from_iter(outputs));
+    }
+    let (q, m) = (v.jq_quoted(), V::from_iter(mapped).jq_quoted());
+    let are = if verb == "sorted" {
+        ", as they are not both arrays"
+    } else {
+        ""
+    };
+    Err(Exn::from(Error::str(alloc::format!(
+        "{q} and {m} cannot be {verb}{are}"
+    ))))
+}
+
+/// Pathfinder: jq's `min` (`max` when `max`) of an array, `null` when empty.
+fn min_max<V: ValT>(v: V, max: bool) -> ValR<V> {
+    let a: Vec<V> = v.into_seq().map_err(|v| {
+        let q = v.jq_quoted();
+        Error::str(alloc::format!("{q} and {q} cannot be iterated over"))
+    })?;
+    let mut best: Option<V> = None;
+    for x in a {
+        best = match best {
+            Some(b) if (max && x < b) || (!max && x >= b) => Some(b),
+            _ => Some(x),
+        };
+    }
+    match best {
+        Some(b) => Ok(b),
+        // `null`, as the engine's `null` makes it.
+        None => core::iter::empty::<V>()
+            .collect::<V>()
+            .index(&V::from(0usize)),
+    }
+}
+
+/// Pathfinder: jq's `@sh`: the input, or each element of an input array,
+/// quoted for a POSIX shell when a string and written as `tostring` writes it
+/// otherwise; an array or object inside is jq's error.
+fn sh<V: ValT>(v: V) -> ValR<V> {
+    let items: Vec<V> = v.into_seq().unwrap_or_else(|v| alloc::vec![v]);
+    let mut out = String::new();
+    for (i, x) in items.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        if let Some(s) = x.as_utf8_bytes() {
+            out.push('\'');
+            out.push_str(&String::from_utf8_lossy(s).replace('\'', "'\\''"));
+            out.push('\'');
+        } else if matches!(x.jq_type(), "array" | "object") {
+            let q = x.jq_quoted();
+            return Err(Error::str(alloc::format!(
+                "{q} can not be escaped for shell"
+            )));
+        } else {
+            out.push_str(&x.to_string());
+        }
+    }
+    Ok(V::from(out))
+}
+
 /// Pathfinder: jq's messages for `explode` and the functions written with it.
 const EXPLODE: &str = "explode input must be a string";
 const STARTS: &str = "startswith() requires string inputs";
@@ -530,8 +593,8 @@ where
         ("sort_by", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
             let f = move |v| f.run((fc.clone(), v));
-            // Pathfinder: jq's `sort_by` loops over its input.
-            box_once(cv.1.into_vec_iter().map_err(Exn::from).and_then(|mut a| {
+            // Pathfinder: jq's messages (`by_input`).
+            box_once(by_input(cv.1, &f, "sorted").and_then(|mut a| {
                 sort_by(&mut a, f)?;
                 Ok(D::V::from_iter(a))
             }))
@@ -539,17 +602,19 @@ where
         ("group_by", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
             let f = move |v| f.run((fc.clone(), v));
-            box_once((|| group_by(cv.1.into_vec_iter()?, f))())
+            box_once(by_input(cv.1, &f, "sorted").and_then(|a| group_by(a, f)))
         }),
         ("min_by_or_empty", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
-            let f = move |a| cmp_by(a, |v| f.run((fc.clone(), v)), |my, y| y < my);
-            once_or_empty(cv.1.into_vec_iter().map_err(Exn::from).and_then(f))
+            let f = move |v| f.run((fc.clone(), v));
+            let a = by_input(cv.1, &f, "iterated over");
+            once_or_empty(a.and_then(|a| cmp_by(a, f, |my, y| y < my)))
         }),
         ("max_by_or_empty", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
-            let f = move |a| cmp_by(a, |v| f.run((fc.clone(), v)), |my, y| y >= my);
-            once_or_empty(cv.1.into_vec_iter().map_err(Exn::from).and_then(f))
+            let f = move |v| f.run((fc.clone(), v));
+            let a = by_input(cv.1, &f, "iterated over");
+            once_or_empty(a.and_then(|a| cmp_by(a, f, |my, y| y >= my)))
         }),
         // Pathfinder: jq's messages. jq 1.8.1 writes `ltrimstr` with
         // `startswith` and `rtrimstr` with `endswith`, so they fail as those.
@@ -588,6 +653,14 @@ where
         ("rtrim", v(0), |cv| {
             bome(cv.1.trim_utf8_with(ByteSlice::trim_end))
         }),
+        // Pathfinder: `min` and `max` natively, with jq's message for a value
+        // that is no array; of equal values, `min` keeps the first and `max`
+        // the last, as jq does.
+        ("min", v(0), |cv| bome(min_max(cv.1, false))),
+        ("max", v(0), |cv| bome(min_max(cv.1, true))),
+        // Pathfinder: `@sh` natively, with jq's message for a value that
+        // cannot be quoted.
+        ("@sh", v(0), |cv| bome(sh(cv.1))),
         ("escape_sh", v(0), |cv| {
             bome(
                 cv.1.try_as_utf8_bytes()
@@ -800,8 +873,21 @@ where
 {
     use jiff::tz::TimeZone;
     Box::new([
+        // Pathfinder: jq 1.8.1 writes `fromdateiso8601` with `strptime`, so
+        // it fails with that function's messages.
         ("fromdateiso8601", v(0), |cv| {
-            bome(cv.1.try_as_str().and_then(time::from_iso8601))
+            let both = "strptime/1 requires string inputs and arguments";
+            let s =
+                cv.1.utf8_or(both)
+                    .and_then(|s| core::str::from_utf8(s).map_err(Error::str));
+            bome(s.and_then(|s| {
+                time::from_iso8601(s).map_err(|_no_match| {
+                    let v = &cv.1;
+                    Error::str(alloc::format!(
+                        "date {v} does not match format \"%Y-%m-%dT%H:%M:%SZ\""
+                    ))
+                })
+            }))
         }),
         ("todateiso8601", v(0), |cv| {
             bome(time::to_iso8601(&cv.1).map(D::V::from))

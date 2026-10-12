@@ -74,6 +74,32 @@ pub trait ValT:
     /// The number should adhere to the format accepted by [`f64::from_str`].
     fn from_num(n: &str) -> ValR<Self>;
 
+    /// Pathfinder: the value's type as jq names it (`"number"`, `"object"`),
+    /// for jq's error messages.
+    fn jq_type(&self) -> &'static str;
+
+    /// Pathfinder: a string's text, unescaped, for jq's error messages.
+    fn jq_string(&self) -> Option<alloc::string::String>;
+
+    /// Pathfinder: the value as jq's error messages show it, its type and
+    /// its JSON text cut short: `array ([1,2,3,4,5,...)` (jq's
+    /// `jv_dump_string_trunc` into 15 bytes).
+    fn jq_quoted(&self) -> alloc::string::String {
+        use alloc::string::ToString;
+        let s = self.to_string();
+        if s.len() <= 14 {
+            return alloc::format!("{} ({s})", self.jq_type());
+        }
+        // jq keeps the first 11 bytes, never splitting a character.
+        let end = s
+            .char_indices()
+            .map(|(i, c)| i + c.len_utf8())
+            .take_while(|&end| end <= 11)
+            .last()
+            .unwrap_or(0);
+        alloc::format!("{} ({}...)", self.jq_type(), &s[..end])
+    }
+
     /// Create an associative map (or object) from a sequence of key-value pairs.
     ///
     /// This is used when creating values with the syntax `{k: v}`.

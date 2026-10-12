@@ -68,8 +68,7 @@ def add: add(.[]);
 # Arrays
 def min_by(f): reduce min_by_or_empty(f) as $x (null; $x);
 def max_by(f): reduce max_by_or_empty(f) as $x (null; $x);
-def min: min_by(.);
-def max: max_by(.);
+# Pathfinder: `min` and `max` are native, with jq's message for a non-array.
 def unique_by(f): [group_by(f)[] | .[0]];
 # Pathfinder: jq's `unique` sorts, and fails as `sort` does.
 def unique: if . < [] or . >= {} then sort else unique_by(.) end;
@@ -118,7 +117,7 @@ def   todate:   todateiso8601;
 def fromdate: fromdateiso8601;
 
 # Formatting
-def @sh: [if isarray then .[] end | if . >= "" then "'\(escape_sh)'" else "\(.)" end] | join(" ");
+# Pathfinder: `@sh` is native, with jq's message for an array or object.
 def @text: "\(.)";
 def @html   : tostring | escape_html;
 def @htmld  : tostring | unescape_html;

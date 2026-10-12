@@ -168,6 +168,24 @@ fn rc_unwrap_or_clone<T: Clone>(a: Rc<T>) -> T {
 }
 
 impl jaq_core::ValT for Val {
+    fn jq_type(&self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Bool(_) => "boolean",
+            Self::Num(_) => "number",
+            Self::BStr(_) | Self::TStr(_) => "string",
+            Self::Arr(_) => "array",
+            Self::Obj(_) => "object",
+        }
+    }
+
+    fn jq_string(&self) -> Option<String> {
+        match self {
+            Self::BStr(b) | Self::TStr(b) => Some(String::from_utf8_lossy(b).into_owned()),
+            _ => None,
+        }
+    }
+
     fn from_num(n: &str) -> ValR {
         Ok(Self::Num(Num::from_str(n)))
     }
@@ -373,17 +391,6 @@ impl jaq_std::ValT for Val {
         }
     }
 
-    fn jq_type(&self) -> &'static str {
-        match self {
-            Self::Null => "null",
-            Self::Bool(_) => "boolean",
-            Self::Num(_) => "number",
-            Self::BStr(_) | Self::TStr(_) => "string",
-            Self::Arr(_) => "array",
-            Self::Obj(_) => "object",
-        }
-    }
-
     fn as_sub_str(&self, sub: &[u8]) -> Self {
         match self {
             Self::BStr(b) => Self::byte_str(b.slice_ref(sub)),
@@ -558,6 +565,10 @@ impl Val {
                 use jaq_core::ValT;
                 let start = o.get(&Val::utf8_str("start"));
                 let end = o.get(&Val::utf8_str("end"));
+                // Pathfinder: jq slices with an object only when it has both.
+                if start.is_none() || end.is_none() {
+                    return Err(Error::str("Array/string slice indices must be integers"));
+                }
                 return v.range(start..end).map(Some);
             }
             (s, _) => return Err(Error::index(s, index.clone())),

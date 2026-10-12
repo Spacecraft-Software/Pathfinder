@@ -122,7 +122,10 @@ impl Rewrites {
     };
 
     /// What the native engine still needs.
-    pub const NATIVE: Self = Self::ALL;
+    pub const NATIVE: Self = Self {
+        catch_wording: false,
+        ..Self::ALL
+    };
 }
 
 /// Rewrite `src` if it needs it; `None` means "pass it through unchanged".

@@ -404,6 +404,19 @@ changes land once, in the crates, not in `packaging/jaq/`.
   number as a byte). In `defs.jq`, `unique` fails as `sort` does and
   `getpath` names a path that is no array. jaq's unit test of `implode`
   now expects jq's answer.
+- The core's errors are jq's (T-022): `ValT` gains `jq_type`, `jq_string`
+  and `jq_quoted` (moved up from `pathfinder-std`), and `Error::typ`,
+  `Error::math` and `Error::index` build jq 1.8.1's messages (`Cannot iterate
+  over number (1)`, `number (1) and string ("a") cannot be added`, `Cannot
+  index number with string "a"`, `... number required`) where jaq said
+  `cannot use 1 as iterable (array or object)`, `cannot calculate 1 + "a"`
+  and `cannot index 1 with "a"`. Also jq's: `keys`/`to_entries` on a value
+  without keys, `contains` between types, `@csv`/`@tsv`, a native `@sh`,
+  native `min`/`max`, the `…_by` functions on an object, `fromdateiso8601`,
+  an object slice without both bounds. jaq's tests asserting jaq's wording
+  now expect jq's.
+- `input_line_number` is a native function on `Data::line_number`, the
+  reader position's line count (`Position::line_number`).
 
 ## Licence of Pathfinder's changes
 

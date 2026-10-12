@@ -29,6 +29,9 @@ pub struct Data<'a> {
     /// Pathfinder: the name of the file the reader has open, for
     /// `input_filename`; `None` before any input is read.
     pub filename: &'a dyn Fn() -> Option<String>,
+    /// Pathfinder: the lines the reader has fetched, for
+    /// `input_line_number`.
+    pub line_number: &'a dyn Fn() -> usize,
 }
 
 impl<'a> data::HasLut<'a, DataKind> for &'a Data<'a> {
@@ -77,6 +80,20 @@ pub fn funs() -> impl Iterator<Item = crate::Fun<DataKind>> {
     base_funs()
         .chain(jaq_fmts::funs())
         .chain(core::iter::once(input_filename()))
+        .chain(core::iter::once(input_line_number()))
+}
+
+/// Pathfinder: `input_line_number`, as jq 1.8.1 answers it: the lines its
+/// reader has fetched from the current input, the count its error locations
+/// show ([`Data::line_number`]).
+#[cfg(feature = "std-all")]
+fn input_line_number() -> crate::Fun<DataKind> {
+    jaq_core::native::run(("input_line_number", jaq_core::native::v(0), |cv| {
+        let n = (cv.0.data().line_number)();
+        Box::new(core::iter::once(Ok(Val::from(
+            isize::try_from(n).unwrap_or(isize::MAX),
+        ))))
+    }))
 }
 
 /// Pathfinder: `input_filename`, as jq 1.8.1 answers it: the file the reader
@@ -118,6 +135,7 @@ pub fn run<E>(
         lut: &filter.lut,
         inputs: &RcIter::new(inputs),
         filename: &|| None,
+        line_number: &|| 0,
     };
     let ctx = Ctx::new(&data, vars);
 

@@ -20,7 +20,11 @@ impl Val {
             Val::BStr(b) => Ok(Val::from(b.len())),
             Val::Arr(a) => Ok(Val::from(a.len())),
             Val::Obj(o) => Ok(Val::from(o.len())),
-            Val::Bool(_) => Err(Error::str(format_args!("{self} has no length"))),
+            // Pathfinder: jq's message.
+            Val::Bool(_) => Err(Error::str(format_args!(
+                "{} has no length",
+                jaq_core::ValT::jq_quoted(self)
+            ))),
         }
     }
 
@@ -184,8 +188,19 @@ fn base<D: for<'a> DataT<V<'a> = Val>>() -> Box<[Filter<RunPtr<D>>]> {
             bome(cv.1.to_bytes().map(Val::byte_str).map_err(fail))
         }),
         ("length", v(0), |cv| bome(cv.1.length())),
+        // Pathfinder: jq 1.8.1 compares containment only between values of
+        // one type, and words its error so.
         ("contains", v(1), |cv| {
-            unary(cv, |x, y| Ok(Val::from(x.contains(&y))))
+            unary(cv, |x, y| {
+                use jaq_core::ValT;
+                if x.jq_type() != y.jq_type() {
+                    let (x, y) = (x.jq_quoted(), y.jq_quoted());
+                    return Err(Error::str(format_args!(
+                        "{x} and {y} cannot have their containment checked"
+                    )));
+                }
+                Ok(Val::from(x.contains(&y)))
+            })
         }),
         ("has", v(1), |cv| {
             unary(cv, |v, k| v.index_opt(&k).map(|o| o.is_some().into()))

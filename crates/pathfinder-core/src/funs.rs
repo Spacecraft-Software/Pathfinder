@@ -42,10 +42,21 @@ where
             let from = cv.0.pop_var();
             Box::new(range(Ok(from), to, by))
         }),
+        // Pathfinder: jq's message for a value without keys.
         ("keys_unsorted", v(0), |cv| {
+            if !matches!(cv.1.jq_type(), "array" | "object") {
+                let q = cv.1.jq_quoted();
+                return bome(Err(Error::str(alloc::format!("{q} has no keys"))));
+            }
             bome(cv.1.key_values().map(|kv| kv.map(|(k, _v)| k)).collect())
         }),
+        // Pathfinder: `to_entries` is written with this; jq's is written with
+        // `keys_unsorted`, and fails as it does.
         ("key_values", v(0), |cv| {
+            if !matches!(cv.1.jq_type(), "array" | "object") {
+                let q = cv.1.jq_quoted();
+                return bome(Err(Error::str(alloc::format!("{q} has no keys"))));
+            }
             let f = |(k, v)| [k, v].into_iter().collect();
             bome(cv.1.key_values().map(|kv| kv.map(f)).collect())
         }),

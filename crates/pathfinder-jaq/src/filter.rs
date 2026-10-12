@@ -55,6 +55,7 @@ pub(crate) fn run_jq(
     status: &mut crate::jq::Status,
     location: &dyn Fn() -> String,
     filename: &dyn Fn() -> Option<String>,
+    line_number: &dyn Fn() -> usize,
     failed: &dyn Fn() -> bool,
     mut f: impl FnMut(Val) -> io::Result<()>,
 ) -> Result<(), Error> {
@@ -71,6 +72,7 @@ pub(crate) fn run_jq(
         lut: &filter.lut,
         inputs: &RcIter::new(inputs),
         filename,
+        line_number,
     };
     let ctx = Ctx::new(&data, vars);
     let mut inputs = if runner.null_input { null } else { data.inputs };
