@@ -227,13 +227,37 @@ fn compile_error(src: &str, header_end: usize) -> Option<CompileError> {
     }
     let body = &src[header_end..];
     let toks = crate::syntax::lex::lex(body).ok()?;
-    if !check::has_computed_key(&toks) && !check::has_alternative(&toks) {
-        return None;
+    let mut e = if check::has_computed_key(&toks) || check::has_alternative(&toks) {
+        check::program(body)
+    } else {
+        None
+    };
+    if e.is_none() && check::has_engine_only_name(&toks) && !definitions_elsewhere(header_end) {
+        let tree = crate::syntax::parse::parse(body).ok()?;
+        let mut found = check::undefined_calls(&tree).into_iter();
+        e = found.next().map(|mut first| {
+            first.more = found.collect();
+            first
+        });
     }
-    let mut e = check::program(body)?;
+    let mut e = e?;
+    for m in &mut e.more {
+        m.span.start += header_end;
+        m.span.end += header_end;
+    }
     e.span.start += header_end;
     e.span.end += header_end;
     Some(e)
+}
+
+/// Whether definitions this program does not show can be in scope: an
+/// `import` or `include` in its header, or a `~/.jq` file, which jq loads
+/// into every program. Then a call to an engine-only name may be the
+/// program's own, and is not refused.
+fn definitions_elsewhere(header_end: usize) -> bool {
+    header_end > 0
+        || std::env::var_os("HOME")
+            .is_some_and(|home| std::path::Path::new(&home).join(".jq").is_file())
 }
 
 /// Environment switch that routes every program through the parser and the

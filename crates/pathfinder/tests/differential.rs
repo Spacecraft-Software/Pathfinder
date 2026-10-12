@@ -231,6 +231,21 @@ static CASES: &[Case] = &[
         &["-c", "reduce .[] as {$a: [$b]} (0; . + $b)"],
     ),
     c("null", &["-c", "{(0):1}"]),
+    // Functions only the engine defines are jq's compile error, in reachable
+    // code only (PRD R-004).
+    c("null", &["isarray"]),
+    c("null", &[".a | \n  tobytes"]),
+    c("null", &["isarray, isstring"]),
+    c("null", &["[.[] | halt(1)]"]),
+    c("null", &["def f: isnumber; 1"]),
+    c("null", &["def isarray: 1; isarray"]),
+    c("null", &["def f(g): 1; f(isarray)"]),
+    c("null", &["def f: isarray; def f: 1; f"]),
+    c(
+        "null",
+        &["def r: if . > 0 then .-1|r else isarray end; 1|r"],
+    ),
+    c("null", &["\"\\(key_values)\""]),
     c("null", &["-c", ". as {(true):$foo} | $foo"]),
     c("null", &["-c", "{(1+1):2}"]),
     c("null", &["-c", "module (.+1); 0"]),
@@ -611,6 +626,21 @@ static PATCHED_CASES: &[Case] = &[
 /// as jq reports it, with its location, and the next input still runs; the
 /// exit status is the last input's. Also `debug` and `halt_error` output.
 static PATCHED_STDERR_CASES: &[Case] = &[
+    // Functions only the engine defines are jq's compile error, in reachable
+    // code only (PRD R-004).
+    c("null", &["isarray"]),
+    c("null", &[".a | \n  tobytes"]),
+    c("null", &["isarray, isstring"]),
+    c("null", &["[.[] | halt(1)]"]),
+    c("null", &["def f: isnumber; 1"]),
+    c("null", &["def isarray: 1; isarray"]),
+    c("null", &["def f(g): 1; f(isarray)"]),
+    c("null", &["def f: isarray; def f: 1; f"]),
+    c(
+        "null",
+        &["def r: if . > 0 then .-1|r else isarray end; 1|r"],
+    ),
+    c("null", &["\"\\(key_values)\""]),
     c("1 2", &["-c", ".a"]),
     c(r#"{"a":1} 1"#, &["-c", ".a"]),
     c(r#"1 {"a":1}"#, &["-c", ".a"]),

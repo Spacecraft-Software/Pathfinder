@@ -200,7 +200,13 @@ print. To keep the `jq` name untouched:
 - **A parse failure passes the filter through** — it may be a gap in this
   parser. Only a construct *proven* to be a jq compile error exits 3: a constant
   non-string object key (by jq's own folding rules, `check.rs`), non-constant or
-  non-object `module` metadata, and a parse failure *at* a `?//` token.
+  non-object `module` metadata, a parse failure *at* a `?//` token, and a
+  reachable call to a function only the engine defines (`check::ENGINE_ONLY`,
+  `undefined_calls`: jaq's helpers such as `isarray` and `tobytes`, which a
+  filter could otherwise call). That last check follows jq's scoping: a
+  definition counts only once something reachable calls it, arguments always
+  count, and an `import`/`include` or a `~/.jq` file turns it off. A new
+  engine-only name found by `ENGINE_ONLY`'s measurement goes into that list.
 - **Depth is bounded, because every pass recurses on the native stack.**
   The lexer stops at `MAX_INTERP` nested interpolations, the parser at
   `MAX_NESTING` recursive calls, `MAX_FOLDS` chain links (`,`, binary

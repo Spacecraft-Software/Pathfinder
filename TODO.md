@@ -47,7 +47,8 @@ and keep it for the jaq engine until P-078.
 - [ ] T-024 (P-063) Assignment creates missing containers and raises jq's errors natively; the `assignment` rewrite, `_pf_vivify` and the `setpath` repair off for native
 - [ ] T-025 (P-064) `del`, `delpaths` and `L |= empty` keep jq's order and semantics natively; the `delete` rewrite and `_pf_delpaths` off for native
 - [ ] T-026 (P-065) Fractional indices, `null` and fractional slices, operand order, `/` and `%`, unary minus as jq has them; their rewrites off for native
-- [ ] T-027 (P-066) The engine's builtins are jq 1.8.1's: names jq lacks removed, the polyfilled ones defined natively
+- [ ] T-027 (P-066) The engine's builtins are jq 1.8.1's: names jq lacks removed, the polyfilled ones defined natively (the 28 engine-only names are refused as jq refuses them; the polyfills remain)
+- [ ] T-029 (P-065) `def f($a): …` binds `a` as a filter too, as jq's desugaring `def f(a): a as $a | …` does; jaq leaves `a` undefined
 - [ ] T-028 (P-067) The native engine's prelude holds only definitions jq's `builtin.jq` has, each justified; `input_filename` from the driver as jq answers it
 
 ## Standing
