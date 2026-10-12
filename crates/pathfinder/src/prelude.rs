@@ -1089,6 +1089,8 @@ pub struct Context {
     /// The program runs on the native engine, which has the behaviours in
     /// [`NATIVE`] itself.
     pub native: bool,
+    /// `-n`: no input is read unless the program asks for it.
+    pub null_input: bool,
 }
 
 impl Context {
@@ -1106,7 +1108,11 @@ impl Context {
 /// name as jq does (PLAN M20). An entry joins in the change that gives the
 /// engine the behaviour, with the differential cases that pin it; the jaq
 /// engine keeps the definition until its path is removed (P-078).
-pub static NATIVE: &[&str] = &[];
+pub static NATIVE: &[&str] = &[
+    // The driver answers from its reader's position: `null` before any
+    // input is read, then the file the reader has open (`jq::Position`).
+    "input_filename",
+];
 
 fn find<'a>(name: &str, table: &'a [Def]) -> Option<&'a Def> {
     table.iter().find(|d| d.name == name)
@@ -1127,11 +1133,13 @@ fn dynamic(name: &str, ctx: &Context) -> String {
         // table on every call (5 µs a call, measured).
         "_pf_regex_lit" => format!("{} as $__pf_rl |", regex_table(&ctx.regex_literals)),
         "input_filename" => match (&ctx.input_filename, ctx.ambiguous_filename) {
-            // jq reports the file currently being read; with one input that is
-            // a constant, so the polyfill is exact.
+            // jq answers `null` until an input has been read, then the file
+            // being read. A constant can be only one of the two: `null`
+            // under `-n`, where nothing is read unless `input` asks, else
+            // the input's name.
+            (_, false) if ctx.null_input => "def input_filename: null;".to_owned(),
             (Some(path), false) => format!("def input_filename: {};", json_string(path)),
-            // Reading stdin: jq answers null.
-            (None, false) => "def input_filename: null;".to_owned(),
+            (None, false) => "def input_filename: \"<stdin>\";".to_owned(),
             // Several inputs: any constant would be wrong for some of them, so
             // fail loudly rather than answer quietly and wrongly.
             (_, true) => "def input_filename: error(\"input_filename with multiple input files is not supported by Pathfinder\");".to_owned(),
@@ -1314,8 +1322,21 @@ mod tests {
 
     #[test]
     fn input_filename_follows_the_input_shape() {
+        // jq answers `null` before an input is read, then `"<stdin>"`.
         let stdin = render(&want(&["input_filename"]), &Context::default());
-        assert!(stdin.contains("def input_filename: null;"));
+        assert!(stdin.contains(r#"def input_filename: "<stdin>";"#));
+        let null_input = Context {
+            null_input: true,
+            input_filename: Some("a.json".to_owned()),
+            ..Context::default()
+        };
+        let none = render(&want(&["input_filename"]), &null_input);
+        assert!(none.contains("def input_filename: null;"));
+        let native = Context {
+            native: true,
+            ..Context::default()
+        };
+        assert_eq!(render(&want(&["input_filename"]), &native), "");
 
         let one = render(
             &want(&["input_filename"]),

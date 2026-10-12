@@ -228,6 +228,7 @@ pub fn plan(
         ambiguous_filename: args.files.len() > 1,
         regex_literals: Vec::new(),
         native: engine == Engine::Native,
+        null_input: f.null_input,
     };
 
     let source = program_source(args, read_file)?;

@@ -27,9 +27,12 @@ like `src/…` and `tests/…` in this file are relative to it. The root
 
 Baseline is **jq 1.8.1**. The differential suite passes unchanged against jaq
 **3.0.0, 3.1.0 and 3.1.1**; CI pins 3.1.0, the version nixpkgs 26.05 ships and
-therefore the one daily-driven through Bravais. jaq 3.1 added `input_filename`
-natively; Pathfinder's own definition still takes precedence, deliberately,
-because it answers jq's way across concatenated multi-file input.
+therefore the one daily-driven through Bravais. `input_filename` is jq's on
+the native engine, answered from the driver's reader (`jq::Position`):
+`null` before any input is read, then the file the reader has open, across
+several files too. On the jaq engine the prelude defines a constant, which
+can be only one of those (`null` under `-n`, else the input's name; an error
+with several files).
 
 ## Build, test, lint
 

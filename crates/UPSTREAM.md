@@ -363,7 +363,12 @@ cleanly against `jaq/src/` in the patched tree. The changes, all marked
   keeps it) instead of calling `process::exit`, so the caller can flush first.
 - `cli.rs`: `Cli::parse_from` parses any argument list; `Cli::parse` reads
   `std::env::args_os()` through it.
-- `jq.rs`: `Segment::new`.
+- `jq.rs`: `Segment::new`; `Position::filename`.
+- `input_filename` is a native function (`pathfinder-all`'s `data::funs`)
+  reading `Data::filename`, which the driver points at its reader's
+  `Position`: `null` before any input is read, then the file the reader has
+  open, as jq 1.8.1 answers. It replaces the CLI's `$!input_filename`
+  variable, which was `"<stdin>"` from the start (M20, T-028).
 
 `jq.rs`, `filter.rs` and `Error`'s rendering are untouched, so the CLI hunks
 of patches 0008, 0013 and 0015 above still describe the code. A fix to them

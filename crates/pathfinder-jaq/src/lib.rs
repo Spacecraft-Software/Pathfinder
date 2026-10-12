@@ -177,9 +177,7 @@ fn real_main(
     segments: Vec<Segment>,
     out: &mut dyn Write,
 ) -> Result<u8, Error> {
-    let mut var_val = binds(cli)?;
-    let input_filename_idx = var_val.len();
-    var_val.push(("!input_filename".to_string(), Val::Null));
+    let var_val = binds(cli)?;
     let (var_names, mut vars): (Vec<String>, Vec<Val>) = var_val.into_iter().unzip();
 
     let (var_vals, filter) = match &cli.filter {
@@ -203,7 +201,6 @@ fn real_main(
     // Pathfinder: how the inputs ended, for jq's exit status.
     let mut status = jq::Status::default();
     if cli.files.is_empty() {
-        vars[input_filename_idx] = Val::utf8_str("<stdin>");
         let vars = Vars::new(vars);
 
         let format = unwrap_or_json(cli.from);
@@ -217,6 +214,7 @@ fn real_main(
             _ => read::read(format, lines, cli.slurp),
         };
         let location = || pos.location("<stdin>", None);
+        let filename = || pos.filename("<stdin>");
         let failed = || pos.failed();
         let (es, st) = (cli.exit_status, &mut status);
         let ran = filter::run_jq(
@@ -227,6 +225,7 @@ fn real_main(
             es,
             st,
             &location,
+            &filename,
             &failed,
             |v| write(out, writer, &v),
         );
@@ -241,8 +240,6 @@ fn real_main(
         ran?;
     } else {
         for file in &cli.files {
-            vars[input_filename_idx] =
-                Val::utf8_str(file.as_os_str().to_string_lossy().into_owned());
             let vars = Vars::new(vars.clone());
 
             let path = Path::new(file);
@@ -265,6 +262,7 @@ fn real_main(
             let name = file.as_os_str().to_string_lossy();
             let in_memory = matches!(format, Format::Json).then_some(&bytes[..]);
             let location = || pos.location(&name, in_memory);
+            let filename = || pos.filename(&name);
             let (es, st) = (cli.exit_status, &mut status);
             let failed = || false;
             filter::run_jq(
@@ -275,6 +273,7 @@ fn real_main(
                 es,
                 st,
                 &location,
+                &filename,
                 &failed,
                 |v| write(out, writer, &v),
             )?;

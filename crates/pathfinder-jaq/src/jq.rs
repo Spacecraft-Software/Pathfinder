@@ -231,6 +231,20 @@ impl Position {
         lines.map_or_else(|| "<unknown>".into(), |n| format!("{name}:{n}"))
     }
 
+    /// Pathfinder: what `input_filename` answers: the file being read, or
+    /// `None` before any input has been read, as in jq 1.8.1. In a stream of
+    /// several files it is the one the reader has entered, which can be the
+    /// next file while a number at the end of the previous one is finished.
+    pub fn filename(&self, name: &str) -> Option<String> {
+        let read = self.lines.get().is_some() || self.at.get().is_some();
+        read.then(|| {
+            self.segments
+                .get(self.segment.get())
+                .map_or(name, |s| &s.name)
+                .to_owned()
+        })
+    }
+
     /// Start reading segment `i`, as jq opens the next file: an unreadable
     /// one is reported then. Returns the offset at which it ends, if that is
     /// before the end of the stream.

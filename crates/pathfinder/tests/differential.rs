@@ -805,10 +805,42 @@ static PATCHED_STDERR_CASES: &[Case] = &[
 ];
 
 /// Cases needing input files, which are created in a temp dir at run time.
+/// Cases only the native engine answers as jq does: its reader knows which
+/// file it has open, where the jaq engine's prelude can only define a
+/// constant `input_filename`.
+static NATIVE_CASES: &[Case] = &[
+    c("7", &["-nc", "[input_filename, input, input_filename]"]),
+    c(
+        "",
+        &["-c", "[., input_filename]", "n1.json", "g1.json", "g2.json"],
+    ),
+    c(
+        "",
+        &["-nc", "[inputs | input_filename]", "l1.json", "l2.json"],
+    ),
+    c(
+        "",
+        &[
+            "-nc",
+            "[input_filename, (inputs | input_filename)]",
+            "f1.json",
+            "f2.json",
+        ],
+    ),
+    c("7", &["-c", "input_filename", "-", "f1.json"]),
+    c("", &["-s", "input_filename", "f1.json", "f2.json"]),
+    c("", &["-c", "[., input_filename]", "n1.json", "nope.json"]),
+    c("", &["-R", "input_filename", "r1.txt", "r2.txt"]),
+];
+
 static FILE_CASES: &[Case] = &[
     c("", &["-c", ".", "f1.json"]),
     c("", &["-c", ".", "f1.json", "f2.json"]),
     c("", &["-c", "input_filename", "f1.json"]),
+    // `null` before any input is read, then the input's name.
+    c("7", &["-c", "input_filename"]),
+    c("7", &["-n", "input_filename"]),
+    c("", &["-n", "input_filename", "f1.json"]),
     c("", &["-c", "-f", "filt.jq"]),
     c("", &["-c", "-f", "filt2.jq", "f1.json"]),
     c("", &["-nc", "--rawfile", "r", "f1.json", "$r"]),
@@ -1056,8 +1088,13 @@ fn shim_matches_real_jq() {
     } else {
         &[]
     };
+    let native: &[Case] = if engine() == "native" {
+        NATIVE_CASES
+    } else {
+        &[]
+    };
     let mut failures: Vec<String> = Vec::new();
-    for case in CASES.iter().chain(FILE_CASES).chain(patched) {
+    for case in CASES.iter().chain(FILE_CASES).chain(patched).chain(native) {
         let expected = run(&jq, &dir, case);
         let actual = run(&shim, &dir, case);
         if expected != actual {
@@ -1073,7 +1110,7 @@ fn shim_matches_real_jq() {
         }
     }
 
-    let total = CASES.len() + FILE_CASES.len() + patched.len();
+    let total = CASES.len() + FILE_CASES.len() + patched.len() + native.len();
     let _ = std::fs::remove_dir_all(&dir);
     assert!(
         failures.is_empty(),
