@@ -235,7 +235,10 @@ print. To keep the `jq` name untouched:
   it matches jq once the containers exist. jq's `_modify` transcribed into jaq
   is quadratic (2.4 s for 10k elements); a comma target is the only thing still
   sent through `_pf_modify`.
-- **`del(f)` uses jaq's `del` only where it is jq's**: one path per array
+- **On the native engine, `del` and `delpaths` are jq's** (M20): the
+  engine's `delpaths` is a port of jq's `jv_delpaths`, so the `delete`
+  rewrite and the prelude's repairs are off there.
+- **On the jaq engine, `del(f)` uses jaq's `del` only where it is jq's**: one path per array
   (`single_path`), a deleting step that is not a named key (jaq swap-removes
   keys, breaking order), with `try … catch` falling back to `_pf_delpaths` on
   the original input. The fallback evaluates the target twice, so effectful

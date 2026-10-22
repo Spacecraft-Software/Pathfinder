@@ -1127,6 +1127,10 @@ pub static NATIVE: &[&str] = &[
     // The engine's update creates missing containers and raises jq's
     // errors, and `setpath` is written with it (M20, T-024).
     "setpath",
+    // The engine's `delpaths` is jq's `jv_delpaths`, and `del(f)` is jq's
+    // `delpaths([path(f)])` (M20, T-025).
+    "del",
+    "delpaths",
 ];
 
 fn find<'a>(name: &str, table: &'a [Def]) -> Option<&'a Def> {

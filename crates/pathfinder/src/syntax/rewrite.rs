@@ -134,6 +134,7 @@ impl Rewrites {
         index: false,
         slice: false,
         assignment: false,
+        delete: false,
         ..Self::ALL
     };
 }

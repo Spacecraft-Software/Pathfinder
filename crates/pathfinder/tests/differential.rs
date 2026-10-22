@@ -849,6 +849,89 @@ static PATCHED_STDERR_CASES: &[Case] = &[
 /// file it has open, where the jaq engine's prelude can only define a
 /// constant `input_filename`.
 static NATIVE_CASES: &[Case] = &[
+    // `delpaths` as jq's `jv_delpaths`, `del(f)` as `delpaths([path(f)])`
+    // (M20, T-025).
+    c(
+        "null",
+        &["-c", "try ([1,2,3,4] | delpaths([[1],[0,\"a\"]])) catch ."],
+    ),
+    c("null", &["-c", "try ({\"a\":1} | delpaths(1)) catch ."]),
+    c("null", &["-c", "try ({\"a\":1} | delpaths([1])) catch ."]),
+    c("null", &["-c", "try ({\"a\":1} | delpaths([[1]])) catch ."]),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ([1,2,3] | delpaths([[{\"start\":\"a\",\"end\":1}]])) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ([1,2,3,4,5] | delpaths([[{\"start\":1,\"end\":3}],[4]])) catch .",
+        ],
+    ),
+    c("null", &["-c", "try ([1,2,3] | delpaths([[1.7]])) catch ."]),
+    c(
+        "null",
+        &["-c", "try ([1,2,3] | delpaths([[-1.5]])) catch ."],
+    ),
+    c(
+        "null",
+        &["-c", "try ([1,2,3] | delpaths([[null]])) catch ."],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":{\"b\":1}} | delpaths([[\"a\",\"b\",\"c\"]])) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":{\"b\":1}} | delpaths([[\"a\",\"x\"]])) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":null} | delpaths([[\"a\",\"x\"]])) catch .",
+        ],
+    ),
+    c("null", &["-c", "try (null | delpaths([[\"a\"]])) catch ."]),
+    c("null", &["-c", "try (\"abc\" | delpaths([[0]])) catch ."]),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ([[1,2],[3,4]] | delpaths([[0,1],[1,0],[0,0]])) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"b\":1,\"a\":2,\"c\":3} | delpaths([[\"c\"],[\"a\"]])) catch .",
+        ],
+    ),
+    c("null", &["-c", "try ([1,2,3] | del(.[0], .[0])) catch ."]),
+    c("null", &["-c", "try ([1,2,3] | del(..)) catch ."]),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":[1,{\"b\":2}]} | del(.. | select(. == 2))) catch .",
+        ],
+    ),
+    c("null", &["-c", "try ([1,2,3] | del(.[1:])) catch ."]),
+    c(
+        "null",
+        &["-c", "try ([1,2,3] | del(.[] | select(. > 1))) catch ."],
+    ),
     // Assignment and deletion in the engine (M20, T-024, T-025): containers
     // created, jq's errors, key order, `|= empty`, comma targets.
     c("null", &["-c", "try (null | .a = 1) catch ."]),

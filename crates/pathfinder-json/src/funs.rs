@@ -173,6 +173,7 @@ pub fn funs<D: for<'a> DataT<V<'a> = Val>>() -> impl Iterator<Item = Fun<D>> {
 
 fn base<D: for<'a> DataT<V<'a> = Val>>() -> Box<[Filter<RunPtr<D>>]> {
     Box::new([
+        ("_delpaths", v(1), |cv| unary(cv, delpaths)),
         // Pathfinder: exactly one value, with jq 1.8.1's error messages.
         ("fromjson", v(0), |cv| {
             let parse = |s: &[u8]| read::parse_jq_single(s).map_err(Error::str);
@@ -218,4 +219,127 @@ fn base<D: for<'a> DataT<V<'a> = Val>>() -> Box<[Filter<RunPtr<D>>]> {
             })
         }),
     ])
+}
+
+/// Pathfinder: jq 1.8.1's `delpaths` (`jv_delpaths` in jq's `src/jv_aux.c`):
+/// the paths are sorted and deleted together, so that deleting `.[0]` and
+/// `.[2]` removes the elements the paths named in the input.
+fn delpaths(v: Val, paths: Val) -> ValR {
+    use jaq_core::ValT;
+    let Val::Arr(paths) = paths else {
+        return Err(Error::str("Paths must be specified as an array"));
+    };
+    let mut paths: Vec<Val> = paths.iter().cloned().collect();
+    paths.sort();
+    let mut lists = Vec::with_capacity(paths.len());
+    for p in &paths {
+        match p {
+            Val::Arr(a) => lists.push(a.iter().cloned().collect::<Vec<_>>()),
+            p => {
+                let k = p.jq_type();
+                return Err(Error::str(format_args!(
+                    "Path must be specified as array, not {k}"
+                )));
+            }
+        }
+    }
+    match lists.first() {
+        None => Ok(v),
+        Some(first) if first.is_empty() => Ok(Val::Null),
+        Some(_) => delpaths_sorted(v, &lists, 0),
+    }
+}
+
+/// jq's `delpaths_sorted`: the paths (sorted, each longer than `start`) are
+/// grouped by their key at `start`; a group with a path ending there deletes
+/// the key, any other recurses into the value at it.
+fn delpaths_sorted(mut v: Val, paths: &[Vec<Val>], start: usize) -> ValR {
+    use jaq_core::{path::Opt, ValT};
+    let mut delkeys = Vec::new();
+    let mut i = 0;
+    while i < paths.len() {
+        let key = &paths[i][start];
+        let j = i + paths[i..].iter().take_while(|p| &p[start] == key).count();
+        if paths[i].len() == start + 1 {
+            delkeys.push(key.clone());
+        } else {
+            let sub = v.clone().index(key)?;
+            if !matches!(sub, Val::Null) {
+                let new = delpaths_sorted(sub, &paths[i..j], start + 1)?;
+                let set = |_| core::iter::once(Ok(new.clone()));
+                v = v
+                    .map_index(key, Opt::Essential, set)
+                    .map_err(|e| match e.get_err() {
+                        Ok(e) => e,
+                        Err(_) => Error::str("delpaths: unexpected exception"),
+                    })?;
+            }
+        }
+        i = j;
+    }
+    dels(v, &delkeys)
+}
+
+/// jq's `jv_dels`: delete the (sorted) keys from `v`.
+fn dels(v: Val, keys: &[Val]) -> ValR {
+    use jaq_core::ValT;
+    if keys.is_empty() || matches!(v, Val::Null) {
+        return Ok(v);
+    }
+    match v {
+        Val::Arr(a) => {
+            let len = a.len();
+            let mut del = alloc::vec![false; len];
+            for k in keys {
+                match k {
+                    Val::Num(n) => {
+                        // C's `(int)` cast, as jq has it.
+                        let f = n.as_f64().trunc();
+                        let i = if f < 0.0 { len as f64 + f } else { f };
+                        if i >= 0.0 && i < len as f64 {
+                            del[i as usize] = true;
+                        }
+                    }
+                    Val::Obj(o) => {
+                        let start = o.get(&Val::utf8_str("start"));
+                        let end = o.get(&Val::utf8_str("end"));
+                        let r = Val::range_int(start..end)?;
+                        let (skip, take) = crate::skip_take(r, len);
+                        del[skip..skip + take].iter_mut().for_each(|d| *d = true);
+                    }
+                    k => {
+                        let t = k.jq_type();
+                        return Err(Error::str(format_args!(
+                            "Cannot delete {t} element of array"
+                        )));
+                    }
+                }
+            }
+            let kept = a
+                .iter()
+                .zip(del)
+                .filter(|(_, d)| !d)
+                .map(|(x, _)| x.clone());
+            Ok(kept.collect())
+        }
+        Val::Obj(mut o) => {
+            for k in keys {
+                if !matches!(k, Val::BStr(_) | Val::TStr(_)) {
+                    let t = k.jq_type();
+                    return Err(Error::str(format_args!(
+                        "Cannot delete {t} field of object"
+                    )));
+                }
+            }
+            let m = alloc::rc::Rc::make_mut(&mut o);
+            for k in keys {
+                m.shift_remove(k);
+            }
+            Ok(Val::Obj(o))
+        }
+        v => {
+            let t = v.jq_type();
+            Err(Error::str(format_args!("Cannot delete fields from {t}")))
+        }
+    }
 }

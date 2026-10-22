@@ -444,6 +444,12 @@ changes land once, in the crates, not in `packaging/jaq/`.
   expression fails as `path(target)` does (`update_jq`), which only a
   target that is not a plain path pays for: holding the input a second time
   would make every in-place update copy it.
+- Deletion as jq 1.8.1 does it (T-025): a native `_delpaths` in
+  `pathfinder-json` is jq's `jv_delpaths` (paths sorted, grouped by key and
+  deleted together, jq's errors), and `pathfinder-json`'s `defs.jq`
+  redefines `delpaths` with it and `del(f)` as jq's
+  `delpaths([path(f)])`. `pathfinder-core` keeps jaq's definitions, so its
+  tests still run without the JSON crate.
 
 ## Licence of Pathfinder's changes
 

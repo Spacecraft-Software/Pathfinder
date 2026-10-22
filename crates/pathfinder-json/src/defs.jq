@@ -15,3 +15,7 @@ def rindex($i): indices($i)[-1];
 # Formatting
 def @json: tojson;
 
+# Pathfinder: jq 1.8.1's `delpaths` (`jv_delpaths`, native) and its `del`,
+# which deletes the paths together.
+def delpaths($paths): _delpaths($paths);
+def del(f): delpaths([path(f)]);
