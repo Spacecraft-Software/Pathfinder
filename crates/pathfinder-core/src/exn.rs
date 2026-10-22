@@ -72,6 +72,15 @@ impl<V> Exn<'_, V> {
     }
 }
 
+impl<V> Exn<'_, V> {
+    /// Pathfinder: whether this is jaq's error for an update of a target
+    /// that is no path expression ([`Error::path_expr`]).
+    pub(crate) fn is_path_expr(&self) -> bool {
+        matches!(&self.0, Inner::Err(e) if matches!(&e.0, Part::Str(parts)
+            if matches!(parts.first(), Some(Part::Str("invalid path expression with input ")))))
+    }
+}
+
 impl<V> From<Error<V>> for Exn<'_, V> {
     fn from(e: Error<V>) -> Self {
         Exn(Inner::Err(Box::new(e)))

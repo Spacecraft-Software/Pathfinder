@@ -1124,6 +1124,9 @@ pub static NATIVE: &[&str] = &[
     // The engine truncates a fractional code point, writes U+FFFD for an
     // invalid one, and raises jq's messages.
     "implode",
+    // The engine's update creates missing containers and raises jq's
+    // errors, and `setpath` is written with it (M20, T-024).
+    "setpath",
 ];
 
 fn find<'a>(name: &str, table: &'a [Def]) -> Option<&'a Def> {

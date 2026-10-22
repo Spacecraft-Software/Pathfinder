@@ -223,7 +223,14 @@ print. To keep the `jq` name untouched:
   new recursive pass over the tree must stay within `MAX_DEPTH`; a new
   grammar cycle must pass through `query`, `term` or `pattern`, or be wrapped
   in `Parser::nested` where it recurses (as `//` is in `expr`).
-- **Assignment is vivify-then-native.** Prepare the containers (inline guard for
+- **Assignment is native on the native engine** (M20): the engine creates
+  containers and raises jq's errors, and only a comma target with an update
+  (`(.a, .b) |= f`) is rewritten, to `_pf_modify`, whose deletions jq defers
+  to the end (`Rewrites::comma_update`). Keep the engine's update from
+  holding a second reference to the value it updates: `Rc::make_mut` then
+  copies it on every step, which made a 100 000-key `reduce` take 10^12
+  instructions.
+- **On the jaq engine, assignment is vivify-then-native.** Prepare the containers (inline guard for
   a literal target, `_pf_vivify` otherwise), then let jaq's own operator run —
   it matches jq once the containers exist. jq's `_modify` transcribed into jaq
   is quadratic (2.4 s for 10k elements); a comma target is the only thing still

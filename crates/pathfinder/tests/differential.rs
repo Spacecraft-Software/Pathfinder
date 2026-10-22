@@ -849,6 +849,314 @@ static PATCHED_STDERR_CASES: &[Case] = &[
 /// file it has open, where the jaq engine's prelude can only define a
 /// constant `input_filename`.
 static NATIVE_CASES: &[Case] = &[
+    // Assignment and deletion in the engine (M20, T-024, T-025): containers
+    // created, jq's errors, key order, `|= empty`, comma targets.
+    c("null", &["-c", "try (null | .a = 1) catch ."]),
+    c("null", &["-c", "try (null | .a.b = 1) catch ."]),
+    c("null", &["-c", "try ({} | .a.b = 1) catch ."]),
+    c("null", &["-c", "try (null | .[2] = 1) catch ."]),
+    c("null", &["-c", "try ([] | .[2] = 1) catch ."]),
+    c("null", &["-c", "try ([1] | .[-1] = 9) catch ."]),
+    c("null", &["-c", "try ([1] | .[-2] = 9) catch ."]),
+    c("null", &["-c", "try ([] | .[-1] = 9) catch ."]),
+    c("null", &["-c", "try (null | .[-1] = 9) catch ."]),
+    c("null", &["-c", "try ([] | .[536870912] = 1) catch ."]),
+    c("null", &["-c", "try ([] | .[536870911] |= empty) catch ."]),
+    c("null", &["-c", "try (1 | .a = 1) catch ."]),
+    c("null", &["-c", "try (\"x\" | .a = 1) catch ."]),
+    c("null", &["-c", "try ({} | .[0] = 1) catch ."]),
+    c("null", &["-c", "try ([] | .a = 1) catch ."]),
+    c("null", &["-c", "try (null | .a += 1) catch ."]),
+    c("null", &["-c", "try (null | .a //= 3) catch ."]),
+    c("null", &["-c", "try ({\"a\":null} | .a //= 3) catch ."]),
+    c("null", &["-c", "try ({\"a\":false} | .a //= 3) catch ."]),
+    c("null", &["-c", "try ({\"a\":1} | .a //= 3) catch ."]),
+    c("null", &["-c", "try (null | .a |= . + 1) catch ."]),
+    c("null", &["-c", "try (null | .[1] |= 5) catch ."]),
+    c("null", &["-c", "try (null | .a.b |= 5) catch ."]),
+    c("null", &["-c", "try ({\"a\":[1,2]} | .a[] += 1) catch ."]),
+    c(
+        "null",
+        &["-c", "try ({\"a\":[1,2]} | .a[1:] = [\"x\"]) catch ."],
+    ),
+    c("null", &["-c", "try (null | .[1:3] = [\"x\"]) catch ."]),
+    c(
+        "null",
+        &["-c", "try ([1,2,3] | .[1:] |= map(.*10)) catch ."],
+    ),
+    c(
+        "null",
+        &["-c", "try ({\"a\":1,\"b\":2} | (.a,.b) = 9) catch ."],
+    ),
+    c(
+        "null",
+        &["-c", "try ({\"a\":1,\"b\":2} | (.a,.b) |= .+1) catch ."],
+    ),
+    c(
+        "null",
+        &["-c", "try ([1,2,3] | (.[0],.[1]) |= empty) catch ."],
+    ),
+    c("null", &["-c", "try ({\"a\":1} | .a |= empty) catch ."]),
+    c("null", &["-c", "try ([1,2,3] | .[] |= empty) catch ."]),
+    c(
+        "null",
+        &["-c", "try ([1,2,3,4] | .[] |= select(. % 2 == 0)) catch ."],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":[{\"b\":1},{\"b\":2}]} | .a[].b *= 10) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &["-c", "try (null | setpath([\"a\",0,\"b\"]; 1)) catch ."],
+    ),
+    c("null", &["-c", "try ({} | setpath([]; 1)) catch ."]),
+    c(
+        "null",
+        &["-c", "try (null | getpath([\"a\",\"b\"])) catch ."],
+    ),
+    c("null", &["-c", "try ([1,2] | .[1.5] = 9) catch ."]),
+    c("null", &["-c", "try ({\"a\":1} | .a = (1,2)) catch ."]),
+    c("null", &["-c", "try ({\"a\":1} | .a |= (1,2)) catch ."]),
+    c(
+        "null",
+        &["-c", "try ({\"a\":{\"b\":1}} | .a.b |= . * 2) catch ."],
+    ),
+    c("null", &["-c", "try ([[1]] | .[0][1] = 2) catch ."]),
+    c("null", &["-c", "try ({} | .a.b.c.d = 1) catch ."]),
+    c(
+        "null",
+        &["-c", "try (null | .[\"a\"][0][\"b\"] = 1) catch ."],
+    ),
+    c("null", &["-c", "try ({\"a\":1} | .b.c = 2) catch ."]),
+    c("null", &["-c", "try ([] | .[1].a = 1) catch ."]),
+    c("null", &["-c", "try ({\"a\":[]} | .a[3] = 1) catch ."]),
+    c("null", &["-c", "try (. as $x | null | .a = $x) catch ."]),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":1} | to_entries | .[0].value = 5) catch .",
+        ],
+    ),
+    c("null", &["-c", "try ([1,2,3] | .[1] /= 2) catch ."]),
+    c("null", &["-c", "try ([1,2,3] | .[1] %= 2) catch ."]),
+    c("null", &["-c", "try ([3] | .[0] -= 1) catch ."]),
+    c("null", &["-c", "try ({\"a\":\"x\"} | .a *= 3) catch ."]),
+    c("null", &["-c", "try (null|.[-1] |= empty) catch ."]),
+    c("null", &["-c", "try ([1]|.[null] = 1) catch ."]),
+    c("null", &["-c", "try ([1]|.[true] = 1) catch ."]),
+    c("null", &["-c", "try (null|.[true] = 1) catch ."]),
+    c("null", &["-c", "try (null|.[null] = 1) catch ."]),
+    c("null", &["-c", "try ([1,2]|.[nan] = 9) catch ."]),
+    c("null", &["-c", "try ([1,2]|.[infinite] = 9) catch ."]),
+    c("null", &["-c", "try ([1,2]|.[-infinite] = 9) catch ."]),
+    c("null", &["-c", "try ([1,2]|.[1e300] |= empty) catch ."]),
+    c("null", &["-c", "try ([]|.[536870912] |= empty) catch ."]),
+    c("null", &["-c", "try (null|.[536870912] = 1) catch ."]),
+    c("null", &["-c", "try (1|.[0] = 1) catch ."]),
+    c("null", &["-c", "try (true|.a = 1) catch ."]),
+    c("null", &["-c", "try (\"x\"|.[0] = 1) catch ."]),
+    c("null", &["-c", "try ({}|.[null] = 1) catch ."]),
+    c("null", &["-c", "try ([1,2,3] | .[1.7] = \"x\") catch ."]),
+    c("null", &["-c", "try ([1,2,3] | .[-1.2] = \"x\") catch ."]),
+    c(
+        "null",
+        &["-c", "try ({\"a\":{\"b\":null}} | .a.b.c = 1) catch ."],
+    ),
+    c("null", &["-c", "try ([null] | .[0].a = 1) catch ."]),
+    c("null", &["-c", "try ([1,2,3,4] | del(.[0,2])) catch ."]),
+    c("null", &["-c", "try ([1,2,3,4] | del(.[1:3])) catch ."]),
+    c(
+        "null",
+        &["-c", "try ([1,2,3,4] | del(.[0], .[1:3])) catch ."],
+    ),
+    c(
+        "null",
+        &["-c", "try ({\"a\":1,\"b\":2,\"c\":3} | del(.a)) catch ."],
+    ),
+    c(
+        "null",
+        &["-c", "try ({\"a\":1,\"b\":2,\"c\":3} | del(.b)) catch ."],
+    ),
+    c(
+        "null",
+        &["-c", "try ({\"a\":1,\"b\":2,\"c\":3} | del(.a,.c)) catch ."],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":1,\"b\":2,\"c\":3} | keys_unsorted as $k | del(.b) | keys_unsorted) catch .",
+        ],
+    ),
+    c("null", &["-c", "try ([1,2,3] | del(.[-1])) catch ."]),
+    c("null", &["-c", "try ([1,2,3] | del(.[5])) catch ."]),
+    c("null", &["-c", "try (null | del(.a)) catch ."]),
+    c("null", &["-c", "try (null | del(.[0])) catch ."]),
+    c("null", &["-c", "try (1 | del(.a)) catch ."]),
+    c(
+        "null",
+        &["-c", "try ({\"a\":[1,2,3]} | del(.a[0,1])) catch ."],
+    ),
+    c("null", &["-c", "try ([[1,2],[3,4]] | del(.[][0])) catch ."]),
+    c("null", &["-c", "try ([1,2,3] | del(.[])) catch ."]),
+    c(
+        "null",
+        &["-c", "try ({\"a\":1,\"b\":2} | del(.[])) catch ."],
+    ),
+    c(
+        "null",
+        &["-c", "try ([1,2,3] | delpaths([[0],[2]])) catch ."],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":{\"b\":1,\"c\":2}} | delpaths([[\"a\",\"b\"]])) catch .",
+        ],
+    ),
+    c("null", &["-c", "try ([1,2,3] | delpaths([[5]])) catch ."]),
+    c("null", &["-c", "try ([1,2,3] | delpaths([])) catch ."]),
+    c("null", &["-c", "try ({\"a\":1} | delpaths([[]])) catch ."]),
+    c(
+        "null",
+        &["-c", "try ([1,2,3] | delpaths([[\"a\"]])) catch ."],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":1,\"b\":2,\"c\":3} | to_entries | del(.[1]) | from_entries) catch .",
+        ],
+    ),
+    c("null", &["-c", "try ([1,2,3,4,5] | del(.[1,3])) catch ."]),
+    c("null", &["-c", "try ([1,2,3,4,5] | del(.[3,1])) catch ."]),
+    c(
+        "null",
+        &["-c", "try ([1,2,3,4,5] | del(.[1:3], .[0])) catch ."],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":1,\"b\":2,\"c\":3} | .b |= empty | keys_unsorted) catch .",
+        ],
+    ),
+    c("null", &["-c", "try ([1,2,3] | .[1] |= empty) catch ."]),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":[1,2,3]} | .a |= map(select(. != 2))) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &["-c", "try ([1,2,3] | del(.[] | select(. == 2))) catch ."],
+    ),
+    c("null", &["-c", "try ({\"a\":1} | del(.b)) catch ."]),
+    c("null", &["-c", "try ([[1,2,3]] | del(.[0][1:])) catch ."]),
+    c("null", &["-c", "try (\"abc\" | del(.[0])) catch ."]),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":1,\"b\":2,\"c\":3,\"d\":4} | del(.a)) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":1,\"b\":2,\"c\":3,\"d\":4} | del(.b)) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":1,\"b\":2,\"c\":3,\"d\":4} | del(.a, .b)) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":1,\"b\":2,\"c\":3,\"d\":4} | .a |= empty) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":1,\"b\":2,\"c\":3,\"d\":4} | to_entries | map(select(.key != \"b\")) | from_entries) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &["-c", "try ([1,2,3,4,5,6] | del(.[0,2,4])) catch ."],
+    ),
+    c(
+        "null",
+        &["-c", "try ([1,2,3,4,5,6] | del(.[-1,0])) catch ."],
+    ),
+    c("null", &["-c", "try ([1] | del(.[-2])) catch ."]),
+    c("null", &["-c", "try ([1] | .[-2] |= empty) catch ."]),
+    c("null", &["-c", "try (null | .[0] |= empty) catch ."]),
+    c("null", &["-c", "try (null | .a |= empty) catch ."]),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":{\"x\":1,\"y\":2,\"z\":3}} | del(.a.x)) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &["-c", "try ([1,2,3] | (.[0],.[1]) |= empty) catch ."],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ({\"a\":1,\"b\":2,\"c\":3,\"d\":4} | with_entries(select(.value > 1))) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &["-c", "try ([1,2,3] | (.[0],.[1]) |= select(. > 5)) catch ."],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ([1,2,3,4] | (.[0],.[2]) |= if . == 1 then empty else . * 10 end) catch .",
+        ],
+    ),
+    c("null", &["-c", "try ([1]|setpath([[]];1)) catch ."]),
+    c(
+        "null",
+        &[
+            "-c",
+            "try (null|setpath([{\"start\":1,\"end\":2}];[\"x\"])) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try (\"abc\"|setpath([{\"start\":0,\"end\":1}];\"y\")) catch .",
+        ],
+    ),
+    c("null", &["-c", "try ([1,2,3]|.[1:2] = 5) catch ."]),
+    c("null", &["-c", "try (1|.[1:2] = [1]) catch ."]),
+    c("null", &["-c", "try (\"abc\"|.[0:1] = \"y\") catch ."]),
+    c("null", &["-c", "try (0 |= .+1) catch ."]),
+    c("null", &["-c", "try ([0,1,2] | .[3]? |= .+1) catch ."]),
     // Division, negation, fractional indices and slice bounds, `null` slices,
     // `range` without a step (M20, T-026).
     c("[3,4]", &["-c", "try (1/0) catch ."]),
@@ -862,7 +1170,10 @@ static NATIVE_CASES: &[Case] = &[
     c("[3,4]", &["-c", "try ([.[] / 2]) catch ."]),
     c("[3,4]", &["-c", "try ([1,2] | .[0] / .[1]) catch ."]),
     c("[3,4]", &["-c", "try ((1,2) / (0,1)) catch ."]),
-    c("[3,4]", &["-c", "try (. as $x | 1 / ($x | length)) catch ."]),
+    c(
+        "[3,4]",
+        &["-c", "try (. as $x | 1 / ($x | length)) catch ."],
+    ),
     c("[3,4]", &["-c", "try (1 / 0.0) catch ."]),
     c("[3,4]", &["-c", "try (\"a,b\" / \",\") catch ."]),
     c("[3,4]", &["-c", "try (\"a\" / 0) catch ."]),
@@ -888,7 +1199,10 @@ static NATIVE_CASES: &[Case] = &[
     c("[3,4]", &["-c", "try (null | .[1:2]) catch ."]),
     c("[3,4]", &["-c", "try (null | .[1:2] = [5]) catch ."]),
     c("[3,4]", &["-c", "try (\"abcdef\" | .[1.5:3.5]) catch ."]),
-    c("[3,4]", &["-c", "try ([1,2,3] | .[1:2.5] = [\"x\"]) catch ."]),
+    c(
+        "[3,4]",
+        &["-c", "try ([1,2,3] | .[1:2.5] = [\"x\"]) catch ."],
+    ),
     c("[3,4]", &["-c", "try ([1,2,3] | .[\"a\":2]) catch ."]),
     c("[3,4]", &["-c", "try (1 | .[1:2]) catch ."]),
     c("[3,4]", &["-c", "try ([1,2,3] | .[1e300]) catch ."]),
@@ -908,16 +1222,28 @@ static NATIVE_CASES: &[Case] = &[
     c("[3,4]", &["-c", "try ([1,2,3]|del(.[1.5])) catch ."]),
     c("[3,4]", &["-c", "try ([1,2,3]|.[1e300]=1) catch ."]),
     c("[3,4]", &["-c", "try (\"abc\"|.[1.5]) catch ."]),
-    c("[3,4]", &["-c", "try ([1,2,3]|.[{\"start\":1.5,\"end\":2.5}]) catch ."]),
+    c(
+        "[3,4]",
+        &["-c", "try ([1,2,3]|.[{\"start\":1.5,\"end\":2.5}]) catch ."],
+    ),
     c("[3,4]", &["-c", "try (null|.[1.5:2]) catch ."]),
-    c("[3,4]", &["-c", "try ([1,2,3]|.[1.5:2] = [\"x\",\"y\"]) catch ."]),
+    c(
+        "[3,4]",
+        &["-c", "try ([1,2,3]|.[1.5:2] = [\"x\",\"y\"]) catch ."],
+    ),
     c("[3,4]", &["-c", "try (1/0.0) catch ."]),
     c("[3,4]", &["-c", "try ([1,2]|.[0]/0) catch ."]),
     c("[3,4]", &["-c", "try (0/1) catch ."]),
     c("[3,4]", &["-c", "try (1.5/1e-320) catch ."]),
     c("[3,4]", &["-c", "try ([1,2,3]|.[1.5] |= .+10) catch ."]),
-    c("[3,4]", &["-c", "try ([1,2,3]|.[1:2.5] |= map(.*2)) catch ."]),
-    c("[3,4]", &["-c", "try ([1,2,3] | to_entries | .[1.5]) catch ."]),
+    c(
+        "[3,4]",
+        &["-c", "try ([1,2,3]|.[1:2.5] |= map(.*2)) catch ."],
+    ),
+    c(
+        "[3,4]",
+        &["-c", "try ([1,2,3] | to_entries | .[1.5]) catch ."],
+    ),
     c("[3,4]", &["-c", "try ([range(0; 6; 0)]) catch ."]),
     c("[3,4]", &["-c", "try ([range(0;1;nan)]) catch ."]),
     c("[3,4]", &["-c", "try ([nan, infinite, -infinite]) catch ."]),

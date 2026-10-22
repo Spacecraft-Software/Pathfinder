@@ -322,6 +322,50 @@ fn cartesian_rl<'a, D: DataT>(
     })
 }
 
+/// Pathfinder: `path.update(cv, f)`, failing where jq's update fails. jq
+/// finds a target's paths before it updates, so a target that is no path
+/// expression fails as `path(target)` does (`Invalid path expression near
+/// attempt to iterate through …`, patch 0010), where jaq's update said
+/// `invalid path expression with input …`.
+fn update_jq<'a, D: DataT>(
+    path: &'a Id,
+    cv: Cv<'a, D>,
+    f: BoxUpdate<'a, D::V<'a>>,
+) -> ValXs<'a, D::V<'a>> {
+    // A plain path cannot fail as no path expression, and keeping a second
+    // reference to the input would make every in-place update copy it.
+    if plain_path(path, cv.0.lut()) {
+        return path.update(cv, f);
+    }
+    let (ctx, input) = (cv.0.clone(), cv.1.clone());
+    Box::new(path.update(cv, f).map(move |r| match r {
+        Err(e) if e.is_path_expr() => {
+            let mut paths = path.paths((ctx.clone(), (input.clone(), RcList::default())));
+            // The first failure `path(target)` would report, a lost path's
+            // included.
+            let found = paths.find_map(|r| match r {
+                Err(e) => Some(e),
+                Ok((v, p)) if p.lost().is_some() => Some(Exn::from(Error::path_result(&v))),
+                Ok(_) => None,
+            });
+            Err(found.unwrap_or(e))
+        }
+        r => r,
+    }))
+}
+
+/// Pathfinder: whether `id` is a path by its form alone: `.`, steps on a
+/// plain path (whatever their index expressions), and pipes and commas of
+/// plain paths.
+fn plain_path<D: DataT>(id: &Id, lut: &crate::Lut<D>) -> bool {
+    match &lut.terms[id.0] {
+        Ast::Id => true,
+        Ast::Path(base, _) => plain_path(base, lut),
+        Ast::Pipe(l, None, r) | Ast::Comma(l, r) => plain_path(l, lut) && plain_path(r, lut),
+        _ => false,
+    }
+}
+
 fn fold_update<'a, D: DataT>(
     fold_type: &'a Fold<Id>,
     path: &'a Id,
@@ -570,20 +614,21 @@ impl Id {
                 })
             }
 
-            Ast::Update(path, f) => path.update(
+            Ast::Update(path, f) => update_jq(
+                path,
                 (cv.0.clone(), cv.1),
                 Box::new(move |v| f.run((cv.0.clone(), v))),
             ),
             Ast::UpdateMath(path, op, f) => pipe(f, cv, move |cv, y| {
                 let u = move |x: D::V<'a>| box_once(op.run(x, y.clone()).map_err(Exn::from));
-                path.update(cv, Box::new(u))
+                update_jq(path, cv, Box::new(u))
             }),
             Ast::UpdateAlt(path, f) => pipe(f, cv, move |cv, y| {
                 let u = move |x: D::V<'a>| box_once(Ok(if x.as_bool() { x } else { y.clone() }));
-                path.update(cv, Box::new(u))
+                update_jq(path, cv, Box::new(u))
             }),
             Ast::Assign(path, f) => pipe(f, cv, move |cv, y| {
-                path.update(cv, Box::new(move |_| box_once(Ok(y.clone()))))
+                update_jq(path, cv, Box::new(move |_| box_once(Ok(y.clone()))))
             }),
             Ast::Logic(l, stop, r) => pipe(l, cv, move |cv, l| {
                 if l.as_bool() == *stop {

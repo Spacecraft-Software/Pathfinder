@@ -433,6 +433,17 @@ changes land once, in the crates, not in `packaging/jaq/`.
   zero is jq's error, so `nan` and `infinite` are native rather than `0/0`
   and `1/0`; unary minus words jq's error; `range` with no step yields
   nothing. jaq's tests of those now expect jq's answers.
+- Assignment as jq 1.8.1 does it (T-024): `map_index` creates missing
+  containers (`null` updated as the object or array its key implies), pads
+  an array past its end, deletes in place keeping the other keys' order
+  (`shift_remove`, where jaq swapped the last key in), and raises jq's
+  errors (`Out of bounds negative array index`, `Array index too large`,
+  `Cannot set array element at NaN index`, `Cannot update field at array
+  index of array`, `Cannot update string slices`, `A slice of an array can
+  only be assigned another array`). An update whose target is no path
+  expression fails as `path(target)` does (`update_jq`), which only a
+  target that is not a plain path pays for: holding the input a second time
+  would make every in-place update copy it.
 
 ## Licence of Pathfinder's changes
 

@@ -118,8 +118,8 @@ const _: () = {
 /// Types and sets of types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Type {
-    /// `[] | .["a"]` or `limit("a"; 0)` or `range(0; "a")`
-    Int,
+    // Pathfinder: `Int` is gone: indices and slice bounds take jq's numbers
+    // (`Num::as_jq_index`, `Num::as_jq_bound`) and words.
     /*
     /// `"1" | sin` or `pow(2; "3")` or `fma(2; 3; "4")`
     Float,
@@ -138,7 +138,6 @@ enum Type {
 impl Type {
     fn as_str(&self) -> &'static str {
         match self {
-            Self::Int => "integer",
             //Self::Float => "floating-point number",
             Self::Str => "string",
             Self::Arr => "array",
@@ -256,11 +255,29 @@ impl jaq_core::ValT for Val {
         opt: path::Opt,
         f: impl Fn(Self) -> I,
     ) -> ValX<'a> {
-        if let (Val::BStr(_) | Val::TStr(_) | Val::Arr(_), Val::Obj(o)) = (&self, index) {
+        // Pathfinder: `null` too, which jq updates as an empty array.
+        if let (Val::Null | Val::BStr(_) | Val::TStr(_) | Val::Arr(_), Val::Obj(o)) = (&self, index)
+        {
             let range = o.get(&Val::utf8_str("start"))..o.get(&Val::utf8_str("end"));
             return self.map_range(range, opt, f);
         };
         match self {
+            // Pathfinder: jq 1.8.1 updates `null` as the container its key
+            // implies, an object for a string and an array for a number
+            // (`null | .a.b = 1` is `{"a":{"b":1}}`); deleting from it
+            // leaves `null`.
+            Val::Null if matches!(index, Val::BStr(_) | Val::TStr(_)) => Val::obj(Map::default())
+                .map_index(index, opt, f)
+                .map(|v| match v {
+                    Val::Obj(o) if o.is_empty() => Val::Null,
+                    v => v,
+                }),
+            Val::Null if matches!(index, Val::Num(_)) => Val::Arr(Rc::default())
+                .map_index(index, opt, f)
+                .map(|v| match v {
+                    Val::Arr(a) if a.is_empty() => Val::Null,
+                    v => v,
+                }),
             // Pathfinder: jq 1.8.1 indexes an object only with a string.
             Val::Obj(_) if !matches!(index, Val::BStr(_) | Val::TStr(_)) => {
                 opt.fail(self, |v| Exn::from(Error::index(v, index.clone())))
@@ -272,9 +289,9 @@ impl jaq_core::ValT for Val {
                         let v = core::mem::take(e.get_mut());
                         match f(v).next().transpose()? {
                             Some(y) => e.insert(y),
-                            // this runs in constant time, at the price of
-                            // changing the order of the elements
-                            None => e.swap_remove(),
+                            // Pathfinder: the other keys keep their order, as
+                            // in jq, where jaq swapped the last key in.
+                            None => e.shift_remove(),
                         };
                     }
                     Vacant(e) => {
@@ -285,29 +302,59 @@ impl jaq_core::ValT for Val {
                 }
                 Ok(self)
             }
+            // Pathfinder: jq 1.8.1's array update. A fractional index is
+            // truncated; an index past the end pads with `null`; deleting an
+            // element that is not there changes nothing; jq's errors for an
+            // index before the start, above 536870911 (`INT_MAX >> 2`) or NaN.
             Val::Arr(ref mut a) => {
-                let oob = || Error::str(format_args!("index {index} out of bounds"));
-                let abs_or = |i| abs_index(i, a.len()).ok_or_else(oob);
-                // Pathfinder: a fractional index is truncated, as in jq.
-                let i = match index {
-                    Val::Num(n) => n.as_jq_index().ok_or_else(oob),
-                    _ => index.as_pos_usize(),
+                let Val::Num(n) = index else {
+                    if let Val::Arr(_) = index {
+                        let e = "Cannot update field at array index of array";
+                        return opt.fail(self, |_| Exn::from(Error::str(e)));
+                    }
+                    return opt.fail(self, |v| Exn::from(Error::index(v, index.clone())));
                 };
-                let i = match i.and_then(abs_or) {
-                    Ok(i) => i,
-                    Err(e) => return opt.fail(self, |_| Exn::from(e)),
-                };
-
-                let a = Rc::make_mut(a);
-                let x = core::mem::take(&mut a[i]);
-                if let Some(y) = f(x).next().transpose()? {
-                    a[i] = y;
+                let len = a.len();
+                let t = n.as_f64().trunc();
+                // The element's index, if it is in the array.
+                let at = if t.is_nan() {
+                    None
+                } else if t < 0.0 {
+                    (-t <= len as f64).then(|| len - (-t) as usize)
                 } else {
-                    a.remove(i);
+                    (t < len as f64).then_some(t as usize)
+                };
+                let x = at.map_or(Val::Null, |i| core::mem::take(&mut Rc::make_mut(a)[i]));
+                let Some(y) = f(x).next().transpose()? else {
+                    if let Some(i) = at {
+                        Rc::make_mut(a).remove(i);
+                    }
+                    return Ok(self);
+                };
+                let i = match at {
+                    Some(i) => i,
+                    None if t.is_nan() => {
+                        let e = "Cannot set array element at NaN index";
+                        return opt.fail(self, |_| Exn::from(Error::str(e)));
+                    }
+                    None if t < 0.0 => {
+                        let e = "Out of bounds negative array index";
+                        return opt.fail(self, |_| Exn::from(Error::str(e)));
+                    }
+                    None if t > 536_870_911.0 => {
+                        return opt.fail(self, |_| Exn::from(Error::str("Array index too large")));
+                    }
+                    None => t as usize,
+                };
+                let a = Rc::make_mut(a);
+                if i >= a.len() {
+                    a.resize(i + 1, Val::Null);
                 }
+                a[i] = y;
                 Ok(self)
             }
-            _ => opt.fail(self, |v| Exn::from(Error::typ(v, Type::Iter.as_str()))),
+            // Pathfinder: jq's error for indexing a scalar.
+            _ => opt.fail(self, |v| Exn::from(Error::index(v, index.clone()))),
         }
     }
 
@@ -334,7 +381,6 @@ impl jaq_core::ValT for Val {
             Ok(into(b.freeze()))
         };
         let stb = skip_take_bytes;
-        let stc = skip_take_chars;
         match self {
             Val::Arr(ref mut a) => {
                 let (skip, take) = match Self::range_int(range) {
@@ -342,14 +388,26 @@ impl jaq_core::ValT for Val {
                     Err(e) => return opt.fail(self, |_| Exn::from(e)),
                 };
                 let arr = a.iter().skip(skip).take(take).cloned().collect();
-                let y = f(arr).map(|y| y?.into_arr().map_err(Exn::from)).next();
+                // Pathfinder: jq 1.8.1's message for a slice given no array.
+                let not_arr = |_: Error| {
+                    let e = "A slice of an array can only be assigned another array";
+                    Exn::from(Error::str(e))
+                };
+                let y = f(arr).map(|y| y?.into_arr().map_err(not_arr)).next();
                 let y = y.transpose()?.unwrap_or_default();
                 Rc::make_mut(a).splice(skip..skip + take, (*y).clone());
                 Ok(self)
             }
             Val::BStr(b) => fs(*b, range, stb, Val::into_byte_str, Val::byte_str),
-            Val::TStr(b) => fs(*b, range, stc, Val::into_utf8_str, Val::utf8_str),
-            _ => opt.fail(self, |v| Exn::from(Error::typ(v, Type::Arr.as_str()))),
+            // Pathfinder: jq 1.8.1 cannot update a slice of a string.
+            Val::TStr(_) => opt.fail(self, |_| {
+                Exn::from(Error::str("Cannot update string slices"))
+            }),
+            // Pathfinder: jq's error for slicing what is no array.
+            _ => {
+                let obj = Val::obj(Map::default());
+                opt.fail(self, |v| Exn::from(Error::index(v, obj)))
+            }
         }
     }
 
@@ -496,22 +554,9 @@ impl Val {
         }
     }
 
-    /// If the value is an integer in [-usize::MAX, +usize::MAX], return it, else fail.
-    fn as_pos_usize(&self) -> Result<num::PosUsize, Error> {
-        let fail = || Error::typ(self.clone(), Type::Int.as_str());
-        self.as_num().and_then(Num::as_pos_usize).ok_or_else(fail)
-    }
-
     fn into_byte_str(self) -> Result<Bytes, Error> {
         match self {
             Self::BStr(b) => Ok(*b),
-            _ => Err(Error::typ(self, Type::Str.as_str())),
-        }
-    }
-
-    fn into_utf8_str(self) -> Result<Bytes, Error> {
-        match self {
-            Self::TStr(b) => Ok(*b),
             _ => Err(Error::typ(self, Type::Str.as_str())),
         }
     }

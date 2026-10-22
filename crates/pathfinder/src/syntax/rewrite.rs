@@ -88,6 +88,9 @@ pub struct Rewrites {
     pub computed_key: bool,
     /// Assignment creates missing containers and raises jq's errors.
     pub assignment: bool,
+    /// An update of several paths (`(.a, .b) |= f`) deletes the paths `f`
+    /// yields nothing for together, at the end, as jq's `_modify` does.
+    pub comma_update: bool,
     /// `/` and `%` raise jq's zero-divisor errors; `%` is on integers.
     pub division: bool,
     /// Binary operators evaluate the right operand in the outer loop.
@@ -111,6 +114,7 @@ impl Rewrites {
     pub const ALL: Self = Self {
         computed_key: true,
         assignment: true,
+        comma_update: true,
         division: true,
         operand_order: true,
         delete: true,
@@ -129,6 +133,7 @@ impl Rewrites {
         negation: false,
         index: false,
         slice: false,
+        assignment: false,
         ..Self::ALL
     };
 }
@@ -274,7 +279,11 @@ impl Cx<'_> {
                 };
                 (format!("(({r}) as {t} | {assign})"), true)
             }
-            Kind::Binary { op, lhs, rhs } if self.on.assignment && is_assignment(op) => {
+            Kind::Binary { op, lhs, rhs }
+                if is_assignment(op)
+                    && (self.on.assignment
+                        || (self.on.comma_update && *op != "=" && has_comma(lhs))) =>
+            {
                 let (l, _) = self.emit(lhs);
                 let (r, _) = self.emit(rhs);
                 (self.assignment(op, lhs, &l, &r), true)
@@ -775,6 +784,13 @@ impl Cx<'_> {
             } else {
                 let bin = &op[..op.len() - 1];
                 format!("(({r}) as {t} | _pf_modify(({l}); . {bin} {t}))")
+            };
+        }
+        if !self.on.assignment {
+            // The engine creates the containers itself.
+            return match op {
+                "|=" => format!("(({l}) |= ({r}))"),
+                _ => format!("(({r}) as {t} | ({l}) {op} {t})"),
             };
         }
         if !addresses(lhs) {
