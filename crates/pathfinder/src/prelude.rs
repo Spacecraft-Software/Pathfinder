@@ -1131,6 +1131,23 @@ pub static NATIVE: &[&str] = &[
     // `delpaths([path(f)])` (M20, T-025).
     "del",
     "delpaths",
+    // jq 1.8.1's own definitions are the engine's (`pathfinder-json`'s
+    // `defs.jq`, M20, T-027).
+    "tostream",
+    "fromstream",
+    "truncate_stream",
+    "IN",
+    "INDEX",
+    "JOIN",
+    "trimstr",
+    "have_decnum",
+    "have_literal_numbers",
+    "skip",
+    "limit",
+    "nth",
+    "flatten",
+    "join",
+    "pick",
 ];
 
 fn find<'a>(name: &str, table: &'a [Def]) -> Option<&'a Def> {

@@ -450,6 +450,12 @@ changes land once, in the crates, not in `packaging/jaq/`.
   redefines `delpaths` with it and `del(f)` as jq's
   `delpaths([path(f)])`. `pathfinder-core` keeps jaq's definitions, so its
   tests still run without the JSON crate.
+- jq 1.8.1's own definitions (`src/builtin.jq`) of `tostream`,
+  `fromstream`, `truncate_stream`, `IN`, `INDEX`, `JOIN`, `trimstr`,
+  `have_decnum`, `have_literal_numbers`, `skip`, `limit`, `nth`, `flatten`,
+  `join` and `pick` are the engine's, in `pathfinder-json`'s `defs.jq`
+  (T-027), where jaq had none or its own. jaq's tests of `flatten` on an
+  object and a number now expect jq's answers.
 
 ## Licence of Pathfinder's changes
 

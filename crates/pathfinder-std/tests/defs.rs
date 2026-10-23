@@ -51,9 +51,13 @@ yields!(
 );
 
 // here, we diverge from jq, which returns just 1
-yields!(flatten_obj, "{a: 1} | flatten", json!([{"a": 1}]));
-// jq gives an error here
-yields!(flatten_num, "0 | flatten", [0]);
+// Pathfinder: jq 1.8.1's answers (`flatten` is jq's definition).
+yields!(flatten_obj, "{a: 1} | flatten", [1]);
+yields!(
+    flatten_num,
+    "try (0 | flatten) catch .",
+    "Cannot iterate over number (0)"
+);
 
 yields!(isfinite_true, "all((0, 1, nan); isfinite)", true);
 yields!(
