@@ -203,9 +203,9 @@ fn base<D: for<'a> DataT<V<'a> = Val>>() -> Box<[Filter<RunPtr<D>>]> {
                 Ok(Val::from(x.contains(&y)))
             })
         }),
-        ("has", v(1), |cv| {
-            unary(cv, |v, k| v.index_opt(&k).map(|o| o.is_some().into()))
-        }),
+        ("has", v(1), |cv| unary(cv, has)),
+        ("tonumber", v(0), |cv| bome(tonumber(cv.1))),
+        ("toboolean", v(0), |cv| bome(toboolean(cv.1))),
         ("indices", v(1), |cv| {
             let to_int = |i: usize| Val::from(i as isize);
             unary(cv, move |x, v| {
@@ -214,8 +214,16 @@ fn base<D: for<'a> DataT<V<'a> = Val>>() -> Box<[Filter<RunPtr<D>>]> {
         }),
         ("bsearch", v(1), |cv| {
             let to_idx = |r: Result<_, _>| r.map_or_else(|i| -1 - i as isize, |i| i as isize);
-            unary(cv, move |a, x| {
-                a.as_arr().map(|a| Val::from(to_idx(a.binary_search(&x))))
+            unary(cv, move |a, x| match a {
+                Val::Arr(a) => Ok(Val::from(to_idx(a.binary_search(&x)))),
+                // Pathfinder: jq 1.8.1's message.
+                a => {
+                    use jaq_core::ValT;
+                    Err(Error::str(format_args!(
+                        "{} cannot be searched from",
+                        a.jq_quoted()
+                    )))
+                }
             })
         }),
     ])
@@ -341,5 +349,103 @@ fn dels(v: Val, keys: &[Val]) -> ValR {
             let t = v.jq_type();
             Err(Error::str(format_args!("Cannot delete fields from {t}")))
         }
+    }
+}
+
+/// Pathfinder: jq 1.8.1's `has`: an object takes a string key, an array a
+/// number (truncated; NaN is no index), `null` has nothing.
+fn has(v: Val, k: Val) -> ValR {
+    use jaq_core::ValT;
+    let fail = || {
+        let (t, kt) = (v.jq_type(), k.jq_type());
+        Err(Error::str(format_args!(
+            "Cannot check whether {t} has a {kt} key"
+        )))
+    };
+    match (&v, &k) {
+        (Val::Null, _) => Ok(Val::Bool(false)),
+        (Val::Obj(o), Val::BStr(_) | Val::TStr(_)) => Ok(Val::Bool(o.contains_key(&k))),
+        (Val::Arr(a), Val::Num(n)) => {
+            let f = n.as_f64();
+            Ok(Val::Bool(
+                !f.is_nan() && f.trunc() >= 0.0 && f.trunc() < a.len() as f64,
+            ))
+        }
+        _ => fail(),
+    }
+}
+
+/// Pathfinder: jq 1.8.1's `tonumber`: a number as it is; a string whole, as
+/// C's `strtod` reads it (`nan`, `inf`, `+5`, `.5`, `1.` included), keeping
+/// a literal's text as jq does; anything else is jq's error.
+fn tonumber(v: Val) -> ValR {
+    use jaq_core::ValT;
+    let fail = |v: &Val| {
+        Err(Error::str(format_args!(
+            "{} cannot be parsed as a number",
+            v.jq_quoted()
+        )))
+    };
+    let s = match &v {
+        Val::Num(_) => return Ok(v),
+        Val::BStr(b) | Val::TStr(b) => match core::str::from_utf8(b) {
+            Ok(s) => s,
+            Err(_) => return fail(&v),
+        },
+        _ => return fail(&v),
+    };
+    let Ok(f) = s.parse::<f64>() else {
+        return fail(&v);
+    };
+    let digits = s.trim_start_matches(['+', '-']);
+    if !digits.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
+        // `nan`, `inf`, `infinity`, in any case.
+        return Ok(Val::from(f));
+    }
+    // jq's literal: no sign `+`, no leading `.`, no trailing `.`.
+    let lit = s.strip_prefix('+').unwrap_or(s);
+    let lit = match lit.strip_prefix('-') {
+        Some(rest) => alloc::format!("-{}", canonical_literal(rest)),
+        None => canonical_literal(lit),
+    };
+    let n = crate::Num::from_str(&lit);
+    // An integral negative zero stays one, as jq prints it (`-0`); any other
+    // keeps its text (`-0.0`).
+    if matches!(n, crate::Num::Int(0)) && lit.starts_with('-') {
+        return Ok(Val::from(-0.0));
+    }
+    Ok(Val::Num(n))
+}
+
+/// A number literal's digits as JSON spells them: `0.5` for `.5`, `1` for
+/// `1.`, leading zeros dropped (`01` is `1`).
+fn canonical_literal(s: &str) -> alloc::string::String {
+    let (mant, exp) = match s.find(['e', 'E']) {
+        Some(i) => (&s[..i], &s[i..]),
+        None => (s, ""),
+    };
+    let (int, frac) = match mant.split_once('.') {
+        Some((i, f)) => (i, Some(f)),
+        None => (mant, None),
+    };
+    let int = int.trim_start_matches('0');
+    let int = if int.is_empty() { "0" } else { int };
+    match frac {
+        Some(f) if !f.is_empty() => alloc::format!("{int}.{f}{exp}"),
+        _ => alloc::format!("{int}{exp}"),
+    }
+}
+
+/// Pathfinder: jq 1.8.1's `toboolean`.
+fn toboolean(v: Val) -> ValR {
+    use jaq_core::ValT;
+    match &v {
+        Val::Bool(_) => Ok(v),
+        Val::TStr(b) | Val::BStr(b) if &***b == b"true" => Ok(Val::Bool(true)),
+        Val::TStr(b) | Val::BStr(b) if &***b == b"false" => Ok(Val::Bool(false)),
+        _ => Err(Error::str(format_args!(
+            "{} cannot be parsed as a boolean",
+            v.jq_quoted()
+        ))),
     }
 }

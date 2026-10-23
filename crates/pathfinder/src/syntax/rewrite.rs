@@ -128,6 +128,7 @@ impl Rewrites {
     /// What the native engine still needs.
     pub const NATIVE: Self = Self {
         catch_wording: false,
+        computed_key: false,
         operand_order: false,
         division: false,
         negation: false,

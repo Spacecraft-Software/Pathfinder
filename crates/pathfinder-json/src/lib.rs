@@ -188,7 +188,18 @@ impl jaq_core::ValT for Val {
     }
 
     fn from_map<I: IntoIterator<Item = (Self, Self)>>(iter: I) -> ValR {
-        Ok(Self::obj(iter.into_iter().collect()))
+        // Pathfinder: jq 1.8.1 builds objects only with string keys.
+        let mut m = Map::default();
+        for (k, v) in iter {
+            if !matches!(k, Val::BStr(_) | Val::TStr(_)) {
+                return Err(Error::str(format_args!(
+                    "Cannot use {} as object key",
+                    k.jq_quoted()
+                )));
+            }
+            m.insert(k, v);
+        }
+        Ok(Self::obj(m))
     }
 
     fn key_values(self) -> Box<dyn Iterator<Item = Result<(Val, Val), Error>>> {
@@ -566,13 +577,6 @@ impl Val {
         match self {
             Self::Arr(a) => Ok(a),
             _ => Err(Error::typ(self, Type::Arr.as_str())),
-        }
-    }
-
-    fn as_arr(&self) -> Result<&Rc<Vec<Self>>, Error> {
-        match self {
-            Self::Arr(a) => Ok(a),
-            _ => Err(Error::typ(self.clone(), Type::Arr.as_str())),
         }
     }
 

@@ -1,7 +1,6 @@
 # Conversion
 def totype(p; e): if p then . else fromjson | if p then . else e end end;
-def tonumber : totype(isnumber ; error("cannot parse as number" ));
-def toboolean: totype(isboolean; error("cannot parse as boolean"));
+# Pathfinder: `tonumber` and `toboolean` are native, as jq 1.8.1's.
 
 # Arrays
 def transpose: [range([.[] | length] | max) as $i | [.[][$i]]];
@@ -43,3 +42,5 @@ def flatten($x): if $x < 0 then error("flatten depth must not be negative") else
 def flatten: _flatten(-1);
 def join($x): reduce .[] as $i (null; (if . == null then "" else . + $x end) + ($i | if type == "boolean" or type == "number" then tostring else . // "" end)) // "";
 def pick(pathexps): . as $in | reduce path(pathexps) as $a (null; setpath($a; $in | getpath($a)));
+def from_entries: map({(.key // .Key // .name // .Name): (if has("value") then .value else .Value end)}) | add | .//={};
+def with_entries(f): to_entries | map(f) | from_entries;

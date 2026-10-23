@@ -456,6 +456,13 @@ changes land once, in the crates, not in `packaging/jaq/`.
   `join` and `pick` are the engine's, in `pathfinder-json`'s `defs.jq`
   (T-027), where jaq had none or its own. jaq's tests of `flatten` on an
   object and a number now expect jq's answers.
+- Native with jq 1.8.1's semantics and messages: `has` (a string key for an
+  object, a truncated number for an array, `null` has nothing), `tonumber`
+  (a string whole as C's `strtod` reads it, a literal's text kept),
+  `toboolean`, `utf8bytelength`, `bsearch`, `trim`/`ltrim`/`rtrim`; jq's
+  definitions of `from_entries` and `with_entries`. Object construction
+  refuses a key that is no string (`Cannot use null (null) as object key`),
+  where jaq built objects that are no JSON.
 
 ## Licence of Pathfinder's changes
 

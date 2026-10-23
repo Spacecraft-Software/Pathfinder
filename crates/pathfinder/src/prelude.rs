@@ -175,14 +175,15 @@ static POLYFILLS: &[Def] = &[
     // jq's so an unsupported name reads identically.
     Def {
         name: "format",
-        deps: &["_pf_base64d", "_pf_urid"],
+        deps: &["_pf_base64d", "_pf_urid", "_pf_dump"],
         src: Some(
             "def format($fmt): if $fmt == \"text\" then @text elif $fmt == \"json\" then @json \
              elif $fmt == \"csv\" then @csv elif $fmt == \"tsv\" then @tsv \
              elif $fmt == \"html\" then @html elif $fmt == \"uri\" then @uri \
              elif $fmt == \"sh\" then @sh elif $fmt == \"base64\" then @base64 \
              elif $fmt == \"base64d\" then _pf_base64d elif $fmt == \"urid\" then _pf_urid \
-             else error($fmt + \" is not a valid format\") end;",
+             else error((if $fmt < \"\" or $fmt >= [] then \"\\($fmt | type) (\\($fmt | _pf_dump))\" \
+             else $fmt end) + \" is not a valid format\") end;",
         ),
     },
     // --- capability probes -----------------------------------------------
@@ -1148,6 +1149,19 @@ pub static NATIVE: &[&str] = &[
     "flatten",
     "join",
     "pick",
+    // The engine's `trim`, `ltrim` and `rtrim` raise jq's message.
+    "trim",
+    "ltrim",
+    "rtrim",
+    // Native with jq 1.8.1's semantics and messages (`pathfinder-json`).
+    "has",
+    "tonumber",
+    "toboolean",
+    "utf8bytelength",
+    "bsearch",
+    // jq 1.8.1's definitions, in `pathfinder-json`'s `defs.jq`.
+    "from_entries",
+    "with_entries",
 ];
 
 fn find<'a>(name: &str, table: &'a [Def]) -> Option<&'a Def> {

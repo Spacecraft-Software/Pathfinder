@@ -489,6 +489,12 @@ fn sh<V: ValT>(v: V) -> ValR<V> {
     Ok(V::from(out))
 }
 
+/// Pathfinder: `trim`, `ltrim` and `rtrim`, with jq's message for a
+/// non-string.
+fn trim<V: ValT>(v: &V, f: impl FnOnce(&[u8]) -> &[u8]) -> ValR<V> {
+    Ok(v.as_sub_str(f(v.utf8_or("trim input must be a string")?)))
+}
+
 /// Pathfinder: jq's messages for `explode` and the functions written with it.
 const EXPLODE: &str = "explode input must be a string";
 const STARTS: &str = "startswith() requires string inputs";
@@ -575,8 +581,13 @@ where
         ("floor", v(0), |cv| bome(cv.1.round(f64::floor))),
         ("round", v(0), |cv| bome(cv.1.round(f64::round))),
         ("ceil", v(0), |cv| bome(cv.1.round(f64::ceil))),
+        // Pathfinder: jq 1.8.1's message.
         ("utf8bytelength", v(0), |cv| {
-            bome(cv.1.try_as_utf8_bytes().map(|s| (s.len() as isize).into()))
+            let s = cv.1.as_utf8_bytes().ok_or_else(|| {
+                let q = cv.1.jq_quoted();
+                Error::str(alloc::format!("{q} only strings have UTF-8 byte length"))
+            });
+            bome(s.map(|s| (s.len() as isize).into()))
         }),
         // Pathfinder: jq's messages; `ascii_downcase` and `ascii_upcase` are
         // written with `explode` in jq, so they fail as it does.
@@ -659,15 +670,10 @@ where
                     .map_or_else(|| v.clone(), |sub| v.as_sub_str(sub)))
             })
         }),
-        ("trim", v(0), |cv| {
-            bome(cv.1.trim_utf8_with(ByteSlice::trim))
-        }),
-        ("ltrim", v(0), |cv| {
-            bome(cv.1.trim_utf8_with(ByteSlice::trim_start))
-        }),
-        ("rtrim", v(0), |cv| {
-            bome(cv.1.trim_utf8_with(ByteSlice::trim_end))
-        }),
+        // Pathfinder: jq 1.8.1's message for a non-string.
+        ("trim", v(0), |cv| bome(trim(&cv.1, ByteSlice::trim))),
+        ("ltrim", v(0), |cv| bome(trim(&cv.1, ByteSlice::trim_start))),
+        ("rtrim", v(0), |cv| bome(trim(&cv.1, ByteSlice::trim_end))),
         // Pathfinder: `min` and `max` natively, with jq's message for a value
         // that is no array; of equal values, `min` keeps the first and `max`
         // the last, as jq does.
