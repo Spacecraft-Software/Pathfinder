@@ -69,7 +69,12 @@ fn range_access() {
     give(json!([0, 1, 2]), ".[1:0]", json!([]));
     give(json!([0, 1, 2]), ".[4:5]", json!([]));
 
-    give(json!([0, 1, 2]), ".[0:2,3.14]?", json!([0, 1]));
+    // Pathfinder: jq 1.8.1 rounds a fractional end up.
+    give(
+        json!([0, 1, 2]),
+        "[.[0:2,3.14]?]",
+        json!([[0, 1], [0, 1, 2]]),
+    );
 }
 
 #[test]
@@ -118,7 +123,8 @@ fn index_update() {
     */
 
     give(json!([0, 1, 2]), r#".["a", 0]? |= .+1"#, json!([1, 1, 2]));
-    give(json!([0, 1, 2]), r#".[3]? |= .+1"#, json!([0, 1, 2]));
+    // Pathfinder: jq 1.8.1 pads the array.
+    give(json!([0, 1, 2]), r#".[3]? |= .+1"#, json!([0, 1, 2, 1]));
     give(json!("asdf"), ".[0]? |= .+1", json!("asdf"));
 }
 
@@ -162,7 +168,8 @@ fn range_update() {
     give(
         json!([0, 1, 2]),
         ".[:2,3.0]? |= [.[] | .+1]",
-        json!([1, 2, 2]),
+        // Pathfinder: jq 1.8.1 takes the bound 3.0 as 3.
+        json!([2, 3, 3]),
     );
 }
 
@@ -191,11 +198,8 @@ fn update_mult() {
 
 #[test]
 fn update_complex() {
-    // jq returns 1 here, which looks like a bug
-    // in general, `a | a |= .`
-    // works in jq when `a` is either null, a number, or a boolean --- it
-    // does *not* work when `a` is a string, an array, or an object!
-    fail(json!(0), "0 |= .+1", Error::path_expr(Val::from(0usize)));
+    // Pathfinder: jq 1.8.1 fails as `path(0)` does, for any value.
+    fail(json!(0), "0 |= .+1", Error::path_result(&Val::from(0usize)));
 }
 
 yields!(alt_update_l, "[1, 2] | .[] // . |= 3", [3, 3]);

@@ -26,6 +26,12 @@ pub struct Data<'a> {
     pub lut: &'a Lut<DataKind>,
     /// input values
     pub inputs: Inputs<'a, Val>,
+    /// Pathfinder: the name of the file the reader has open, for
+    /// `input_filename`; `None` before any input is read.
+    pub filename: &'a dyn Fn() -> Option<String>,
+    /// Pathfinder: the lines the reader has fetched, for
+    /// `input_line_number`.
+    pub line_number: &'a dyn Fn() -> usize,
 }
 
 impl<'a> data::HasLut<'a, DataKind> for &'a Data<'a> {
@@ -71,7 +77,34 @@ pub fn base_funs() -> impl Iterator<Item = crate::Fun<DataKind>> {
 /// Base functions ([`base_funs`]) plus functions from [`jaq_fmts`].
 #[cfg(feature = "std-all")]
 pub fn funs() -> impl Iterator<Item = crate::Fun<DataKind>> {
-    base_funs().chain(jaq_fmts::funs())
+    base_funs()
+        .chain(jaq_fmts::funs())
+        .chain(core::iter::once(input_filename()))
+        .chain(core::iter::once(input_line_number()))
+}
+
+/// Pathfinder: `input_line_number`, as jq 1.8.1 answers it: the lines its
+/// reader has fetched from the current input, the count its error locations
+/// show ([`Data::line_number`]).
+#[cfg(feature = "std-all")]
+fn input_line_number() -> crate::Fun<DataKind> {
+    jaq_core::native::run(("input_line_number", jaq_core::native::v(0), |cv| {
+        let n = (cv.0.data().line_number)();
+        Box::new(core::iter::once(Ok(Val::from(
+            isize::try_from(n).unwrap_or(isize::MAX),
+        ))))
+    }))
+}
+
+/// Pathfinder: `input_filename`, as jq 1.8.1 answers it: the file the reader
+/// has open, which the parser may already have entered for the next value,
+/// and `null` before any input is read ([`Data::filename`]).
+#[cfg(feature = "std-all")]
+fn input_filename() -> crate::Fun<DataKind> {
+    jaq_core::native::run(("input_filename", jaq_core::native::v(0), |cv| {
+        let name = (cv.0.data().filename)();
+        Box::new(core::iter::once(Ok(name.map_or(Val::Null, Val::utf8_str))))
+    }))
 }
 
 /// Compile a filter without access to external files/variables, including all functions/definitions.
@@ -101,6 +134,8 @@ pub fn run<E>(
         runner,
         lut: &filter.lut,
         inputs: &RcIter::new(inputs),
+        filename: &|| None,
+        line_number: &|| 0,
     };
     let ctx = Ctx::new(&data, vars);
 

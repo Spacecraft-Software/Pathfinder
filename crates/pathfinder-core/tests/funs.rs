@@ -6,7 +6,7 @@
 
 pub mod common;
 
-use common::{fail, give, gives, Error, Val};
+use common::{fail, give, gives, Error};
 use serde_json::json;
 
 yields!(repeat, "def r(f): f, r(f); [limit(3; r(1, 2))]", [1, 2, 1]);
@@ -41,9 +41,10 @@ fn keys_unsorted() {
     give(json!([0, null, "a"]), "keys_unsorted", json!([0, 1, 2]));
     give(json!({"a": 1, "b": 2}), "keys_unsorted", json!(["a", "b"]));
 
-    let err = |v| Error::typ(v, "iterable (array or object)");
-    fail(json!(0), "keys_unsorted", err(Val::from(0usize)));
-    fail(json!(null), "keys_unsorted", err(Val::Null));
+    // Pathfinder: jq 1.8.1's message (`jq -n '0 | keys_unsorted'`).
+    let err = |m: &str| Error::str(m);
+    fail(json!(0), "keys_unsorted", err("number (0) has no keys"));
+    fail(json!(null), "keys_unsorted", err("null (null) has no keys"));
 }
 
 #[test]
@@ -67,14 +68,15 @@ yields!(range_np, "[range(0; -6; 2)]", json!([]));
 yields!(range_nn, "[range(0; -6; -2)]", [0, -2, -4]);
 yields!(range_zz, "[range(0; 0; 0)]", json!([]));
 yields!(range_fp, "[range(0.0; 2; 0.5)]", [0.0, 0.5, 1.0, 1.5]);
-yields!(range_ip, "[limit(3; range(0; 1/0; 1))]", [0, 1, 2]);
-yields!(range_in, "[limit(3; range(0; -1/0; -1))]", [0, -1, -2]);
-// here, we diverge from jq, which just returns the empty list
-yields!(range_pz, "[limit(3; range(0; 6; 0))]", json!([0, 0, 0]));
-yields!(range_nz, "[limit(3; range(0; -6; 0))]", json!([0, 0, 0]));
+// Pathfinder: `1/0` is jq's error; `1e1000` is an infinite bound.
+yields!(range_ip, "[limit(3; range(0; 1e1000; 1))]", [0, 1, 2]);
+yields!(range_in, "[limit(3; range(0; -1e1000; -1))]", [0, -1, -2]);
+// Pathfinder: as jq 1.8.1, no step yields nothing.
+yields!(range_pz, "[limit(3; range(0; 6; 0))]", json!([]));
+yields!(range_nz, "[limit(3; range(0; -6; 0))]", json!([]));
 
 yields!(
-    path_value,
-    "[{a: 1, b: [2, 3]} | skip(1; path_value(..))]",
+    _path_value,
+    "[{a: 1, b: [2, 3]} | skip(1; _path_value(..))]",
     json!([[["a"], 1], [["b"], [2, 3]], [["b", 0], 2], [["b", 1], 3]])
 );

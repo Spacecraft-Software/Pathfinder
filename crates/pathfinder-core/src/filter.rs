@@ -178,6 +178,52 @@ fn bind_vars<'a, D: DataT, T: 'a + Clone>(
     }
 }
 
+/// Pathfinder: [`bind_vars`] for a native filter, which jq 1.8.1 calls as
+/// it calls a C builtin: the last variable argument in the outermost loop
+/// (`[pow(2,3; 1,2)]` is 2, 3, 4, 9). The variables are bound in the
+/// arguments' order all the same, as the natives pop them.
+fn bind_native<'a, D: DataT, T: 'a + Clone>(
+    args: &'a [Arg<Id>],
+    ctx: Ctx<'a, D>,
+    cv: Cv<'a, D, T>,
+    proj: fn(&T) -> D::V<'a>,
+) -> ValXs<'a, Cv<'a, D, T>, D::V<'a>> {
+    if args.iter().filter(|a| matches!(a, Arg::Var(_))).count() < 2 {
+        return bind_vars(args, ctx, cv, proj);
+    }
+    bind_native_from(args, args.len(), alloc::vec::Vec::new(), ctx, cv, proj)
+}
+
+/// Run the variable arguments among the first `n`, the last outermost,
+/// collecting their values in `vals`, last first; then bind them all.
+fn bind_native_from<'a, D: DataT, T: 'a + Clone>(
+    args: &'a [Arg<Id>],
+    n: usize,
+    mut vals: alloc::vec::Vec<D::V<'a>>,
+    ctx: Ctx<'a, D>,
+    cv: Cv<'a, D, T>,
+    proj: fn(&T) -> D::V<'a>,
+) -> ValXs<'a, Cv<'a, D, T>, D::V<'a>> {
+    match args[..n].split_last() {
+        Some((Arg::Var(arg), _)) => flat_map_then_with(
+            arg.run((cv.0.clone(), proj(&cv.1))),
+            (vals, ctx, cv),
+            move |y, (mut vals, ctx, cv)| {
+                vals.push(y);
+                bind_native_from(args, n - 1, vals, ctx, cv, proj)
+            },
+        ),
+        Some((Arg::Fun(_), _)) => bind_native_from(args, n - 1, vals, ctx, cv, proj),
+        None => {
+            let ctx = args.iter().fold(ctx, |ctx, arg| match arg {
+                Arg::Var(_) => ctx.cons_var(vals.pop().expect("a value per variable argument")),
+                Arg::Fun(arg) => ctx.cons_fun((*arg, cv.0.clone())),
+            });
+            box_once(Ok((ctx, cv.1)))
+        }
+    }
+}
+
 fn bind_pat<'a, D: DataT>(
     (idxs, pat): &'a (Id, Pattern<Id>),
     ctx: Ctx<'a, D>,
@@ -306,6 +352,67 @@ fn cartesian<'a, D: DataT>(l: &'a Id, r: &'a Id, cv: Cv<'a, D>) -> Pairs<'a, Val
     flat_map_with(l.run(cv.clone()), cv, move |l, cv| {
         map_with(r.run(cv), l, |r, l| (l, r))
     })
+}
+
+/// Pathfinder: [`cartesian`] with the right operand in the outer loop, as
+/// jq 1.8.1 evaluates arithmetic and comparisons: `(1,2) + (10,20)` is 11,
+/// 12, 21, 22, `input - input` reads the right operand first, and an error
+/// of the right operand is raised before the left one runs at all, so
+/// `empty + error("R")` fails. The callers look at the right value first;
+/// the left one beside an error is a placeholder.
+fn cartesian_rl<'a, D: DataT>(
+    l: &'a Id,
+    r: &'a Id,
+    cv: Cv<'a, D>,
+) -> Pairs<'a, ValX<'a, D::V<'a>>> {
+    flat_map_with(r.run(cv.clone()), cv, move |r, cv| match r {
+        Err(e) => box_once((Ok(D::V::from(false)), Err(e))),
+        r => map_with(l.run(cv), r, |l, r| (l, r)),
+    })
+}
+
+/// Pathfinder: `path.update(cv, f)`, failing where jq's update fails. jq
+/// finds a target's paths before it updates, so a target that is no path
+/// expression fails as `path(target)` does (`Invalid path expression near
+/// attempt to iterate through …`, patch 0010), where jaq's update said
+/// `invalid path expression with input …`.
+fn update_jq<'a, D: DataT>(
+    path: &'a Id,
+    cv: Cv<'a, D>,
+    f: BoxUpdate<'a, D::V<'a>>,
+) -> ValXs<'a, D::V<'a>> {
+    // A plain path cannot fail as no path expression, and keeping a second
+    // reference to the input would make every in-place update copy it.
+    if plain_path(path, cv.0.lut()) {
+        return path.update(cv, f);
+    }
+    let (ctx, input) = (cv.0.clone(), cv.1.clone());
+    Box::new(path.update(cv, f).map(move |r| match r {
+        Err(e) if e.is_path_expr() => {
+            let mut paths = path.paths((ctx.clone(), (input.clone(), RcList::default())));
+            // The first failure `path(target)` would report, a lost path's
+            // included.
+            let found = paths.find_map(|r| match r {
+                Err(e) => Some(e),
+                Ok((v, p)) if p.lost().is_some() => Some(Exn::from(Error::path_result(&v))),
+                Ok(_) => None,
+            });
+            Err(found.unwrap_or(e))
+        }
+        r => r,
+    }))
+}
+
+/// Pathfinder: whether `id` is a path by its form alone: `.`, steps on a
+/// plain path (whatever their index expressions), and pipes and commas of
+/// plain paths.
+fn plain_path<D: DataT>(id: &Id, lut: &crate::Lut<D>) -> bool {
+    match &lut.terms[id.0] {
+        Ast::Id => true,
+        Ast::Path(base, _) => plain_path(base, lut),
+        Ast::Pipe(l, None, r) | Ast::Comma(l, r) => plain_path(l, lut) && plain_path(r, lut),
+        _ => false,
+    }
 }
 
 fn fold_update<'a, D: DataT>(
@@ -556,20 +663,21 @@ impl Id {
                 })
             }
 
-            Ast::Update(path, f) => path.update(
+            Ast::Update(path, f) => update_jq(
+                path,
                 (cv.0.clone(), cv.1),
                 Box::new(move |v| f.run((cv.0.clone(), v))),
             ),
             Ast::UpdateMath(path, op, f) => pipe(f, cv, move |cv, y| {
                 let u = move |x: D::V<'a>| box_once(op.run(x, y.clone()).map_err(Exn::from));
-                path.update(cv, Box::new(u))
+                update_jq(path, cv, Box::new(u))
             }),
             Ast::UpdateAlt(path, f) => pipe(f, cv, move |cv, y| {
                 let u = move |x: D::V<'a>| box_once(Ok(if x.as_bool() { x } else { y.clone() }));
-                path.update(cv, Box::new(u))
+                update_jq(path, cv, Box::new(u))
             }),
             Ast::Assign(path, f) => pipe(f, cv, move |cv, y| {
-                path.update(cv, Box::new(move |_| box_once(Ok(y.clone()))))
+                update_jq(path, cv, Box::new(move |_| box_once(Ok(y.clone()))))
             }),
             Ast::Logic(l, stop, r) => pipe(l, cv, move |cv, l| {
                 if l.as_bool() == *stop {
@@ -578,10 +686,16 @@ impl Id {
                     Box::new(r.run(cv).map(|r| Ok(D::V::from(r?.as_bool()))))
                 }
             }),
-            Ast::Math(l, op, r) => Box::new(cartesian(l, r, cv).map(|(x, y)| Ok(op.run(x?, y?)?))),
-            Ast::Cmp(l, op, r) => {
-                Box::new(cartesian(l, r, cv).map(|(x, y)| Ok(D::V::from(op.run(&x?, &y?)))))
-            }
+            Ast::ObjCat(l, r) => Box::new(cartesian(l, r, cv).map(|(x, y)| Ok((x? + y?)?))),
+            // Pathfinder: the right operand first, its error included.
+            Ast::Math(l, op, r) => Box::new(cartesian_rl(l, r, cv).map(|(x, y)| {
+                let y = y?;
+                Ok(op.run(x?, y)?)
+            })),
+            Ast::Cmp(l, op, r) => Box::new(cartesian_rl(l, r, cv).map(|(x, y)| {
+                let y = y?;
+                Ok(D::V::from(op.run(&x?, &y)))
+            })),
 
             Ast::Fold(xs, pat, init, update, fold_type) => {
                 let xs = rc_lazy_list::List::from_iter(run_and_bind(xs, cv.clone(), pat));
@@ -604,7 +718,7 @@ impl Id {
                 def_run(id, call_typ, cvs, Id::run, with_vars, into, from)
             }
             Ast::Native(id, args) => {
-                let cvs = bind_vars(args, cv.0.with_vars(Vars::new([])), cv, Clone::clone);
+                let cvs = bind_native(args, cv.0.with_vars(Vars::new([])), cv, Clone::clone);
                 flat_map_then(cvs, |cv| (cv.0.lut().funs[*id].run)(cv))
             }
             Ast::Label(id) => label_run(cv, |cv| id.run(cv)),
@@ -625,7 +739,7 @@ impl Id {
             Ast::ToString => lose(self, cv),
             Ast::Int(_) | Ast::Num(_) | Ast::Str(_) => lose(self, cv),
             Ast::ObjEmpty | Ast::ObjSingle(..) => lose(self, cv),
-            Ast::Logic(..) | Ast::Math(..) | Ast::Cmp(..) => lose(self, cv),
+            Ast::Logic(..) | Ast::Math(..) | Ast::ObjCat(..) | Ast::Cmp(..) => lose(self, cv),
             // Pathfinder: jq 1.8.1 collects `[f]` and negates `-f` without
             // leaving the path expression, so `f` runs as one, and a path
             // operation in it on a value with a lost path fails.
@@ -724,7 +838,7 @@ impl Id {
             Ast::Label(id) => label_run(cv, |cv| id.paths(cv)),
             Ast::Native(id, args) => match cv.0.lut().funs[*id].paths {
                 Some(paths) => {
-                    let cvs = bind_vars(args, cv.0.with_vars(Vars::new([])), cv, proj_val);
+                    let cvs = bind_native(args, cv.0.with_vars(Vars::new([])), cv, proj_val);
                     flat_map_then(cvs, move |cv| paths(cv))
                 }
                 None => lose(self, cv),
@@ -743,7 +857,9 @@ impl Id {
             Ast::ToString => err(cv.1),
             Ast::Int(_) | Ast::Num(_) | Ast::Str(_) => err(cv.1),
             Ast::Arr(_) | Ast::ObjEmpty | Ast::ObjSingle(..) => err(cv.1),
-            Ast::Neg(_) | Ast::Logic(..) | Ast::Math(..) | Ast::Cmp(..) => err(cv.1),
+            Ast::Neg(_) | Ast::Logic(..) | Ast::Math(..) | Ast::ObjCat(..) | Ast::Cmp(..) => {
+                err(cv.1)
+            }
             Ast::Update(..) | Ast::Assign(..) => err(cv.1),
             Ast::UpdateMath(..) | Ast::UpdateAlt(..) => err(cv.1),
             // jq implements updates on `try ... catch` and `label`, but
@@ -807,7 +923,7 @@ impl Id {
             }
             Ast::Native(id, args) => {
                 let init = cv.1.clone();
-                let cvs = bind_vars(args, cv.0.with_vars(Vars::new([])), cv, Clone::clone);
+                let cvs = bind_native(args, cv.0.with_vars(Vars::new([])), cv, Clone::clone);
                 reduce(cvs, init, move |cv, v| {
                     (cv.0.lut().funs[*id].update)((cv.0, v), f.clone())
                 })

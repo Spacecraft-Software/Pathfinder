@@ -13,6 +13,7 @@
 
 use std::ffi::OsString;
 
+use crate::engine::Engine;
 use crate::jqargs::{Flags, JqArgs, NamedValue, OutputFormat, PositionalMode};
 use crate::post::{Post, Terminator};
 use crate::prelude;
@@ -101,6 +102,7 @@ impl From<Unsupported> for Refusal {
 pub fn plan(
     args: &JqArgs,
     read_file: &dyn Fn(&OsString) -> std::io::Result<String>,
+    engine: Engine,
 ) -> Result<Plan, Refusal> {
     let f = &args.flags;
 
@@ -225,6 +227,8 @@ pub fn plan(
             .then(|| args.files[0].to_string_lossy().into_owned()),
         ambiguous_filename: args.files.len() > 1,
         regex_literals: Vec::new(),
+        native: engine == Engine::Native,
+        null_input: f.null_input,
     };
 
     let source = program_source(args, read_file)?;
@@ -495,6 +499,7 @@ fn program_source(
 #[cfg(test)]
 mod tests {
     use super::{Plan, plan};
+    use crate::engine::Engine;
     use crate::jqargs::parse;
     use crate::post::Terminator;
     use std::ffi::OsString;
@@ -506,7 +511,7 @@ mod tests {
     fn planned(parts: &[&str]) -> Plan {
         let raw: Vec<OsString> = parts.iter().map(OsString::from).collect();
         let parsed = parse(&raw).expect("parses");
-        plan(&parsed, &no_files).expect("plans")
+        plan(&parsed, &no_files, Engine::Jaq).expect("plans")
     }
 
     fn strs(p: &Plan) -> Vec<String> {
@@ -657,7 +662,7 @@ mod tests {
     fn stream_is_refused_by_name() {
         let raw: Vec<OsString> = ["--stream", "."].iter().map(OsString::from).collect();
         let parsed = parse(&raw).expect("parses");
-        let err = unsupported(plan(&parsed, &no_files).expect_err("must refuse"));
+        let err = unsupported(plan(&parsed, &no_files, Engine::Jaq).expect_err("must refuse"));
         assert_eq!(err.feature, "--stream");
         assert!(
             err.detail.contains("tostream"),
@@ -669,7 +674,7 @@ mod tests {
     fn inexpressible_builtins_are_refused_by_name() {
         let raw: Vec<OsString> = ["input_line_number"].iter().map(OsString::from).collect();
         let parsed = parse(&raw).expect("parses");
-        let err = unsupported(plan(&parsed, &no_files).expect_err("must refuse"));
+        let err = unsupported(plan(&parsed, &no_files, Engine::Jaq).expect_err("must refuse"));
         assert_eq!(err.feature, "input_line_number");
     }
 
@@ -684,7 +689,7 @@ mod tests {
     fn a_program_jq_will_not_compile_is_refused_with_its_error() {
         let raw: Vec<OsString> = ["{(0):1}"].iter().map(OsString::from).collect();
         let parsed = parse(&raw).expect("parses");
-        match plan(&parsed, &no_files).expect_err("must refuse") {
+        match plan(&parsed, &no_files, Engine::Jaq).expect_err("must refuse") {
             super::Refusal::Compile { error, source } => {
                 assert_eq!(error.message, "Cannot use number (0) as object key");
                 assert_eq!(source, "{(0):1}");

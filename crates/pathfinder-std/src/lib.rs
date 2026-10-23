@@ -260,6 +260,44 @@ trait ValTx: ValT + Sized {
     fn fail_str(&self) -> Error<Self> {
         Error::typ(self.clone(), "string")
     }
+
+    /// Pathfinder: a number as C's `(int)` cast makes it for jq 1.8.1's math
+    /// functions taking an `int` (`ldexp`, `scalbln`, `jn`, `yn`): truncated,
+    /// and `INT_MIN` for NaN or a value outside `int`, as on x86-64.
+    fn try_as_c_int(&self) -> Result<i32, Error<Self>> {
+        let f = self.try_as_f64()?;
+        let t = f.trunc();
+        Ok(
+            if t.is_finite() && t >= f64::from(i32::MIN) && t <= f64::from(i32::MAX) {
+                t as i32
+            } else {
+                i32::MIN
+            },
+        )
+    }
+
+    /// Pathfinder: an array for a function jq writes as a loop over it
+    /// (`sort_by`, `group_by`, `min_by`, …), which fails as `.[]` does.
+    fn into_vec_iter(self) -> Result<Vec<Self>, Error<Self>> {
+        self.into_seq()
+            .map_err(|v| Error::str(alloc::format!("Cannot iterate over {}", v.jq_quoted())))
+    }
+
+    /// Pathfinder: an array for `sort`, with jq's message otherwise.
+    fn into_vec_sort(self) -> Result<Vec<Self>, Error<Self>> {
+        self.into_seq().map_err(|v| {
+            let q = v.jq_quoted();
+            Error::str(alloc::format!(
+                "{q} cannot be sorted, as it is not an array"
+            ))
+        })
+    }
+
+    /// Pathfinder: the bytes of a string, or `message` as the error.
+    fn utf8_or(&self, message: &str) -> Result<&[u8], Error<Self>> {
+        self.as_utf8_bytes()
+            .ok_or_else(|| Error::str(String::from(message)))
+    }
 }
 impl<T: ValT> ValTx for T {}
 
@@ -368,22 +406,154 @@ impl Iterator for Explode<'_> {
     }
 }
 
-/// Convert an array of Unicode codepoints (with negative integers representing UTF-8 errors) into a string.
+/// Pathfinder: the array a `…_by(f)` function works on, failing as jq's
+/// does. jq writes them as `_impl(map([f]))`: on an object `map` succeeds and
+/// the implementation fails with both (`object ({}) and array ([]) cannot be
+/// sorted, as they are not both arrays`); anything else fails in `map`.
+fn by_input<'a, V: ValT + 'a>(
+    v: V,
+    f: &dyn Fn(V) -> ValXs<'a, V>,
+    verb: &str,
+) -> Result<Vec<V>, Exn<'a, V>> {
+    let v = match v.into_seq() {
+        Ok(a) => return Ok(a),
+        Err(v) => v,
+    };
+    if v.jq_type() != "object" {
+        let q = v.jq_quoted();
+        return Err(Exn::from(Error::str(alloc::format!(
+            "Cannot iterate over {q}"
+        ))));
+    }
+    let mut mapped = Vec::new();
+    for x in v.clone().values() {
+        let outputs: Vec<V> = f(x?).collect::<Result<_, _>>()?;
+        mapped.push(V::from_iter(outputs));
+    }
+    let (q, m) = (v.jq_quoted(), V::from_iter(mapped).jq_quoted());
+    let are = if verb == "sorted" {
+        ", as they are not both arrays"
+    } else {
+        ""
+    };
+    Err(Exn::from(Error::str(alloc::format!(
+        "{q} and {m} cannot be {verb}{are}"
+    ))))
+}
+
+/// Pathfinder: jq's `min` (`max` when `max`) of an array, `null` when empty.
+fn min_max<V: ValT>(v: V, max: bool) -> ValR<V> {
+    let a: Vec<V> = v.into_seq().map_err(|v| {
+        let q = v.jq_quoted();
+        Error::str(alloc::format!("{q} and {q} cannot be iterated over"))
+    })?;
+    let mut best: Option<V> = None;
+    for x in a {
+        best = match best {
+            Some(b) if (max && x < b) || (!max && x >= b) => Some(b),
+            _ => Some(x),
+        };
+    }
+    match best {
+        Some(b) => Ok(b),
+        // `null`, as the engine's `null` makes it.
+        None => core::iter::empty::<V>()
+            .collect::<V>()
+            .index(&V::from(0usize)),
+    }
+}
+
+/// Pathfinder: jq's `@sh`: the input, or each element of an input array,
+/// quoted for a POSIX shell when a string and written as `tostring` writes it
+/// otherwise; an array or object inside is jq's error.
+fn sh<V: ValT>(v: V) -> ValR<V> {
+    let items: Vec<V> = v.into_seq().unwrap_or_else(|v| alloc::vec![v]);
+    let mut out = String::new();
+    for (i, x) in items.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        if let Some(s) = x.as_utf8_bytes() {
+            out.push('\'');
+            out.push_str(&String::from_utf8_lossy(s).replace('\'', "'\\''"));
+            out.push('\'');
+        } else if matches!(x.jq_type(), "array" | "object") {
+            let q = x.jq_quoted();
+            return Err(Error::str(alloc::format!(
+                "{q} can not be escaped for shell"
+            )));
+        } else {
+            out.push_str(&x.to_string());
+        }
+    }
+    Ok(V::from(out))
+}
+
+/// Pathfinder: `trim`, `ltrim` and `rtrim`, with jq's message for a
+/// non-string.
+fn trim<V: ValT>(v: &V, f: impl FnOnce(&[u8]) -> &[u8]) -> ValR<V> {
+    Ok(v.as_sub_str(f(v.utf8_or("trim input must be a string")?)))
+}
+
+/// Pathfinder: jq's messages for `explode` and the functions written with it.
+const EXPLODE: &str = "explode input must be a string";
+const STARTS: &str = "startswith() requires string inputs";
+const ENDS: &str = "endswith() requires string inputs";
+
+/// Convert an array of Unicode codepoints into a string.
+///
+/// Pathfinder: as jq 1.8.1 does it: a fractional code point is truncated,
+/// one that is no Unicode scalar value (negative, a surrogate, above
+/// U+10FFFF, infinite) becomes U+FFFD, and a non-number or NaN is jq's
+/// error. jaq read a negative number as a raw byte, which jq has no notion
+/// of.
 fn implode<V: ValT>(xs: &[V]) -> Result<Vec<u8>, Error<V>> {
     let mut v = Vec::with_capacity(xs.len());
     for x in xs {
-        // on 32-bit systems, some high u32 values cannot be represented as isize
-        let i = x.try_as_isize()?;
-        if let Ok(b) = u8::try_from(-i) {
-            v.push(b)
-        } else {
-            // may fail e.g. on `[1114112] | implode`
-            let c = u32::try_from(i).ok().and_then(char::from_u32);
-            let c = c.ok_or_else(|| Error::str(format_args!("cannot use {i} as character")))?;
-            v.extend(c.encode_utf8(&mut [0; 4]).as_bytes())
-        }
+        let Some(f) = x.as_f64().filter(|f| !f.is_nan()) else {
+            let q = x.jq_quoted();
+            return Err(Error::str(alloc::format!(
+                "{q} can't be imploded, unicode codepoint needs to be numeric"
+            )));
+        };
+        let c = u32::try_from(f.trunc() as i64)
+            .ok()
+            .and_then(char::from_u32);
+        let c = c.unwrap_or(char::REPLACEMENT_CHARACTER);
+        v.extend(c.encode_utf8(&mut [0; 4]).as_bytes())
     }
     Ok(v)
+}
+
+/// Pathfinder: `reverse` as jq 1.8.1 defines it,
+/// `[.[length - 1 - range(0; length)]]`: an array reversed, and anything
+/// else of length 0 (`null`, `""`, `{}`, `0`) an empty array. Any other value
+/// fails as that definition does, on `length` or on the first `.[n]`.
+fn reverse<V: ValT>(v: V) -> ValR<V> {
+    let v = match v.into_seq::<Vec<V>>() {
+        Ok(mut a) => {
+            a.reverse();
+            return Ok(V::from_iter(a));
+        }
+        Err(v) => v,
+    };
+    let empty = match v.jq_type() {
+        "null" => true,
+        "boolean" => {
+            let q = v.jq_quoted();
+            return Err(Error::str(alloc::format!("{q} has no length")));
+        }
+        "number" => v.as_f64().is_some_and(|f| f.abs() <= 0.0),
+        "string" => v.as_bytes().is_some_and(<[u8]>::is_empty),
+        // An object's length is its number of keys.
+        _ => v.to_string() == "{}",
+    };
+    if empty {
+        Ok(core::iter::empty().collect())
+    } else {
+        let t = v.jq_type();
+        Err(Error::str(alloc::format!("Cannot index {t} with number")))
+    }
 }
 
 fn once_or_empty<'a, T: 'a, E: 'a>(r: Result<Option<T>, E>) -> BoxIter<'a, Result<T, E>> {
@@ -391,6 +561,10 @@ fn once_or_empty<'a, T: 'a, E: 'a>(r: Result<Option<T>, E>) -> BoxIter<'a, Resul
 }
 
 #[allow(clippy::unit_arg)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one entry per native function, as upstream lists them; Pathfinder's jq messages added lines"
+)]
 fn base_run<D: DataT>() -> Box<[Filter<RunPtr<D>>]>
 where
     for<'a> D::V<'a>: ValT,
@@ -407,76 +581,116 @@ where
         ("floor", v(0), |cv| bome(cv.1.round(f64::floor))),
         ("round", v(0), |cv| bome(cv.1.round(f64::round))),
         ("ceil", v(0), |cv| bome(cv.1.round(f64::ceil))),
+        // Pathfinder: jq 1.8.1's message.
         ("utf8bytelength", v(0), |cv| {
-            bome(cv.1.try_as_utf8_bytes().map(|s| (s.len() as isize).into()))
+            let s = cv.1.as_utf8_bytes().ok_or_else(|| {
+                let q = cv.1.jq_quoted();
+                Error::str(alloc::format!("{q} only strings have UTF-8 byte length"))
+            });
+            bome(s.map(|s| (s.len() as isize).into()))
         }),
+        // Pathfinder: jq's messages; `ascii_downcase` and `ascii_upcase` are
+        // written with `explode` in jq, so they fail as it does.
         ("explode", v(0), |cv| {
-            bome(cv.1.try_as_utf8_bytes().and_then(|s| explode(s).collect()))
+            bome(cv.1.utf8_or(EXPLODE).and_then(|s| explode(s).collect()))
         }),
         ("implode", v(0), |cv| {
             let implode = |s: Vec<_>| implode(&s);
-            bome(cv.1.into_vec().and_then(implode).map(D::V::from_utf8_bytes))
+            let a =
+                cv.1.into_seq()
+                    .map_err(|_not_array| Error::str("implode input must be an array"));
+            bome(a.and_then(implode).map(D::V::from_utf8_bytes))
         }),
         ("ascii_downcase", v(0), |cv| {
-            bome(cv.1.map_utf8_str(ByteSlice::to_ascii_lowercase))
+            let s = cv.1.utf8_or(EXPLODE).map(ByteSlice::to_ascii_lowercase);
+            bome(s.map(D::V::from_utf8_bytes))
         }),
         ("ascii_upcase", v(0), |cv| {
-            bome(cv.1.map_utf8_str(ByteSlice::to_ascii_uppercase))
+            let s = cv.1.utf8_or(EXPLODE).map(ByteSlice::to_ascii_uppercase);
+            bome(s.map(D::V::from_utf8_bytes))
         }),
-        ("reverse", v(0), |cv| bome(cv.1.mutate_arr(|a| a.reverse()))),
-        ("sort", v(0), |cv| bome(cv.1.mutate_arr(|a| a.sort()))),
+        ("reverse", v(0), |cv| bome(reverse(cv.1))),
+        ("sort", v(0), |cv| {
+            bome(cv.1.into_vec_sort().map(|mut a| {
+                a.sort();
+                D::V::from_iter(a)
+            }))
+        }),
         ("sort_by", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
             let f = move |v| f.run((fc.clone(), v));
-            box_once(cv.1.try_mutate_arr(|a| sort_by(a, f)))
+            // Pathfinder: jq's messages (`by_input`).
+            box_once(by_input(cv.1, &f, "sorted").and_then(|mut a| {
+                sort_by(&mut a, f)?;
+                Ok(D::V::from_iter(a))
+            }))
         }),
         ("group_by", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
             let f = move |v| f.run((fc.clone(), v));
-            box_once((|| group_by(cv.1.into_vec()?, f))())
+            box_once(by_input(cv.1, &f, "sorted").and_then(|a| group_by(a, f)))
         }),
-        ("min_by_or_empty", f(), |mut cv| {
+        ("_min_by_or_empty", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
-            let f = move |a| cmp_by(a, |v| f.run((fc.clone(), v)), |my, y| y < my);
-            once_or_empty(cv.1.into_vec().map_err(Exn::from).and_then(f))
+            let f = move |v| f.run((fc.clone(), v));
+            let a = by_input(cv.1, &f, "iterated over");
+            once_or_empty(a.and_then(|a| cmp_by(a, f, |my, y| y < my)))
         }),
-        ("max_by_or_empty", f(), |mut cv| {
+        ("_max_by_or_empty", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
-            let f = move |a| cmp_by(a, |v| f.run((fc.clone(), v)), |my, y| y >= my);
-            once_or_empty(cv.1.into_vec().map_err(Exn::from).and_then(f))
+            let f = move |v| f.run((fc.clone(), v));
+            let a = by_input(cv.1, &f, "iterated over");
+            once_or_empty(a.and_then(|a| cmp_by(a, f, |my, y| y >= my)))
         }),
+        // Pathfinder: jq's messages. jq 1.8.1 writes `ltrimstr` with
+        // `startswith` and `rtrimstr` with `endswith`, so they fail as those.
         ("startswith", v(1), |cv| {
             unary(cv, |v, s| {
-                Ok(v.try_as_bytes()?.starts_with(s.try_as_bytes()?).into())
+                let (v, s) = (v.utf8_or(STARTS)?, s.utf8_or(STARTS)?);
+                Ok(v.starts_with(s).into())
             })
         }),
         ("endswith", v(1), |cv| {
             unary(cv, |v, s| {
-                Ok(v.try_as_bytes()?.ends_with(s.try_as_bytes()?).into())
+                let (v, s) = (v.utf8_or(ENDS)?, s.utf8_or(ENDS)?);
+                Ok(v.ends_with(s).into())
             })
         }),
         ("ltrimstr", v(1), |cv| {
-            unary(cv, |v, pre| v.strip_fix(&pre, <[u8]>::strip_prefix))
+            unary(cv, |v, pre| {
+                let (s, p) = (v.utf8_or(STARTS)?, pre.utf8_or(STARTS)?);
+                Ok(s.strip_prefix(p)
+                    .map_or_else(|| v.clone(), |sub| v.as_sub_str(sub)))
+            })
         }),
         ("rtrimstr", v(1), |cv| {
-            unary(cv, |v, suf| v.strip_fix(&suf, <[u8]>::strip_suffix))
+            unary(cv, |v, suf| {
+                let (s, x) = (v.utf8_or(ENDS)?, suf.utf8_or(ENDS)?);
+                Ok(s.strip_suffix(x)
+                    .map_or_else(|| v.clone(), |sub| v.as_sub_str(sub)))
+            })
         }),
-        ("trim", v(0), |cv| {
-            bome(cv.1.trim_utf8_with(ByteSlice::trim))
-        }),
-        ("ltrim", v(0), |cv| {
-            bome(cv.1.trim_utf8_with(ByteSlice::trim_start))
-        }),
-        ("rtrim", v(0), |cv| {
-            bome(cv.1.trim_utf8_with(ByteSlice::trim_end))
-        }),
-        ("escape_sh", v(0), |cv| {
+        // Pathfinder: jq 1.8.1's message for a non-string.
+        ("trim", v(0), |cv| bome(trim(&cv.1, ByteSlice::trim))),
+        ("ltrim", v(0), |cv| bome(trim(&cv.1, ByteSlice::trim_start))),
+        ("rtrim", v(0), |cv| bome(trim(&cv.1, ByteSlice::trim_end))),
+        // Pathfinder: `min` and `max` natively, with jq's message for a value
+        // that is no array; of equal values, `min` keeps the first and `max`
+        // the last, as jq does.
+        ("nan", v(0), |_| bome(Ok(D::V::from(f64::NAN)))),
+        ("infinite", v(0), |_| bome(Ok(D::V::from(f64::INFINITY)))),
+        ("min", v(0), |cv| bome(min_max(cv.1, false))),
+        ("max", v(0), |cv| bome(min_max(cv.1, true))),
+        // Pathfinder: `@sh` natively, with jq's message for a value that
+        // cannot be quoted.
+        ("@sh", v(0), |cv| bome(sh(cv.1))),
+        ("_escape_sh", v(0), |cv| {
             bome(
                 cv.1.try_as_utf8_bytes()
                     .map(|s| ValT::from_utf8_bytes(s.replace(b"'", b"'\\''"))),
             )
         }),
-        ("halt", v(1), |mut cv| {
+        ("_halt", v(1), |mut cv| {
             let exit_code = cv.0.pop_var().try_as_i32().map_err(Exn::from);
             box_once(exit_code.and_then(|exit_code| Err(Exn::halt(exit_code))))
         }),
@@ -522,32 +736,134 @@ where
     const HTML_PATS: [&str; 5] = ["<", ">", "&", "\'", "\""];
     const HTML_REPS: [&str; 5] = ["&lt;", "&gt;", "&amp;", "&apos;", "&quot;"];
     Box::new([
-        ("escape_html", v(0), |cv| {
+        ("_escape_html", v(0), |cv| {
             bome(cv.1.map_utf8_str(|s| replace(s, &HTML_PATS, &HTML_REPS)))
         }),
-        ("unescape_html", v(0), |cv| {
+        ("_unescape_html", v(0), |cv| {
             bome(cv.1.map_utf8_str(|s| replace(s, &HTML_REPS, &HTML_PATS)))
         }),
-        ("encode_uri", v(0), |cv| {
+        ("_encode_uri", v(0), |cv| {
             bome(cv.1.map_utf8_str(|s| urlencoding::encode_binary(s).to_string()))
         }),
-        ("decode_uri", v(0), |cv| {
-            bome(cv.1.map_utf8_str(|s| urlencoding::decode_binary(s).to_vec()))
-        }),
-        ("encode_base64", v(0), |cv| {
+        // Pathfinder: jq's `@urid` (M20, P-067).
+        ("_decode_uri", v(0), |cv| bome(jq_decode_uri(cv.1))),
+        ("_encode_base64", v(0), |cv| {
             use base64::{engine::general_purpose::STANDARD, Engine};
             bome(cv.1.map_utf8_str(|s| STANDARD.encode(s)))
         }),
-        ("decode_base64", v(0), |cv| {
-            use base64::{engine::general_purpose::STANDARD, Engine};
-            bome(cv.1.try_as_utf8_bytes().and_then(|s| {
-                STANDARD
-                    .decode(s)
-                    .map_err(Error::str)
-                    .map(ValT::from_utf8_bytes)
-            }))
-        }),
+        // Pathfinder: jq's `@base64d` (M20, P-067).
+        ("_decode_base64", v(0), |cv| bome(jq_decode_base64(cv.1))),
     ])
+}
+
+/// Pathfinder: jq's `@base64d`. jq decodes up to the first `=` and ignores
+/// the rest, accepts missing padding and ignores the unused low bits of the
+/// last character (`"QR"` is `"A"`); it rejects only a character outside
+/// the standard alphabet before the `=`, or a single leftover character.
+/// Bytes that are not UTF-8 are replaced as jq replaces them.
+#[cfg(feature = "format")]
+fn jq_decode_base64<V: ValT>(v: V) -> ValR<V> {
+    let s = v.try_as_utf8_bytes()?;
+    let text = s.split(|&c| c == b'=').next().unwrap_or_default();
+    let sextet = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let fail = |what| Err(Error::str(alloc::format!("{} {what}", v.jq_quoted())));
+    let Some(sextets) = text.iter().map(|&c| sextet(c)).collect::<Option<Vec<u8>>>() else {
+        return fail("is not valid base64 data");
+    };
+    if sextets.len() % 4 == 1 {
+        return fail("trailing base64 byte found");
+    }
+    let mut bytes = Vec::with_capacity(sextets.len() / 4 * 3 + 2);
+    for group in sextets.chunks(4) {
+        let word = group
+            .iter()
+            .enumerate()
+            .fold(0u32, |w, (i, &x)| w | u32::from(x) << (18 - 6 * i));
+        // Two characters make one byte, three make two, four make three.
+        let [_, b0, b1, b2] = word.to_be_bytes();
+        bytes.extend_from_slice(&[b0, b1, b2][..group.len() - 1]);
+    }
+    Ok(V::from_utf8_bytes(jq_lossy_utf8(&bytes)))
+}
+
+/// Pathfinder: jq's `@urid`: a `%` must be followed by two hex digits, and
+/// the decoded bytes must be UTF-8.
+#[cfg(feature = "format")]
+fn jq_decode_uri<V: ValT>(v: V) -> ValR<V> {
+    let s = v.try_as_utf8_bytes()?;
+    if !s.contains(&b'%') {
+        return Ok(v);
+    }
+    let hex = |c: u8| char::from(c).to_digit(16);
+    let mut bytes = Vec::with_capacity(s.len());
+    let mut i = 0;
+    let decoded = loop {
+        match s.get(i..) {
+            Some([b'%', high, low, ..]) => match (hex(*high), hex(*low)) {
+                (Some(high), Some(low)) => {
+                    bytes.push((high << 4 | low) as u8);
+                    i += 3;
+                }
+                _ => break None,
+            },
+            Some([b'%', ..]) => break None,
+            Some([c, ..]) => {
+                bytes.push(*c);
+                i += 1;
+            }
+            _ => break core::str::from_utf8(&bytes).is_ok().then_some(()),
+        }
+    };
+    match decoded {
+        Some(()) => Ok(V::from_utf8_bytes(bytes)),
+        None => Err(Error::str(alloc::format!(
+            "{} is not a valid uri encoding",
+            v.jq_quoted()
+        ))),
+    }
+}
+
+/// Pathfinder: bytes as jq makes a string of them (`jvp_utf8_next`): each
+/// sequence that is not UTF-8 becomes one U+FFFD. A stray continuation byte
+/// or a byte no sequence starts with is one sequence; a sequence cut short
+/// by a byte that does not continue it ends before that byte; one cut short
+/// by the end of the input runs to the end; an overlong form, a surrogate or
+/// a code point past U+10FFFF is one sequence of its full length.
+#[cfg(feature = "format")]
+fn jq_lossy_utf8(mut bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    while !bytes.is_empty() {
+        let valid = match core::str::from_utf8(bytes) {
+            Ok(_) => bytes.len(),
+            Err(e) => e.valid_up_to(),
+        };
+        out.extend_from_slice(&bytes[..valid]);
+        bytes = &bytes[valid..];
+        let Some(&first) = bytes.first() else { break };
+        let length = match first {
+            0xC2..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF4 => 4,
+            _ => 1,
+        };
+        let length = if length > bytes.len() {
+            bytes.len()
+        } else {
+            (1..length)
+                .find(|&i| bytes[i] & 0xC0 != 0x80)
+                .unwrap_or(length)
+        };
+        out.extend_from_slice("\u{FFFD}".as_bytes());
+        bytes = &bytes[length..];
+    }
+    out
 }
 
 #[cfg(feature = "math")]
@@ -574,7 +890,8 @@ where
         math::f_f!(expm1),
         math::f_f!(fabs),
         math::f_fi!(frexp),
-        math::f_i!(ilogb),
+        // Pathfinder: internal, as jq 1.8.1 has no `ilogb`.
+        rename("_ilogb", math::f_i!(ilogb)),
         math::f_f!(j0),
         math::f_f!(j1),
         math::f_f!(lgamma),
@@ -627,12 +944,30 @@ where
     let re = cv.0.pop_var();
 
     use crate::regex::Part::{Matches, Mismatch};
-    let fail_flag = |e| Error::str(format_args!("invalid regex flag: {e}"));
     let fail_re = |e| Error::str(format_args!("invalid regex: {e}"));
 
-    let flags = regex::Flags::new(flags.try_as_str()?).map_err(fail_flag)?;
-    let re = flags.regex(re.try_as_str()?).map_err(fail_re)?;
-    let out = regex::regex(cv.1.try_as_utf8_bytes()?, &re, flags, (s, m));
+    // Pathfinder: jq's messages for an input, a regex or flags of the wrong
+    // type, and for a flag it does not know (the whole flag string).
+    let not_str = |v: &D::V<'a>| Error::str(alloc::format!("{} is not a string", v.jq_quoted()));
+    let input = cv.1.as_utf8_bytes().ok_or_else(|| {
+        let q = cv.1.jq_quoted();
+        Error::str(alloc::format!(
+            "{q} cannot be matched, as it is not a string"
+        ))
+    })?;
+    let re_str = core::str::from_utf8(re.as_utf8_bytes().ok_or_else(|| not_str(&re))?)
+        .map_err(Error::str)?;
+    let flags_str = if flags.jq_type() == "null" {
+        ""
+    } else {
+        core::str::from_utf8(flags.as_utf8_bytes().ok_or_else(|| not_str(&flags))?)
+            .map_err(Error::str)?
+    };
+    let flags = regex::Flags::new(flags_str).map_err(|_bad_flag| {
+        Error::str(alloc::format!("{flags_str} is not a valid modifier string"))
+    })?;
+    let re = flags.regex(re_str).map_err(fail_re)?;
+    let out = regex::regex(input, &re, flags, (s, m));
     let sub = |s| cv.1.as_sub_str(s);
     let out = out.into_iter().map(|out| match out {
         Matches(ms) => ms
@@ -651,9 +986,9 @@ where
 {
     let vv = || [Bind::Var(()), Bind::Var(())].into();
     Box::new([
-        ("matches", vv(), |cv| bome(re(false, true, cv))),
-        ("split_matches", vv(), |cv| bome(re(true, true, cv))),
-        ("split_", vv(), |cv| bome(re(true, false, cv))),
+        ("_matches", vv(), |cv| bome(re(false, true, cv))),
+        ("_split_matches", vv(), |cv| bome(re(true, true, cv))),
+        ("_split_", vv(), |cv| bome(re(true, false, cv))),
     ])
 }
 
@@ -664,8 +999,21 @@ where
 {
     use jiff::tz::TimeZone;
     Box::new([
+        // Pathfinder: jq 1.8.1 writes `fromdateiso8601` with `strptime`, so
+        // it fails with that function's messages.
         ("fromdateiso8601", v(0), |cv| {
-            bome(cv.1.try_as_str().and_then(time::from_iso8601))
+            let both = "strptime/1 requires string inputs and arguments";
+            let s =
+                cv.1.utf8_or(both)
+                    .and_then(|s| core::str::from_utf8(s).map_err(Error::str));
+            bome(s.and_then(|s| {
+                time::from_iso8601(s).map_err(|_no_match| {
+                    let v = &cv.1;
+                    Error::str(alloc::format!(
+                        "date {v} does not match format \"%Y-%m-%dT%H:%M:%SZ\""
+                    ))
+                })
+            }))
         }),
         ("todateiso8601", v(0), |cv| {
             bome(time::to_iso8601(&cv.1).map(D::V::from))
@@ -686,9 +1034,18 @@ where
         ("localtime", v(0), |cv| {
             bome(time::gmtime(&cv.1, TimeZone::system()))
         }),
+        // Pathfinder: jq's messages.
         ("strptime", v(1), |cv| {
             unary(cv, |v, fmt| {
-                time::strptime(v.try_as_str()?, fmt.try_as_str()?)
+                let both = "strptime/1 requires string inputs and arguments";
+                let (s, f) = (v.utf8_or(both)?, fmt.utf8_or(both)?);
+                let (s, f) = (
+                    core::str::from_utf8(s).map_err(Error::str)?,
+                    core::str::from_utf8(f).map_err(Error::str)?,
+                );
+                time::strptime(s, f).map_err(|_no_match| {
+                    Error::str(alloc::format!("date {v} does not match format {fmt}"))
+                })
             })
         }),
         ("mktime", v(0), |cv| bome(time::mktime(&cv.1))),
@@ -717,7 +1074,7 @@ where
         };
     }
     Box::new([
-        ("debug_empty", v(0), empty_with!(|x| log::debug!("{x}"))),
-        ("stderr_empty", v(0), empty_with!(eprint_raw)),
+        ("_debug_empty", v(0), empty_with!(|x| log::debug!("{x}"))),
+        ("_stderr_empty", v(0), empty_with!(eprint_raw)),
     ])
 }

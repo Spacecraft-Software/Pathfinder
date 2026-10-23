@@ -148,7 +148,7 @@ fn main() {
 
     let (engine, _) = selected_engine(prog, report.as_ref());
 
-    let plan = match translate::plan(&args, &read_filter_file) {
+    let plan = match translate::plan(&args, &read_filter_file, engine) {
         Ok(p) => p,
         Err(translate::Refusal::Unsupported(u)) => {
             if let Some(r) = &report {

@@ -19,7 +19,7 @@ pub fn parse_compile(
 
     let vars: Vec<_> = vars.iter().map(|v| format!("${v}")).collect();
     let arena = Arena::default();
-    let loader = Loader::new(jaq_all::defs().chain(defs())).with_std_read(paths);
+    let loader = Loader::new(jaq_all::defs()).with_std_read(paths);
     //let loader = Loader::new([]).with_std_read(paths);
     let path = path.into();
     let modules = loader
@@ -54,6 +54,8 @@ pub(crate) fn run_jq(
     exit_status: bool,
     status: &mut crate::jq::Status,
     location: &dyn Fn() -> String,
+    filename: &dyn Fn() -> Option<String>,
+    line_number: &dyn Fn() -> usize,
     failed: &dyn Fn() -> bool,
     mut f: impl FnMut(Val) -> io::Result<()>,
 ) -> Result<(), Error> {
@@ -69,6 +71,8 @@ pub(crate) fn run_jq(
         runner,
         lut: &filter.lut,
         inputs: &RcIter::new(inputs),
+        filename,
+        line_number,
     };
     let ctx = Ctx::new(&data, vars);
     let mut inputs = if runner.null_input { null } else { data.inputs };
@@ -98,12 +102,4 @@ pub(crate) fn run_jq(
         status.end(ret);
     }
     Ok(())
-}
-
-fn defs() -> impl Iterator<Item = load::parse::Def<&'static str>> {
-    core::iter::once(load::parse::Def {
-        name: "input_filename",
-        args: Vec::new(),
-        body: load::parse::Term::Var("$!input_filename"),
-    })
 }

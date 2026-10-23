@@ -130,6 +130,10 @@ pub(crate) enum Term<T = TermId> {
     Logic(T, bool, T),
     /// Arithmetical operation (`f + g`, `f - g`, `f * g`, `f / g`, `f % g`)
     Math(T, ops::Math, T),
+    /// Pathfinder: the sum of an object construction's entries, `f` in the
+    /// outer loop. jq evaluates `{a: (1,2), b: (3,4)}` with `a` outer, where
+    /// arithmetic (and string interpolation) runs its right operand outer.
+    ObjCat(T, T),
     /// Comparison operation (`f < g`, `f <= g`, `f > g`, `f >= g`, `f == g`, `f != g`)
     Cmp(T, ops::Cmp, T),
     /// Alternation (`f // g`)
@@ -748,8 +752,13 @@ impl<'s, F> Compiler<&'s str, F> {
                 self.sum_or(|| Term::Str(String::new()), parts)
             }
             Obj(o) => {
-                let kvs = o.into_iter().map(|(k, v)| self.obj_entry(k, v)).collect();
-                self.sum_or(|| Term::ObjEmpty, kvs)
+                let kvs: Vec<_> = o.into_iter().map(|(k, v)| self.obj_entry(k, v)).collect();
+                // Pathfinder: the first entry outer (`Term::ObjCat`).
+                let mut iter = kvs.into_iter().rev();
+                let last = iter.next().unwrap_or(Term::ObjEmpty);
+                iter.fold(last, |acc, x| {
+                    Term::ObjCat(self.lut.insert_term(x), self.lut.insert_term(acc))
+                })
             }
         };
         (t, Tr::new())

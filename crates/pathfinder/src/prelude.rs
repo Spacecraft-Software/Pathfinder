@@ -47,7 +47,7 @@ use std::fmt::Write as _;
 /// Deliberately jq's list rather than a description of what actually resolves
 /// under Pathfinder: scripts call `builtins` to feature-probe *jq*, so jq's
 /// answer is the compatible one.
-const JQ_BUILTINS: &str = include_str!("embed/jq-builtins.json");
+pub const JQ_BUILTINS: &str = include_str!("embed/jq-builtins.json");
 
 /// The body of an auto-vivifying `setpath`, and the reason this module exists.
 ///
@@ -72,13 +72,13 @@ const SETPATH_BODY: &str = concat!(
     "if ($p|length) == 0 then $v else ($p[0]) as $k | ($k|type) as $kt ",
     // The container, created from null by key type, or the type error jq gives.
     "| (if . == null then (if $kt == \"number\" or $kt == \"object\" then [] ",
-    "elif $kt == \"string\" then {} else error(\"Cannot index null with \\($kt)\") end) ",
+    "elif $kt == \"string\" then {} else error(\"Cannot index null with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\") end) ",
     "elif type == \"object\" then (if $kt == \"string\" then . ",
-    "else error(\"Cannot index object with \\($kt)\") end) ",
+    "else error(\"Cannot index object with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\") end) ",
     "elif type == \"array\" then (if $kt == \"number\" or $kt == \"object\" then . ",
-    "else error(\"Cannot update field at \\($kt) index of array\") end) ",
+    "else error(if $kt == \"array\" then \"Cannot update field at array index of array\" else \"Cannot index array with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\" end) end) ",
     "elif type == \"string\" and $kt == \"object\" then error(\"Cannot update string slices\") ",
-    "else error(\"Cannot index \\(type) with \\($kt)\") end) as $c ",
+    "else error(\"Cannot index \\(type) with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\") end) as $c ",
     // A slice key: both bounds must be numbers; the slice is replaced by an array.
     "| if $kt == \"object\" then ",
     "(if ($k|has(\"start\") and has(\"end\")) and ([$k.start, $k.end] | all(type == \"number\" or type == \"null\")) | not ",
@@ -175,14 +175,15 @@ static POLYFILLS: &[Def] = &[
     // jq's so an unsupported name reads identically.
     Def {
         name: "format",
-        deps: &["_pf_base64d", "_pf_urid"],
+        deps: &["_pf_base64d", "_pf_urid", "_pf_dump"],
         src: Some(
             "def format($fmt): if $fmt == \"text\" then @text elif $fmt == \"json\" then @json \
              elif $fmt == \"csv\" then @csv elif $fmt == \"tsv\" then @tsv \
              elif $fmt == \"html\" then @html elif $fmt == \"uri\" then @uri \
              elif $fmt == \"sh\" then @sh elif $fmt == \"base64\" then @base64 \
              elif $fmt == \"base64d\" then _pf_base64d elif $fmt == \"urid\" then _pf_urid \
-             else error($fmt + \" is not a valid format\") end;",
+             else error((if $fmt < \"\" or $fmt >= [] then \"\\($fmt | type) (\\($fmt | _pf_dump))\" \
+             else $fmt end) + \" is not a valid format\") end;",
         ),
     },
     // --- capability probes -----------------------------------------------
@@ -526,7 +527,7 @@ static REPAIRS: &[Def] = &[
     // regex without `(` is matched as it is.
     Def {
         name: "match",
-        deps: &["_pf_regex_lit"],
+        deps: &["_pf_regex_lit", "_pf_dump"],
         src: Some(concat!(
             r#"def _pf_match0(re; mode): match(re; mode); def _pf_match01(re): match(re); "#,
             // What is known about a regex: the table for a literal (from
@@ -544,7 +545,9 @@ static REPAIRS: &[Def] = &[
             r#"elif ($t.string | .[:3] == "(?<" or .[:4] == "(?P<") "#,
             r#"then ($t.string | if .[2:3] == "P" then .[4:-1] else .[3:-1] end) as $n "#,
             r#"| .groups += [[$n, $n]] | .dict[$n] = $n else . end) | .re += $re[.at:] end; "#,
-            r#"def _pf_regex($re; $mode): if $mode == null then ($__pf_rl[$re] // _pf_scanre($re)) "#,
+            // A regex that is no string is jq's error, not a failed lookup.
+            r#"def _pf_regex($re; $mode): if $re < "" or $re >= [] then error("\($re | type) (\($re | _pf_dump)) is not a string") "#,
+            r#"elif $mode == null then ($__pf_rl[$re] // _pf_scanre($re)) "#,
             r#"elif ($mode | contains("x")) then _pf_scanre($re) else ($__pf_rl[$re] // _pf_scanre($re)) end; "#,
             // jaq's global matching drops an empty match that starts where a
             // non-empty one ended (`"ab1" | match("[a-z]*"; "g")` misses the
@@ -910,11 +913,11 @@ static INTERNAL: &[Def] = &[
              else . end \
              elif $ct == \"null\" then \
              (if $kt == \"string\" then setpath($p[:$i]; {}) elif $kt == \"object\" then setpath($p[:$i]; []) \
-             else error(\"Cannot index null with \\($kt)\") end) \
-             elif $ct == \"object\" then (if $kt == \"string\" then . else error(\"Cannot index object with \\($kt)\") end) \
-             elif $ct == \"array\" then (if $kt == \"object\" then . else error(\"Cannot update field at \\($kt) index of array\") end) \
+             else error(\"Cannot index null with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\") end) \
+             elif $ct == \"object\" then (if $kt == \"string\" then . else error(\"Cannot index object with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\") end) \
+             elif $ct == \"array\" then (if $kt == \"object\" then . else error(if $kt == \"array\" then \"Cannot update field at array index of array\" else \"Cannot index array with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\" end) end) \
              elif $ct == \"string\" and $kt == \"object\" then error(\"Cannot update string slices\") \
-             else error(\"Cannot index \\($ct) with \\($kt)\") end); \
+             else error(\"Cannot index \\($ct) with \\(if $kt == \"string\" and ($k | utf8bytelength) < 30 then \"string \\\"\\($k)\\\"\" else $kt end)\") end); \
              def _pf_vivify(paths): reduce path(paths) as $p (.; \
              if ($p|length) > 0 and (try (($p[-1]) as $k | getpath($p[:-1]) \
              | (type == \"object\" and ($k|type) == \"string\") \
@@ -1086,7 +1089,84 @@ pub struct Context {
     /// The filter's plain string literals that contain `(`: candidate regexes
     /// whose groups are named ahead of time (see `crate::regex`).
     pub regex_literals: Vec<String>,
+    /// The program runs on the native engine, which has the behaviours in
+    /// [`NATIVE`] itself.
+    pub native: bool,
+    /// `-n`: no input is read unless the program asks for it.
+    pub null_input: bool,
 }
+
+impl Context {
+    /// The rewrites the engine needs (`crate::syntax::rewrite`).
+    pub const fn rewrites(&self) -> crate::syntax::rewrite::Rewrites {
+        if self.native {
+            crate::syntax::rewrite::Rewrites::NATIVE
+        } else {
+            crate::syntax::rewrite::Rewrites::ALL
+        }
+    }
+}
+
+/// Polyfills and repairs the native engine no longer needs: it defines the
+/// name as jq does (PLAN M20). An entry joins in the change that gives the
+/// engine the behaviour, with the differential cases that pin it; the jaq
+/// engine keeps the definition until its path is removed (P-078).
+/// What the native engine still takes, and why, is the tests'
+/// `KEPT_ON_NATIVE`: a polyfill or repair is in exactly one of the two.
+pub static NATIVE: &[&str] = &[
+    // The driver answers from its reader's position: `null` before any
+    // input is read, then the file the reader has open (`jq::Position`).
+    "input_filename",
+    // The engine raises jq's message for a non-string input or argument
+    // (`startswith() requires string inputs`; `ltrimstr`/`rtrimstr` are
+    // written with `startswith`/`endswith` in jq 1.8.1).
+    "startswith",
+    "endswith",
+    "ltrimstr",
+    "rtrimstr",
+    // The engine truncates a fractional code point, writes U+FFFD for an
+    // invalid one, and raises jq's messages.
+    "implode",
+    // The engine's update creates missing containers and raises jq's
+    // errors, and `setpath` is written with it (M20, T-024).
+    "setpath",
+    // The engine's `delpaths` is jq's `jv_delpaths`, and `del(f)` is jq's
+    // `delpaths([path(f)])` (M20, T-025).
+    "del",
+    "delpaths",
+    // jq 1.8.1's own definitions are the engine's (`pathfinder-json`'s
+    // `defs.jq`, M20, T-027).
+    "tostream",
+    "fromstream",
+    "truncate_stream",
+    "IN",
+    "INDEX",
+    "JOIN",
+    "trimstr",
+    "have_decnum",
+    "have_literal_numbers",
+    "skip",
+    "limit",
+    "nth",
+    "flatten",
+    "join",
+    "pick",
+    // The engine's `trim`, `ltrim` and `rtrim` raise jq's message.
+    "trim",
+    "ltrim",
+    "rtrim",
+    // Native with jq 1.8.1's semantics and messages (`pathfinder-json`).
+    "has",
+    "tonumber",
+    "toboolean",
+    "utf8bytelength",
+    "bsearch",
+    // jq 1.8.1's definitions, in `pathfinder-json`'s `defs.jq`.
+    "from_entries",
+    "with_entries",
+    // jq 1.8.1's `format` (a C builtin), in `pathfinder-json`'s `defs.jq`.
+    "format",
+];
 
 fn find<'a>(name: &str, table: &'a [Def]) -> Option<&'a Def> {
     table.iter().find(|d| d.name == name)
@@ -1107,11 +1187,13 @@ fn dynamic(name: &str, ctx: &Context) -> String {
         // table on every call (5 µs a call, measured).
         "_pf_regex_lit" => format!("{} as $__pf_rl |", regex_table(&ctx.regex_literals)),
         "input_filename" => match (&ctx.input_filename, ctx.ambiguous_filename) {
-            // jq reports the file currently being read; with one input that is
-            // a constant, so the polyfill is exact.
+            // jq answers `null` until an input has been read, then the file
+            // being read. A constant can be only one of the two: `null`
+            // under `-n`, where nothing is read unless `input` asks, else
+            // the input's name.
+            (_, false) if ctx.null_input => "def input_filename: null;".to_owned(),
             (Some(path), false) => format!("def input_filename: {};", json_string(path)),
-            // Reading stdin: jq answers null.
-            (None, false) => "def input_filename: null;".to_owned(),
+            (None, false) => "def input_filename: \"<stdin>\";".to_owned(),
             // Several inputs: any constant would be wrong for some of them, so
             // fail loudly rather than answer quietly and wrongly.
             (_, true) => "def input_filename: error(\"input_filename with multiple input files is not supported by Pathfinder\");".to_owned(),
@@ -1186,10 +1268,11 @@ fn json_string(s: &str) -> String {
 /// Names that are missing from jaq but cannot be expressed in the jq language.
 ///
 /// Returned so the caller can emit one precise diagnostic naming the construct,
-/// rather than letting jaq answer the less helpful `undefined filter`.
-pub fn inexpressible(name: &str) -> Option<&'static str> {
+/// rather than letting jaq answer the less helpful `undefined filter`. The
+/// native engine has `input_line_number` (from its reader's position).
+pub fn inexpressible(name: &str, native: bool) -> Option<&'static str> {
     match name {
-        "input_line_number" => {
+        "input_line_number" if !native => {
             Some("jaq tracks no input position, so there is no line number to report")
         }
         "modulemeta" | "get_search_list" | "get_jq_origin" | "get_prog_origin" => {
@@ -1213,6 +1296,9 @@ pub fn render(wanted: &[String], ctx: &Context) -> String {
     for name in wanted {
         // Internal helpers are wanted by name too: the syntax rewriter asks for
         // `_pf_assign`/`_pf_modify` directly.
+        if ctx.native && NATIVE.contains(&name.as_str()) {
+            continue;
+        }
         if let Some(def) = lookup(name) {
             push_with_deps(def, &mut chosen);
         }
@@ -1254,7 +1340,73 @@ pub fn known_names() -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Context, inexpressible, json_string, known_names, render};
+    use super::{
+        Context, INTERNAL, NATIVE, POLYFILLS, REPAIRS, inexpressible, json_string, known_names,
+        render,
+    };
+
+    /// What the native engine still takes from the prelude, and why (P-067).
+    /// Everything else in [`POLYFILLS`] and [`REPAIRS`] is in [`NATIVE`].
+    const KEPT_ON_NATIVE: &[&str] = &[
+        // A table of some 230 names, emitted only when a filter names it;
+        // in the engine's definitions it would be compiled on every run.
+        "builtins",
+        // The engine's regex is not Oniguruma; M22 replaces it.
+        "match",
+        "test",
+        "capture",
+        "scan",
+        "sub",
+        "gsub",
+        // The engine's time builtins are not C's; M23 replaces them.
+        "mktime",
+        "strftime",
+        "strflocaltime",
+        "todate",
+        "todateiso8601",
+    ];
+
+    #[test]
+    fn every_prelude_entry_is_native_or_kept_for_a_reason() {
+        for def in POLYFILLS.iter().chain(REPAIRS) {
+            assert!(
+                NATIVE.contains(&def.name) != KEPT_ON_NATIVE.contains(&def.name),
+                "{} must be in exactly one of NATIVE and KEPT_ON_NATIVE",
+                def.name
+            );
+        }
+    }
+
+    #[test]
+    fn the_native_engine_takes_only_the_helpers_of_what_it_keeps() {
+        // `_pf_modify` is the one rewrite still on for the native engine
+        // (`Rewrites::comma_update`): jq defers the deletions of an update
+        // of several paths to the end, which the engine's update does not.
+        let mut wanted = want(KEPT_ON_NATIVE);
+        wanted.push("_pf_modify".to_owned());
+        let ctx = Context {
+            native: true,
+            regex_literals: vec!["(a)".to_owned()],
+            ..Context::default()
+        };
+        let out = render(&wanted, &ctx);
+        let used: Vec<&str> = INTERNAL
+            .iter()
+            .map(|d| d.name)
+            .filter(|n| out.contains(&format!("def {n}")) || out.contains(&format!("as ${n}")))
+            .collect();
+        assert!(used.contains(&"_pf_modify") && used.contains(&"_pf_pad_tm"));
+        for gone in [
+            "_pf_base64d",
+            "_pf_urid",
+            "_pf_err",
+            "_pf_neg",
+            "_pf_vivify",
+            "_pf_assign",
+        ] {
+            assert!(!used.contains(&gone), "{gone} reaches the native engine");
+        }
+    }
 
     fn want(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| (*s).to_owned()).collect()
@@ -1291,15 +1443,28 @@ mod tests {
 
     #[test]
     fn input_filename_follows_the_input_shape() {
+        // jq answers `null` before an input is read, then `"<stdin>"`.
         let stdin = render(&want(&["input_filename"]), &Context::default());
-        assert!(stdin.contains("def input_filename: null;"));
+        assert!(stdin.contains(r#"def input_filename: "<stdin>";"#));
+        let null_input = Context {
+            null_input: true,
+            input_filename: Some("a.json".to_owned()),
+            ..Context::default()
+        };
+        let none = render(&want(&["input_filename"]), &null_input);
+        assert!(none.contains("def input_filename: null;"));
+        let native = Context {
+            native: true,
+            ..Context::default()
+        };
+        assert_eq!(render(&want(&["input_filename"]), &native), "");
 
         let one = render(
             &want(&["input_filename"]),
             &Context {
                 input_filename: Some("a.json".to_owned()),
                 ambiguous_filename: false,
-                regex_literals: Vec::new(),
+                ..Context::default()
             },
         );
         assert!(one.contains(r#"def input_filename: "a.json";"#));
@@ -1309,7 +1474,7 @@ mod tests {
             &Context {
                 input_filename: None,
                 ambiguous_filename: true,
-                regex_literals: Vec::new(),
+                ..Context::default()
             },
         );
         // Wrong-but-quiet is the one thing this must not do.
@@ -1431,9 +1596,10 @@ mod tests {
 
     #[test]
     fn inexpressible_names_are_named_not_polyfilled() {
-        assert!(inexpressible("input_line_number").is_some());
-        assert!(inexpressible("modulemeta").is_some());
-        assert!(inexpressible("tostream").is_none());
+        assert!(inexpressible("input_line_number", false).is_some());
+        assert!(inexpressible("input_line_number", true).is_none());
+        assert!(inexpressible("modulemeta", true).is_some());
+        assert!(inexpressible("tostream", false).is_none());
     }
 
     #[test]

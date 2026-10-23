@@ -51,9 +51,13 @@ yields!(
 );
 
 // here, we diverge from jq, which returns just 1
-yields!(flatten_obj, "{a: 1} | flatten", json!([{"a": 1}]));
-// jq gives an error here
-yields!(flatten_num, "0 | flatten", [0]);
+// Pathfinder: jq 1.8.1's answers (`flatten` is jq's definition).
+yields!(flatten_obj, "{a: 1} | flatten", [1]);
+yields!(
+    flatten_num,
+    "try (0 | flatten) catch .",
+    "Cannot iterate over number (0)"
+);
 
 yields!(isfinite_true, "all((0, 1, nan); isfinite)", true);
 yields!(
@@ -83,7 +87,8 @@ yields!(logb_zero, "0 | logb | . == -infinite", true);
 yields!(
     match_many,
     r#""ABab" | [match("a", "b"; "", "i") | .string]"#,
-    ["a", "A", "b", "B"]
+    // jq 1.8.1's order: `match` is its C `_match_impl`, last argument outermost.
+    ["a", "b", "A", "B"]
 );
 
 #[test]
@@ -164,7 +169,9 @@ yields!(
 // and rejects them in scalbln
 yields!(
     scalb_eqv_pow2,
-    "[-2.2, -1.1, -0.01, 0, 0.01, 1.1, 2.2] | [scalb(1.0; .[])] == [pow(2.0; .[])]",
+    // Pathfinder: C's `scalb` is NaN for an exponent that is no integer, so
+    // jq 1.8.1 agrees with `pow` only on integers.
+    "[-2, -1, 0, 1, 2] | [scalb(1.0; .[])] == [pow(2.0; .[])]",
     true
 );
 yields!(
@@ -174,15 +181,17 @@ yields!(
 );
 yields!(
     scalb_range,
-    "[scalb(-2.5, 0, 2.5; 2, 2.5, 3) * 1000 | round]",
-    [-10000, -14142, -20000, 0, 0, 0, 10000, 14142, 20000]
+    r#"[scalb(-2.5, 0, 2.5; 2, 2.5, 3) * 1000 | round | if isnan then "nan" end]"#,
+    // Pathfinder: jq 1.8.1's order, and C's `scalb` (NaN, marked "nan" here, for
+    // an exponent that is no integer).
+    json!([-10000, 0, 10000, "nan", "nan", "nan", -20000, 0, 20000])
 );
 
 // here we diverge from jq, which returns ["a", "b", "a", "A", "b", "B"]
 yields!(
     scan,
     r#""abAB" | [scan("a", "b"; "g", "gi")]"#,
-    // TODO: is this order really desired?
+    // jq 1.8.1's order: `scan($re; $flags)` binds `$re` outermost.
     json!(["a", "a", "A", "b", "b", "B"])
 );
 

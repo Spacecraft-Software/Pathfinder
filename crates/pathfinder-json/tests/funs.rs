@@ -124,15 +124,15 @@ fn toboolean() {
 fn math_rem() {
     // Pathfinder: jq 1.8.1 truncates both operands to integers before taking
     // the remainder (patch 0012). Every value below was measured from jq 1.8.1
-    // except the wording of the `cannot calculate` errors, which is still
-    // jaq's (jq: "number (-2) and number (0) cannot be divided (remainder)
-    // because the divisor is zero"); the engine takes jq's wording in M20.
+    // (the error wording since M20, as the engine now words it).
     give(json!(null), "-2 % -2", json!(0));
     give(json!(null), "-2 % -1", json!(0));
     give(
         json!(null),
         "try (-2 % 0) catch .",
-        json!("cannot calculate -2 % 0"),
+        json!(
+            "number (-2) and number (0) cannot be divided (remainder) because the divisor is zero"
+        ),
     );
     give(json!(null), "-2 % 2.1", json!(0));
     give(json!(null), "-2 % 3", json!(-2));
@@ -142,7 +142,9 @@ fn math_rem() {
     give(
         json!(null),
         "try (-1 % 0) catch .",
-        json!("cannot calculate -1 % 0"),
+        json!(
+            "number (-1) and number (0) cannot be divided (remainder) because the divisor is zero"
+        ),
     );
     give(json!(null), "-1 % 2.1", json!(-1));
     give(json!(null), "-1 % 3", json!(-1));
@@ -152,7 +154,9 @@ fn math_rem() {
     give(
         json!(null),
         "try (0 % 0) catch .",
-        json!("cannot calculate 0 % 0"),
+        json!(
+            "number (0) and number (0) cannot be divided (remainder) because the divisor is zero"
+        ),
     );
     give(json!(null), "0 % 2.1", json!(0));
     give(json!(null), "0 % 3", json!(0));
@@ -172,7 +176,9 @@ fn math_rem() {
     give(
         json!(null),
         "try (3 % 0) catch .",
-        json!("cannot calculate 3 % 0"),
+        json!(
+            "number (3) and number (0) cannot be divided (remainder) because the divisor is zero"
+        ),
     );
     give(json!(null), "3 % 2.1 | . * 1000 | round", json!(1000));
     give(json!(null), "3 % 3", json!(0));
@@ -182,7 +188,7 @@ fn math_rem() {
     give(
         json!(null),
         "try (2000000001 % 0) catch .",
-        json!("cannot calculate 2000000001 % 0"),
+        json!("number (2000000001) and number (0) cannot be divided (remainder) because the divisor is zero"),
     );
     give(
         json!(null),
@@ -195,6 +201,6 @@ fn math_rem() {
 
 yields!(
     format_urid_invalid,
-    r#"("%FF" | @urid) == ([255] | tobytes | tostring)"#,
-    true
+    r#"try ("%FF" | @urid) catch ."#,
+    json!("string (\"%FF\") is not a valid uri encoding")
 );

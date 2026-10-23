@@ -375,7 +375,12 @@ cleanly against `jaq/src/` in the patched tree. The changes, all marked
   keeps it) instead of calling `process::exit`, so the caller can flush first.
 - `cli.rs`: `Cli::parse_from` parses any argument list; `Cli::parse` reads
   `std::env::args_os()` through it.
-- `jq.rs`: `Segment::new`.
+- `jq.rs`: `Segment::new`; `Position::filename`.
+- `input_filename` is a native function (`pathfinder-all`'s `data::funs`)
+  reading `Data::filename`, which the driver points at its reader's
+  `Position`: `null` before any input is read, then the file the reader has
+  open, as jq 1.8.1 answers. It replaces the CLI's `$!input_filename`
+  variable, which was `"<stdin>"` from the start (M20, T-028).
 
 `jq.rs`, `filter.rs` and `Error`'s rendering are untouched, so the CLI hunks
 of patches 0008, 0013 and 0015 above still describe the code. A fix to them
@@ -393,6 +398,103 @@ allocator and 2.5e9 with mimalloc, level with `pathfinder-jaq` (2.4e9). The
 system allocator would break PRD R-011's 10% budget against jaq by a factor of
 two. mimalloc is the dependency jaq already had, at the version locked at the
 import base.
+
+## M20: jq's semantics in the engine
+
+Repairs move from the prelude and the rewriter into the crates, for the
+native engine; the jaq engine keeps the text repairs until P-078, so these
+changes land once, in the crates, not in `packaging/jaq/`.
+
+- `pathfinder-std`'s `ValT` gains `jq_type` and `jq_quoted` (jq's
+  `number (1)`, `array ([1,2,3,4,5,...)`), which builtins use to raise
+  jq 1.8.1's messages where they fail: the regex builtins (input, regex
+  and flags of the wrong type, an unknown flag string), `explode`,
+  `ascii_downcase`/`ascii_upcase`, `startswith`/`endswith`/`ltrimstr`/
+  `rtrimstr`, `implode`, `sort`, `sort_by`/`group_by`/`min_by`/`max_by`,
+  `strptime`. `reverse` and `implode` follow jq's definitions (`reverse` of
+  a non-array; U+FFFD for an invalid code point, where jaq read a negative
+  number as a byte). In `defs.jq`, `unique` fails as `sort` does and
+  `getpath` names a path that is no array. jaq's unit test of `implode`
+  now expects jq's answer.
+- The core's errors are jq's (T-022): `ValT` gains `jq_type`, `jq_string`
+  and `jq_quoted` (moved up from `pathfinder-std`), and `Error::typ`,
+  `Error::math` and `Error::index` build jq 1.8.1's messages (`Cannot iterate
+  over number (1)`, `number (1) and string ("a") cannot be added`, `Cannot
+  index number with string "a"`, `... number required`) where jaq said
+  `cannot use 1 as iterable (array or object)`, `cannot calculate 1 + "a"`
+  and `cannot index 1 with "a"`. Also jq's: `keys`/`to_entries` on a value
+  without keys, `contains` between types, `@csv`/`@tsv`, a native `@sh`,
+  native `min`/`max`, the `…_by` functions on an object, `fromdateiso8601`,
+  an object slice without both bounds. jaq's tests asserting jaq's wording
+  now expect jq's.
+- `input_line_number` is a native function on `Data::line_number`, the
+  reader position's line count (`Position::line_number`).
+- Arithmetic and comparisons run the right operand in the outer loop, its
+  error first, as jq does (`cartesian_rl`); object construction keeps the
+  first entry outer through a term of its own, `Term::ObjCat`, where jaq
+  summed the entries with `+`. Math functions taking a C `int` (`ldexp`,
+  `scalbln`, `jn`, `yn`) truncate their argument as C's cast does, and
+  `scalb` is C's (NaN for an exponent that is no integer). jaq's tests of
+  those orders and of `scalb` now expect jq's answers.
+- Numbers as indices and bounds, as jq 1.8.1 takes them (T-026): a
+  fractional index is truncated and NaN, infinite or too large indexes
+  nothing (`Num::as_jq_index`), in reads, paths (`path(.[1.5])` is
+  `[1.5]`) and updates; slice bounds round outwards after a negative one is
+  counted from the end, NaN is no bound and a non-number is jq's error
+  (`Num::as_jq_bound`); `null` slices to `null` and updates as `[]`. `/` by
+  zero is jq's error, so `nan` and `infinite` are native rather than `0/0`
+  and `1/0`; unary minus words jq's error; `range` with no step yields
+  nothing. jaq's tests of those now expect jq's answers.
+- Assignment as jq 1.8.1 does it (T-024): `map_index` creates missing
+  containers (`null` updated as the object or array its key implies), pads
+  an array past its end, deletes in place keeping the other keys' order
+  (`shift_remove`, where jaq swapped the last key in), and raises jq's
+  errors (`Out of bounds negative array index`, `Array index too large`,
+  `Cannot set array element at NaN index`, `Cannot update field at array
+  index of array`, `Cannot update string slices`, `A slice of an array can
+  only be assigned another array`). An update whose target is no path
+  expression fails as `path(target)` does (`update_jq`), which only a
+  target that is not a plain path pays for: holding the input a second time
+  would make every in-place update copy it.
+- Deletion as jq 1.8.1 does it (T-025): a native `_delpaths` in
+  `pathfinder-json` is jq's `jv_delpaths` (paths sorted, grouped by key and
+  deleted together, jq's errors), and `pathfinder-json`'s `defs.jq`
+  redefines `delpaths` with it and `del(f)` as jq's
+  `delpaths([path(f)])`. `pathfinder-core` keeps jaq's definitions, so its
+  tests still run without the JSON crate.
+- jq 1.8.1's own definitions (`src/builtin.jq`) of `tostream`,
+  `fromstream`, `truncate_stream`, `IN`, `INDEX`, `JOIN`, `trimstr`,
+  `have_decnum`, `have_literal_numbers`, `skip`, `limit`, `nth`, `flatten`,
+  `join` and `pick` are the engine's, in `pathfinder-json`'s `defs.jq`
+  (T-027), where jaq had none or its own. jaq's tests of `flatten` on an
+  object and a number now expect jq's answers.
+- Native with jq 1.8.1's semantics and messages: `has` (a string key for an
+  object, a truncated number for an array, `null` has nothing), `tonumber`
+  (a string whole as C's `strtod` reads it, a literal's text kept),
+  `toboolean`, `utf8bytelength`, `bsearch`, `trim`/`ltrim`/`rtrim`; jq's
+  definitions of `from_entries` and `with_entries`. Object construction
+  refuses a key that is no string (`Cannot use null (null) as object key`),
+  where jaq built objects that are no JSON.
+- jaq's own helpers are internal (P-066): `isarray`, `isstring`, `tobytes`,
+  `key_values`, `matches`, `halt/1`, `ilogb` and the rest (28 names jq 1.8.1
+  does not define) are renamed with a leading `_` in the engine's natives,
+  definitions and tests, so a filter cannot reach them even where the
+  front end does not check; `@htmld`, which jq lacks, is gone.
+- `@base64d` and `@urid` are jq's (P-067): `@base64d` decodes up to the
+  first `=`, ignores missing padding and unused low bits, and raises jq's
+  two messages; `@urid` rejects a malformed `%` escape and bytes that are
+  not UTF-8. Bytes `@base64d` yields that are not UTF-8 become U+FFFD as
+  jq's `jvp_utf8_next` reads them (`jq_lossy_utf8`). `format/1`, a C
+  builtin in jq, is defined in `pathfinder-all`'s new `defs.jq`, the one
+  place that sees `jaq_fmts`'s `@csv`/`@tsv`.
+- jq's evaluation order (PR #19's review): an error of a binary operator's
+  right operand is raised before the left runs (`cartesian_rl`); natives
+  bind their arguments last outermost, as jq calls its C builtins
+  (`bind_native`; `range/3` is `_range` behind a definition, `scan`,
+  `split`, `splits`, `sub` and `gsub` bind `$` parameters as jq's do); an
+  update to nothing through an absent child leaves it absent
+  (`ValT::jq_absent`); a slice of `null` is updated from `null`;
+  `setpath` is the native `_setpath`, which owns its input.
 
 ## Licence of Pathfinder's changes
 

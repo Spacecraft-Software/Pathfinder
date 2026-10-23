@@ -74,6 +74,46 @@ impl Num {
         }
     }
 
+    /// Pathfinder: an array index as jq 1.8.1 takes it: a fractional one
+    /// truncated (C's cast); NaN, infinite or too large is no index (jq
+    /// answers `null`).
+    pub(crate) fn as_jq_index(&self) -> Option<PosUsize> {
+        match self {
+            Self::Float(_) | Self::Dec(_) => {
+                let t = self.as_f64().trunc();
+                (t.is_finite() && t.abs() < usize::MAX as f64)
+                    .then(|| PosUsize(t >= 0.0, t.abs() as usize))
+            }
+            _ => self.as_pos_usize(),
+        }
+    }
+
+    /// Pathfinder: a slice bound as jq 1.8.1 takes it: rounded outwards
+    /// after a negative bound is counted from the end, so a start rounds
+    /// down and an end up. `None` is no bound (NaN), as an open one.
+    pub(crate) fn as_jq_bound(&self, end: bool) -> Option<PosUsize> {
+        let f = &match self {
+            Self::Float(_) | Self::Dec(_) => self.as_f64(),
+            _ => return self.as_pos_usize(),
+        };
+        if f.is_nan() {
+            return None;
+        }
+        let sat = |v: f64| {
+            if v >= usize::MAX as f64 {
+                usize::MAX
+            } else {
+                v as usize
+            }
+        };
+        Some(if *f >= 0.0 {
+            PosUsize(true, sat(if end { f.ceil() } else { f.floor() }))
+        } else {
+            let m = -f;
+            PosUsize(false, sat(if end { m.floor() } else { m.ceil() }))
+        })
+    }
+
     pub(crate) fn as_pos_usize(&self) -> Option<PosUsize> {
         match self {
             Self::Int(i) => Some(PosUsize(*i >= 0, i.unsigned_abs())),

@@ -118,11 +118,19 @@ fn assemble_here(
     let inexpressible: Vec<(String, &'static str)> = info
         .called
         .iter()
-        .filter_map(|n| prelude::inexpressible(n).map(|why| (n.clone(), why)))
+        .filter_map(|n| prelude::inexpressible(n, ctx.native).map(|why| (n.clone(), why)))
         .collect();
 
     let header = &src[..info.header_end];
     let compile_error = compile_error(src, info.header_end);
+    if compile_error.is_none()
+        && let Some(cleaned) = drop_unreachable_undefined(src, info.header_end)
+    {
+        // The text is no longer the user's, so a `-f` file must not be read.
+        let mut assembly = assemble_here(&cleaned, ctx, wrap, loc_file);
+        assembly.rewritten = true;
+        return assembly;
+    }
     let shorthands: Vec<usize> = if info.loc_sites.is_empty() {
         Vec::new()
     } else {
@@ -141,7 +149,7 @@ fn assemble_here(
     // Rewrite what jaq would run differently from jq (assignment, chiefly).
     // `None` means the body needed nothing, or could not be parsed: either way
     // it goes to jaq exactly as written.
-    let rewritten_body = crate::syntax::rewrite::rewrite(body);
+    let rewritten_body = crate::syntax::rewrite::rewrite(body, ctx.rewrites());
     let mut wanted = wanted;
     if let Some(rw) = &rewritten_body {
         for name in &rw.needs {
@@ -227,13 +235,65 @@ fn compile_error(src: &str, header_end: usize) -> Option<CompileError> {
     }
     let body = &src[header_end..];
     let toks = crate::syntax::lex::lex(body).ok()?;
-    if !check::has_computed_key(&toks) && !check::has_alternative(&toks) {
-        return None;
+    let mut e = if check::has_computed_key(&toks) || check::has_alternative(&toks) {
+        check::program(body)
+    } else {
+        None
+    };
+    if e.is_none() && check::has_unknown_name(&toks) && !definitions_elsewhere(header_end) {
+        let tree = crate::syntax::parse::parse(body).ok()?;
+        let mut found = check::undefined_calls(&tree).into_iter();
+        e = found.next().map(|mut first| {
+            first.more = found.collect();
+            first
+        });
     }
-    let mut e = check::program(body)?;
+    let mut e = e?;
+    for m in &mut e.more {
+        m.span.start += header_end;
+        m.span.end += header_end;
+    }
     e.span.start += header_end;
     e.span.end += header_end;
     Some(e)
+}
+
+/// `src` with calls to undefined names in code nothing reaches replaced by
+/// `empty`, when it has any (`check::unreachable_undefined`); `None` when
+/// it has none, or when definitions it does not show may be in scope.
+fn drop_unreachable_undefined(src: &str, header_end: usize) -> Option<String> {
+    if std::env::var_os(crate::syntax::rewrite::NO_REWRITE_ENV).is_some() {
+        return None;
+    }
+    let body = &src[header_end..];
+    let toks = crate::syntax::lex::lex(body).ok()?;
+    if !check::has_unknown_name(&toks) || definitions_elsewhere(header_end) {
+        return None;
+    }
+    let tree = crate::syntax::parse::parse(body).ok()?;
+    let spans = check::unreachable_undefined(&tree);
+    if spans.is_empty() {
+        return None;
+    }
+    let mut out = String::with_capacity(src.len());
+    let mut at = 0;
+    for s in spans {
+        out.push_str(&src[at..header_end + s.start]);
+        out.push_str("(empty)");
+        at = header_end + s.end;
+    }
+    out.push_str(&src[at..]);
+    Some(out)
+}
+
+/// Whether definitions this program does not show can be in scope: an
+/// `import` or `include` in its header, or a `~/.jq` file, which jq loads
+/// into every program. Then a call to an engine-only name may be the
+/// program's own, and is not refused.
+fn definitions_elsewhere(header_end: usize) -> bool {
+    header_end > 0
+        || std::env::var_os("HOME")
+            .is_some_and(|home| std::path::Path::new(&home).join(".jq").is_file())
 }
 
 /// Environment switch that routes every program through the parser and the

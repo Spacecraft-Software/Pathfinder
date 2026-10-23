@@ -27,9 +27,12 @@ like `src/…` and `tests/…` in this file are relative to it. The root
 
 Baseline is **jq 1.8.1**. The differential suite passes unchanged against jaq
 **3.0.0, 3.1.0 and 3.1.1**; CI pins 3.1.0, the version nixpkgs 26.05 ships and
-therefore the one daily-driven through Bravais. jaq 3.1 added `input_filename`
-natively; Pathfinder's own definition still takes precedence, deliberately,
-because it answers jq's way across concatenated multi-file input.
+therefore the one daily-driven through Bravais. `input_filename` is jq's on
+the native engine, answered from the driver's reader (`jq::Position`):
+`null` before any input is read, then the file the reader has open, across
+several files too. On the jaq engine the prelude defines a constant, which
+can be only one of those (`null` under `-n`, else the input's name; an error
+with several files).
 
 ## Build, test, lint
 
@@ -200,7 +203,20 @@ print. To keep the `jq` name untouched:
 - **A parse failure passes the filter through** — it may be a gap in this
   parser. Only a construct *proven* to be a jq compile error exits 3: a constant
   non-string object key (by jq's own folding rules, `check.rs`), non-constant or
-  non-object `module` metadata, and a parse failure *at* a `?//` token.
+  non-object `module` metadata, a parse failure *at* a `?//` token, and a
+  reachable call to a name/arity that is neither one of jq 1.8.1's
+  `builtins` (`prelude::JQ_BUILTINS`), one of its internal `_` builtins
+  (`check::JQ_INTERNAL`, measured), a literal, nor defined by the program
+  (`check::undefined_calls`). That covers jaq's own helpers
+  (`isarray`, `tobytes`, `halt/1`, …), which a filter could otherwise call,
+  and replaces jaq's report of an unknown name, which quoted the whole
+  prelude. It follows jq's scoping: a definition counts only once something
+  reachable calls it, arguments always count, and an `import`/`include` or a
+  `~/.jq` file turns it off. A call to such a name in code nothing reaches is
+  replaced by `empty` (`check::unreachable_undefined`): jq never compiles
+  it, the engine compiles every definition. The engine's own helpers are
+  `_`-prefixed, so a filter cannot call them (P-066); an unknown `@format`
+  is rewritten to jq's run-time error (`JQ_FORMATS`).
 - **Depth is bounded, because every pass recurses on the native stack.**
   The lexer stops at `MAX_INTERP` nested interpolations, the parser at
   `MAX_NESTING` recursive calls, `MAX_FOLDS` chain links (`,`, binary
@@ -212,12 +228,32 @@ print. To keep the `jq` name untouched:
   new recursive pass over the tree must stay within `MAX_DEPTH`; a new
   grammar cycle must pass through `query`, `term` or `pattern`, or be wrapped
   in `Parser::nested` where it recurses (as `//` is in `expr`).
-- **Assignment is vivify-then-native.** Prepare the containers (inline guard for
+- **Assignment is native on the native engine** (M20): the engine creates
+  containers and raises jq's errors, and only a comma target with an update
+  (`(.a, .b) |= f`) is rewritten, to `_pf_modify`, whose deletions jq defers
+  to the end (`Rewrites::comma_update`). Keep the engine's update from
+  holding a second reference to the value it updates: `Rc::make_mut` then
+  copies it on every step, which made a 100 000-key `reduce` take 10^12
+  instructions; `setpath` is the native `_setpath` for the same reason
+  (`fromstream` went quadratic through `getpath($p) = $x`). An update to
+  nothing deletes the path, as jq's does: a step whose child is absent
+  (`ValT::jq_absent`) and still `null` after the rest of the path yields
+  nothing, so the parent creates no key and pads no array.
+- **Arguments run in jq's order.** jq runs a C builtin's last argument in
+  the outermost loop and a definition's first (`def f($a; $b)` is
+  `a as $a | b as $b | …`). The engine's natives bind as C builtins do
+  (`filter::bind_native`), so a native standing for a jq *definition* sits
+  behind one that binds its `$` parameters (`range/3` → `_range`), and a
+  definition standing for a C builtin binds them last first (`setpath`).
+- **On the jaq engine, assignment is vivify-then-native.** Prepare the containers (inline guard for
   a literal target, `_pf_vivify` otherwise), then let jaq's own operator run —
   it matches jq once the containers exist. jq's `_modify` transcribed into jaq
   is quadratic (2.4 s for 10k elements); a comma target is the only thing still
   sent through `_pf_modify`.
-- **`del(f)` uses jaq's `del` only where it is jq's**: one path per array
+- **On the native engine, `del` and `delpaths` are jq's** (M20): the
+  engine's `delpaths` is a port of jq's `jv_delpaths`, so the `delete`
+  rewrite and the prelude's repairs are off there.
+- **On the jaq engine, `del(f)` uses jaq's `del` only where it is jq's**: one path per array
   (`single_path`), a deleting step that is not a named key (jaq swap-removes
   keys, breaking order), with `try … catch` falling back to `_pf_delpaths` on
   the original input. The fallback evaluates the target twice, so effectful
@@ -241,10 +277,13 @@ print. To keep the `jq` name untouched:
   `and`/`or` (several µs each) are expensive; comparisons (`. < ""` is "not a
   string, number or later type"), nested `if`s, inline text and `label`/`break`
   are cheap. Type tests in a per-element path are written as comparisons.
-- **Error text reaches scripts only through `catch`.** The rewriter wraps a
-  handler that reads its input in `_pf_err`, which turns jaq's templates back
-  into jq's wording; a builtin whose jq message names it gets a guard that runs
-  jaq's builtin first and re-raises with jq's text only on a wrong input type.
+- **Error text reaches scripts only through `catch`.** The native engine
+  words its errors as jq does (M20): the core's `Error::typ`/`math`/`index`
+  and the builtins raise jq 1.8.1's messages, built with `ValT::jq_quoted`.
+  On the jaq engine the rewriter wraps a handler that reads its input in
+  `_pf_err`, which turns jaq's templates back into jq's wording, and a
+  builtin whose jq message names it gets a guard that runs jaq's builtin
+  first and re-raises with jq's text only on a wrong input type.
 - **The packaged jaq words an uncaught error by the same rules.**
   `packaging/jaq/0008-uncaught-errors.patch` adds `jaq/src/jq.rs`, whose
   `wording` is a Rust transcription of `_pf_err` (and its `dump` of
@@ -360,7 +399,7 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
 | `crates/pathfinder/src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
 | `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`, path expressions, `l // r` as a path, `%`, parse errors, lazy input reading, file names in error locations, a comment at the end of the program), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); Bravais builds whatever its own nixpkgs has, by making this flake follow it, so every jaq it may carry needs a cut that applies without fuzz. `0008`, `0013` and `0015` have a 3.1.0 cut (3.1.0's `real_main` differs on the lines they replace); `0008`, `0010` and `0015` have a 3.1.2 cut (3.1.2 passes `input_filename` to `run` and rounds with its own helpers); `0016` is skipped from 3.1.2, which fixed the same bug the same way. `cut` in `default.nix` picks by version. When nixpkgs moves jaq, replay the patch commits onto the new release in jaq's source tree, apply the old cuts with `patch -p1` and cut anew only those that fail or fuzz. MIT for jaq's text, Pathfinder's changes GPL-3.0-or-later OR MIT; never sent upstream. |
 | `crates/pathfinder-core`, `-std`, `-json`, `-fmts` | jaq 3.1.1's engine crates, imported with the patch set applied (`crates/UPSTREAM.md`). Library names stay `jaq_core`, … so the sources stay diffable against upstream. |
-| `crates/pathfinder-all` | jaq 3.1.1's `jaq-all` (lib `jaq_all`): compiling, running, reading and writing on the engine crates. |
+| `crates/pathfinder-all` | jaq 3.1.1's `jaq-all` (lib `jaq_all`): compiling, running, reading and writing on the engine crates. Its `defs.jq` holds definitions that need every engine crate (`format`). |
 | `crates/pathfinder-jaq` | jaq 3.1.1's CLI, with the CLI hunks of the patch set, as the library `jaq` the native engine runs (`jaq::run`) and as the binary `pathfinder-jaq`, run as `PATHFINDER_JAQ` to check the crates against the packaged jaq. `publish = false`; never installed. |
 | `crates/pathfinder/tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
 | `crates/pathfinder/tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |

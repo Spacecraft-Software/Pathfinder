@@ -9,7 +9,7 @@ where
 {
     let f = || [Bind::Fun(())].into();
     Box::new([
-        ("error_empty", v(0), (|cv| bome(Err(Error::new(cv.1))))),
+        ("_error_empty", v(0), (|cv| bome(Err(Error::new(cv.1))))),
         ("path", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
             let cvp = (fc, (cv.1, Default::default()));
@@ -23,7 +23,7 @@ where
                 Ok(path.into_iter().rev().collect())
             }))
         }),
-        ("path_value", f(), |mut cv| {
+        ("_path_value", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
             let cvp = (fc, (cv.1, Default::default()));
             Box::new(f.paths(cvp).map(|vp| {
@@ -36,16 +36,27 @@ where
                 Ok([path.into_iter().rev().collect(), v].into_iter().collect())
             }))
         }),
-        ("range", v(3), |mut cv| {
+        ("_range", v(3), |mut cv| {
             let by = cv.0.pop_var();
             let to = cv.0.pop_var();
             let from = cv.0.pop_var();
             Box::new(range(Ok(from), to, by))
         }),
+        // Pathfinder: jq's message for a value without keys.
         ("keys_unsorted", v(0), |cv| {
+            if !matches!(cv.1.jq_type(), "array" | "object") {
+                let q = cv.1.jq_quoted();
+                return bome(Err(Error::str(alloc::format!("{q} has no keys"))));
+            }
             bome(cv.1.key_values().map(|kv| kv.map(|(k, _v)| k)).collect())
         }),
-        ("key_values", v(0), |cv| {
+        // Pathfinder: `to_entries` is written with this; jq's is written with
+        // `keys_unsorted`, and fails as it does.
+        ("_key_values", v(0), |cv| {
+            if !matches!(cv.1.jq_type(), "array" | "object") {
+                let q = cv.1.jq_quoted();
+                return bome(Err(Error::str(alloc::format!("{q} has no keys"))));
+            }
             let f = |(k, v)| [k, v].into_iter().collect();
             bome(cv.1.key_values().map(|kv| kv.map(f)).collect())
         }),
@@ -67,7 +78,9 @@ fn range<V: ValT>(mut from: ValX<V>, to: V, by: V) -> impl Iterator<Item = ValX<
         Ok(x) => match cmp {
             Greater => x < to,
             Less => x > to,
-            Equal => x != to,
+            // Pathfinder: no step yields nothing, as in jq 1.8.1, where jaq
+            // repeated `from` for ever.
+            Equal => false,
         }
         .then(|| core::mem::replace(&mut from, (x + by.clone()).map_err(Exn::from))),
         e @ Err(_) => {

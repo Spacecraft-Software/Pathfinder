@@ -17,6 +17,11 @@
 //! - `module` metadata that is not a constant object.
 //! - `?//` anywhere but between destructuring patterns: jq's lexer reads
 //!   `.a?//1` as `.a ?// 1`, a syntax error, where jaq reads `.a? // 1`.
+//! - A call, in reachable code, to a function jq does not define: jq answers
+//!   `isarray/0 is not defined`. The engine defines helpers of its own
+//!   (`isarray`, `tobytes`, `halt/1`, …) that a filter could otherwise call
+//!   (PRD R-004), and it words an unknown name its own way
+//!   ([`undefined_calls`]).
 //!
 //! jq's folding is narrow, and so is this module's: literals, `$__loc__`,
 //! arrays and objects of constants, parentheses, `c | .`, and arithmetic or
@@ -25,19 +30,36 @@
 
 use super::lex::{Kw, StrPart, Tok, Token, lex};
 use super::parse::parse;
-use super::{Kind, Node, ObjKey, ObjPair, ObjPat, Pattern, Span, StrLit, StrSeg};
+use super::{FuncDef, Kind, Node, ObjKey, ObjPair, ObjPat, Param, Pattern, Span, StrLit, StrSeg};
+use std::fmt::Write as _;
+use std::rc::Rc;
 
 /// A compile error, located in the program text it was found in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompileError {
     pub message: String,
     pub span: Span,
+    /// Further errors jq reports with this one, in its order.
+    pub more: Vec<CompileError>,
 }
 
 impl CompileError {
     /// jq's rendering: the message with its location, the source line, and a
     /// caret under the offending text.
     pub fn render(&self, prog: &str, src: &str) -> String {
+        let mut out = self.render_one(prog, src);
+        for e in &self.more {
+            out.push_str(&e.render_one(prog, src));
+        }
+        let n = 1 + self.more.len();
+        let plural = if n == 1 { "" } else { "s" };
+        // Writing into a `String` cannot fail.
+        let _ = writeln!(out, "{prog}: {n} compile error{plural}");
+        out
+    }
+
+    /// One error's lines, without jq's closing count.
+    fn render_one(&self, prog: &str, src: &str) -> String {
         let start = self.span.start.min(src.len());
         let line_start = src[..start].rfind('\n').map_or(0, |i| i + 1);
         let line_end = src[start..].find('\n').map_or(src.len(), |i| start + i);
@@ -48,7 +70,7 @@ impl CompileError {
             .count()
             .max(1);
         format!(
-            "{prog}: error: {} at <top-level>, line {line}, column {column}:\n    {}\n    {}{}\n{prog}: 1 compile error\n",
+            "{prog}: error: {} at <top-level>, line {line}, column {column}:\n    {}\n    {}{}\n",
             self.message,
             &src[line_start..line_end],
             " ".repeat(column - 1),
@@ -69,6 +91,7 @@ pub fn program(body: &str) -> Option<CompileError> {
             Some(CompileError {
                 message: "syntax error, unexpected ?//".to_owned(),
                 span: Span::new(e.at, e.at + 3),
+                more: Vec::new(),
             })
         }
         Err(_) => None,
@@ -106,7 +129,242 @@ pub fn module_header(src: &str) -> Option<CompileError> {
     Some(CompileError {
         message: message.to_owned(),
         span: Span::new(span.start, span.start + text.trim_end().len()),
+        more: Vec::new(),
     })
+}
+
+/// The internal builtins jq 1.8.1 accepts in a program though `builtins`
+/// leaves them out: every `_` name in jq's binary and `builtin.jq`, kept
+/// where `jq -n 'if false then NAME(args) else 1 end'` compiles.
+const JQ_INTERNAL: &[(&str, usize)] = &[
+    ("_assign", 2),
+    ("_divide", 2),
+    ("_equal", 2),
+    ("_flatten", 1),
+    ("_greater", 2),
+    ("_greatereq", 2),
+    ("_group_by_impl", 1),
+    ("_less", 2),
+    ("_lesseq", 2),
+    ("_match_impl", 3),
+    ("_max_by_impl", 1),
+    ("_min_by_impl", 1),
+    ("_minus", 2),
+    ("_mod", 2),
+    ("_modify", 2),
+    ("_multiply", 2),
+    ("_negate", 0),
+    ("_notequal", 2),
+    ("_plus", 2),
+    ("_sort_by_impl", 1),
+    ("_strindices", 1),
+    ("_unique_by_impl", 1),
+];
+
+/// Whether jq 1.8.1 defines `name/arity` without the program's help: one of
+/// its `builtins` (`prelude::JQ_BUILTINS`, captured from jq), one of its
+/// internal `_` builtins ([`JQ_INTERNAL`]), or a literal. The engine's own
+/// `_` helpers (`_isarray`, `_tobytes`, …) are none of these.
+fn defined_by_jq(name: &str, arity: usize) -> bool {
+    static BUILTINS: std::sync::OnceLock<Vec<(String, usize)>> = std::sync::OnceLock::new();
+    let builtins = BUILTINS.get_or_init(|| {
+        crate::prelude::JQ_BUILTINS
+            .split('"')
+            .filter_map(|entry| {
+                let (n, a) = entry.rsplit_once('/')?;
+                Some((n.to_owned(), a.parse().ok()?))
+            })
+            .collect()
+    });
+    JQ_INTERNAL.contains(&(name, arity))
+        || (arity == 0 && matches!(name, "true" | "false" | "null"))
+        || builtins.iter().any(|(n, a)| n == name && *a == arity)
+}
+
+/// Whether the tokens may call a name jq does not define: the cheap test
+/// before [`undefined_calls`] parses. Each identifier is taken as a call
+/// with the arguments the tokens after it give it, counted as the `;`s at
+/// the depth of a `(` that follows it. Identifiers that are no calls (object
+/// keys, `def` names) can only make it parse when it need not; a program
+/// calling only builtins, the common case, is never parsed for this.
+pub fn has_unknown_name(toks: &[Token]) -> bool {
+    toks.iter().enumerate().any(|(i, t)| match &t.tok {
+        Tok::Ident(name) => !defined_by_jq(name, call_arity(&toks[i + 1..])),
+        Tok::Str(parts) => parts
+            .iter()
+            .any(|p| matches!(p, StrPart::Interp(inner, _) if has_unknown_name(inner))),
+        _ => false,
+    })
+}
+
+/// The arguments of a call whose name precedes `after`: none without a `(`,
+/// else one more than its `;`s at the parenthesis' own depth.
+fn call_arity(after: &[Token]) -> usize {
+    if !matches!(after.first().map(|t| &t.tok), Some(Tok::Op("("))) {
+        return 0;
+    }
+    let mut depth = 0usize;
+    let mut arity = 1;
+    for t in after {
+        match &t.tok {
+            Tok::Op("(" | "[" | "{") => depth += 1,
+            Tok::Op(")" | "]" | "}") => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            Tok::Op(";") if depth == 1 => arity += 1,
+            _ => {}
+        }
+    }
+    arity
+}
+
+/// A name bound where a call is resolved: a definition, or a parameter.
+struct Binding<'a> {
+    name: &'a str,
+    arity: usize,
+    /// The definition, and the scope it was written in; `None` for a
+    /// parameter.
+    def: Option<&'a FuncDef>,
+    outer: Scope<'a>,
+}
+
+type Scope<'a> = Option<Rc<Binding<'a>>>;
+
+fn bind<'a>(
+    outer: &Scope<'a>,
+    name: &'a str,
+    arity: usize,
+    def: Option<&'a FuncDef>,
+) -> Rc<Binding<'a>> {
+    Rc::new(Binding {
+        name,
+        arity,
+        def,
+        outer: outer.clone(),
+    })
+}
+
+/// The calls jq rejects as undefined, in the order jq reports them; spans
+/// are relative to the parsed text.
+///
+/// jq checks only reachable code: it drops a definition nothing calls before
+/// it looks for undefined names, so `def f: isarray; 1` runs and
+/// `def f: isarray; f` does not. A call's arguments are always checked, even
+/// those the callee never uses. Each definition is walked once, when first
+/// called, in the scope it was written in, with its parameters bound (a
+/// `$name` parameter binds `name/0` too, as in jq).
+pub fn undefined_calls(tree: &Node) -> Vec<CompileError> {
+    let mut out = Vec::new();
+    let mut seen: Vec<*const FuncDef> = Vec::new();
+    walk_calls(tree, &None, &mut seen, &mut out);
+    out
+}
+
+fn walk_calls<'a>(
+    n: &'a Node,
+    scope: &Scope<'a>,
+    seen: &mut Vec<*const FuncDef>,
+    out: &mut Vec<CompileError>,
+) {
+    match &n.kind {
+        Kind::Def { def, rest } => {
+            let inner = Some(bind(scope, &def.name, def.params.len(), Some(def)));
+            walk_calls(rest, &inner, seen, out);
+        }
+        Kind::Call { name, args } => {
+            for a in args {
+                walk_calls(a, scope, seen, out);
+            }
+            let mut at = scope.as_ref();
+            while let Some(b) = at {
+                if b.name == name && b.arity == args.len() {
+                    break;
+                }
+                at = b.outer.as_ref();
+            }
+            match at {
+                Some(b) => {
+                    if let Some(def) = b.def
+                        && !seen.contains(&std::ptr::from_ref(def))
+                    {
+                        seen.push(std::ptr::from_ref(def));
+                        // The definition sees itself, for recursion.
+                        let mut inner =
+                            Some(bind(&b.outer, &def.name, def.params.len(), Some(def)));
+                        for p in &def.params {
+                            let (Param::Filter(p) | Param::Value(p)) = p;
+                            inner = Some(bind(&inner, p.trim_start_matches('$'), 0, None));
+                        }
+                        walk_calls(&def.body, &inner, seen, out);
+                    }
+                }
+                None if !defined_by_jq(name, args.len()) => {
+                    out.push(CompileError {
+                        message: format!("{name}/{} is not defined", args.len()),
+                        span: Span::new(n.span.start, n.span.start + name.len()),
+                        more: Vec::new(),
+                    });
+                }
+                None => {}
+            }
+        }
+        _ => {
+            for c in n.children() {
+                walk_calls(c, scope, seen, out);
+            }
+        }
+    }
+}
+
+/// Calls to names jq does not define anywhere, reachable or not, as the
+/// spans of the whole calls; spans are relative to the parsed text.
+///
+/// jq never compiles a definition nothing calls, so in such a definition a
+/// call to an undefined name is harmless, where the engine compiles every
+/// definition and refuses it. The caller replaces these calls by `empty`
+/// once [`undefined_calls`] has found none reachable.
+pub fn unreachable_undefined(tree: &Node) -> Vec<Span> {
+    fn walk<'a>(n: &'a Node, scope: &Scope<'a>, out: &mut Vec<Span>) {
+        match &n.kind {
+            Kind::Def { def, rest } => {
+                let inner = Some(bind(scope, &def.name, def.params.len(), Some(def)));
+                let mut body = inner.clone();
+                for p in &def.params {
+                    let (Param::Filter(p) | Param::Value(p)) = p;
+                    body = Some(bind(&body, p.trim_start_matches('$'), 0, None));
+                }
+                walk(&def.body, &body, out);
+                walk(rest, &inner, out);
+            }
+            Kind::Call { name, args } => {
+                let mut at = scope.as_ref();
+                while let Some(b) = at {
+                    if b.name == name && b.arity == args.len() {
+                        break;
+                    }
+                    at = b.outer.as_ref();
+                }
+                if at.is_none() && !defined_by_jq(name, args.len()) {
+                    out.push(n.span);
+                    return;
+                }
+                for a in args {
+                    walk(a, scope, out);
+                }
+            }
+            _ => {
+                for c in n.children() {
+                    walk(c, scope, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(tree, &None, &mut out);
+    out
 }
 
 /// Whether the tokens contain `?//` at any depth.
@@ -201,6 +459,7 @@ fn key_error(k: &Node, src: &str) -> Option<CompileError> {
             truncated(&c.dump())
         ),
         span,
+        more: Vec::new(),
     })
 }
 
@@ -423,7 +682,84 @@ fn fold(op: &str, a: Const, b: Const) -> Option<Const> {
 
 #[cfg(test)]
 mod tests {
-    use super::{module_header, program};
+    use super::{module_header, program, undefined_calls};
+    use crate::syntax::parse::parse;
+
+    fn undefined(src: &str) -> Vec<String> {
+        let tree = parse(src).expect("parses");
+        undefined_calls(&tree)
+            .into_iter()
+            .map(|e| format!("{}@{}", e.message, e.span.start))
+            .collect()
+    }
+
+    /// Measured against jq 1.8.1, which drops unreferenced definitions
+    /// before it looks for undefined names.
+    #[test]
+    fn engine_only_calls_are_undefined_in_reachable_code_only() {
+        assert_eq!(undefined("isarray"), ["isarray/0 is not defined@0"]);
+        assert_eq!(
+            undefined("isarray, isstring"),
+            ["isarray/0 is not defined@0", "isstring/0 is not defined@9"]
+        );
+        assert_eq!(undefined("[.[] | halt(1)]"), ["halt/1 is not defined@7"]);
+        assert!(undefined("halt").is_empty(), "jq has halt/0");
+        assert_eq!(undefined("def f: isnumber; 1"), [] as [String; 0]);
+        assert_eq!(
+            undefined("def f: isnumber; f"),
+            ["isnumber/0 is not defined@7"]
+        );
+        assert_eq!(undefined("def isarray: 1; isarray"), [] as [String; 0]);
+        assert_eq!(
+            undefined("def f(g): 1; f(isarray)"),
+            ["isarray/0 is not defined@15"],
+            "arguments are checked even when unused"
+        );
+        assert_eq!(undefined("def f: isarray; def f: 1; f"), [] as [String; 0]);
+        assert_eq!(
+            undefined("def f: 1; def g: f; def f: isarray; g"),
+            [] as [String; 0]
+        );
+        assert_eq!(
+            undefined("def f(x): def x: isarray; 1; f(.)"),
+            [] as [String; 0]
+        );
+        assert_eq!(
+            undefined("def f($isarray): isarray; f(1)"),
+            [] as [String; 0]
+        );
+        assert_eq!(
+            undefined("def r: if . > 0 then .-1|r else isarray end; 1|r"),
+            ["isarray/0 is not defined@32"]
+        );
+    }
+
+    #[test]
+    fn undefined_calls_in_unreachable_code_are_found_lexically() {
+        let spans = |src: &str| {
+            let tree = parse(src).expect("parses");
+            super::unreachable_undefined(&tree)
+                .into_iter()
+                .map(|s| &src[s.start..s.end])
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(spans("def f: isnumber; 1"), ["isnumber"]);
+        assert_eq!(spans("def g: tobytes(1); [1]"), ["tobytes(1)"]);
+        assert_eq!(spans("def f(x): x; f(1)"), [] as [String; 0]);
+        assert_eq!(spans("def isarray: 1; isarray"), [] as [String; 0]);
+    }
+
+    #[test]
+    fn several_errors_are_counted_as_jq_counts_them() {
+        let tree = parse("isarray, isstring").expect("parses");
+        let mut all = undefined_calls(&tree).into_iter();
+        let mut e = all.next().expect("one");
+        e.more = all.collect();
+        let text = e.render("jq", "isarray, isstring");
+        assert!(text.ends_with("jq: 2 compile errors\n"), "{text}");
+        assert_eq!(text.matches("is not defined").count(), 2);
+    }
 
     fn rejects(src: &str) -> Option<String> {
         program(src).map(|e| e.message)
