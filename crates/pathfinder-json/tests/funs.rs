@@ -201,6 +201,6 @@ fn math_rem() {
 
 yields!(
     format_urid_invalid,
-    r#"("%FF" | @urid) == ([255] | tobytes | tostring)"#,
+    r#"("%FF" | @urid) == ([255] | _tobytes | tostring)"#,
     true
 );

@@ -184,7 +184,7 @@ fn base<D: for<'a> DataT<V<'a> = Val>>() -> Box<[Filter<RunPtr<D>>]> {
             bome(s.and_then(parse))
         }),
         ("tojson", v(0), |cv| bome(Ok(Val::utf8_str(cv.1.to_json())))),
-        ("tobytes", v(0), |cv| {
+        ("_tobytes", v(0), |cv| {
             let fail = |v| Error::str(format_args!("cannot convert {v} to bytes"));
             bome(cv.1.to_bytes().map(Val::byte_str).map_err(fail))
         }),

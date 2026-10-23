@@ -291,6 +291,54 @@ fn walk_calls<'a>(
     }
 }
 
+/// Calls to names jq does not define anywhere, reachable or not, as the
+/// spans of the whole calls; spans are relative to the parsed text.
+///
+/// jq never compiles a definition nothing calls, so in such a definition a
+/// call to an undefined name is harmless, where the engine compiles every
+/// definition and refuses it. The caller replaces these calls by `empty`
+/// once [`undefined_calls`] has found none reachable.
+pub fn unreachable_undefined(tree: &Node) -> Vec<Span> {
+    fn walk<'a>(n: &'a Node, scope: &Scope<'a>, out: &mut Vec<Span>) {
+        match &n.kind {
+            Kind::Def { def, rest } => {
+                let inner = Some(bind(scope, &def.name, def.params.len(), Some(def)));
+                let mut body = inner.clone();
+                for p in &def.params {
+                    let (Param::Filter(p) | Param::Value(p)) = p;
+                    body = Some(bind(&body, p.trim_start_matches('$'), 0, None));
+                }
+                walk(&def.body, &body, out);
+                walk(rest, &inner, out);
+            }
+            Kind::Call { name, args } => {
+                let mut at = scope.as_ref();
+                while let Some(b) = at {
+                    if b.name == name && b.arity == args.len() {
+                        break;
+                    }
+                    at = b.outer.as_ref();
+                }
+                if at.is_none() && !defined_by_jq(name, args.len()) {
+                    out.push(n.span);
+                    return;
+                }
+                for a in args {
+                    walk(a, scope, out);
+                }
+            }
+            _ => {
+                for c in n.children() {
+                    walk(c, scope, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(tree, &None, &mut out);
+    out
+}
+
 /// Whether the tokens contain `?//` at any depth.
 pub fn has_alternative(toks: &[Token]) -> bool {
     toks.iter().any(|t| match &t.tok {
@@ -647,6 +695,22 @@ mod tests {
             undefined("def r: if . > 0 then .-1|r else isarray end; 1|r"),
             ["isarray/0 is not defined@32"]
         );
+    }
+
+    #[test]
+    fn undefined_calls_in_unreachable_code_are_found_lexically() {
+        let spans = |src: &str| {
+            let tree = parse(src).expect("parses");
+            super::unreachable_undefined(&tree)
+                .into_iter()
+                .map(|s| &src[s.start..s.end])
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(spans("def f: isnumber; 1"), ["isnumber"]);
+        assert_eq!(spans("def g: tobytes(1); [1]"), ["tobytes(1)"]);
+        assert!(spans("def f(x): x; f(1)").is_empty());
+        assert!(spans("def isarray: 1; isarray").is_empty());
     }
 
     #[test]

@@ -9,7 +9,7 @@ where
 {
     let f = || [Bind::Fun(())].into();
     Box::new([
-        ("error_empty", v(0), (|cv| bome(Err(Error::new(cv.1))))),
+        ("_error_empty", v(0), (|cv| bome(Err(Error::new(cv.1))))),
         ("path", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
             let cvp = (fc, (cv.1, Default::default()));
@@ -23,7 +23,7 @@ where
                 Ok(path.into_iter().rev().collect())
             }))
         }),
-        ("path_value", f(), |mut cv| {
+        ("_path_value", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
             let cvp = (fc, (cv.1, Default::default()));
             Box::new(f.paths(cvp).map(|vp| {
@@ -52,7 +52,7 @@ where
         }),
         // Pathfinder: `to_entries` is written with this; jq's is written with
         // `keys_unsorted`, and fails as it does.
-        ("key_values", v(0), |cv| {
+        ("_key_values", v(0), |cv| {
             if !matches!(cv.1.jq_type(), "array" | "object") {
                 let q = cv.1.jq_quoted();
                 return bome(Err(Error::str(alloc::format!("{q} has no keys"))));

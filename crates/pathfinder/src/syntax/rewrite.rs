@@ -66,6 +66,12 @@ pub struct Rewrite {
     pub needs: Vec<&'static str>,
 }
 
+/// jq 1.8.1's formats, measured: any other `@name` is jq's run-time error
+/// `name is not a valid format`.
+const JQ_FORMATS: [&str; 10] = [
+    "text", "json", "html", "uri", "urid", "csv", "tsv", "sh", "base64", "base64d",
+];
+
 /// Environment escape hatch: set it to hand every program to jaq unparsed.
 pub const NO_REWRITE_ENV: &str = "PATHFINDER_NO_REWRITE";
 
@@ -190,7 +196,9 @@ fn worth_parsing(src: &str) -> bool {
             | Tok::Keyword(Kw::Reduce | Kw::Foreach | Kw::Catch)
             | Tok::Binding(_) => true,
             Tok::Ident(name) => name == "del",
-            Tok::Format(name) => matches!(name.as_str(), "base64d" | "urid"),
+            Tok::Format(name) => {
+                matches!(name.as_str(), "base64d" | "urid") || !JQ_FORMATS.contains(&name.as_str())
+            }
             Tok::Str(parts) => parts
                 .iter()
                 .any(|p| matches!(p, StrPart::Interp(inner, _) if any(src, inner))),
@@ -458,6 +466,29 @@ impl Cx<'_> {
             }
             // jaq's decoders are stricter than jq's in some places and more
             // lenient in others; the prelude has jq's rules.
+            // jq answers an unknown format at run time; the engine has none
+            // (or formats of its own, such as jaq's `@htmld`).
+            Kind::Format(f) if !JQ_FORMATS.contains(&f.as_str()) => {
+                (format!("(error(\"{f} is not a valid format\"))"), true)
+            }
+            // A format applies only to interpolations: without one, the
+            // string is the string.
+            Kind::Str(s)
+                if s.format
+                    .as_deref()
+                    .is_some_and(|f| !JQ_FORMATS.contains(&f)) =>
+            {
+                let f = s.format.as_deref().unwrap_or_default();
+                if s.parts
+                    .iter()
+                    .any(|p| matches!(p, super::StrSeg::Interp(_)))
+                {
+                    (format!("(error(\"{f} is not a valid format\"))"), true)
+                } else {
+                    let text = &self.src[node.span.start..node.span.end];
+                    (text[text.find('"').unwrap_or(0)..].to_owned(), true)
+                }
+            }
             Kind::Format(f) if self.on.decoders && (f == "base64d" || f == "urid") => {
                 let name = if f == "base64d" {
                     "_pf_base64d"

@@ -89,24 +89,24 @@ fn explode_implode() {
 yields!(implode_invalid, "[1114112] | implode", "\u{FFFD}");
 
 yields!(
-    encode_base64,
-    r#""hello cruel world" | encode_base64"#,
+    _encode_base64,
+    r#""hello cruel world" | _encode_base64"#,
     "aGVsbG8gY3J1ZWwgd29ybGQ="
 );
 yields!(
     encode_decode_base64,
-    r#""hello cruel world" | encode_base64 | decode_base64"#,
+    r#""hello cruel world" | _encode_base64 | _decode_base64"#,
     "hello cruel world"
 );
 
 yields!(
-    escape_html,
-    r#""<p style='visibility: hidden'>sneaky</p>" | escape_html"#,
+    _escape_html,
+    r#""<p style='visibility: hidden'>sneaky</p>" | _escape_html"#,
     "&lt;p style=&apos;visibility: hidden&apos;&gt;sneaky&lt;/p&gt;"
 );
 yields!(
-    encode_uri,
-    r#""abc123 ?#+&[]" | encode_uri"#,
+    _encode_uri,
+    r#""abc123 ?#+&[]" | _encode_uri"#,
     "abc123%20%3F%23%2B%26%5B%5D"
 );
 
@@ -156,7 +156,7 @@ fn regex() {
     let f = |f, re, flags| format!("{f}(\"{re}\"; \"{flags}\")");
 
     let out = json!(["", ", ", " and ", ""]);
-    give(json!(s), &f("split_", date, "g"), out);
+    give(json!(s), &f("_split_", date, "g"), out);
 
     let c = |o: usize, s: &str| {
         json!({
@@ -169,22 +169,22 @@ fn regex() {
     let d2 = json!([c(12, "2013-01-01"), c(12, "2013"), c(17, "01"), c(20, "01")]);
     let d3 = json!([c(27, "2014-07-05"), c(27, "2014"), c(32, "07"), c(35, "05")]);
 
-    give(json!(s), &f("matches", date, "g"), json!([d1, d2, d3]));
+    give(json!(s), &f("_matches", date, "g"), json!([d1, d2, d3]));
 
-    give(json!(""), &f("matches", "", ""), json!([[c(0, "")]]));
-    give(json!(""), &f("matches", "^$", ""), json!([[c(0, "")]]));
+    give(json!(""), &f("_matches", "", ""), json!([[c(0, "")]]));
+    give(json!(""), &f("_matches", "^$", ""), json!([[c(0, "")]]));
     give(
         json!("  "),
-        &f("matches", "", "g"),
+        &f("_matches", "", "g"),
         json!([[c(0, "")], [c(1, "")], [c(2, "")]]),
     );
-    give(json!("  "), &f("matches", "", "gn"), json!([]));
+    give(json!("  "), &f("_matches", "", "gn"), json!([]));
 
     let out = json!(["", d1, ", ", d2, " and ", d3, ""]);
-    give(json!(s), &f("split_matches", date, "g"), out);
+    give(json!(s), &f("_split_matches", date, "g"), out);
 
     let out = json!(["", d1, ", 2013-01-01 and 2014-07-05"]);
-    give(json!(s), &f("split_matches", date, ""), out);
+    give(json!(s), &f("_split_matches", date, ""), out);
 }
 
 yields!(round_int, "[0, 1][1 | round]", 1);

@@ -76,7 +76,7 @@ yields!(range_pz, "[limit(3; range(0; 6; 0))]", json!([]));
 yields!(range_nz, "[limit(3; range(0; -6; 0))]", json!([]));
 
 yields!(
-    path_value,
-    "[{a: 1, b: [2, 3]} | skip(1; path_value(..))]",
+    _path_value,
+    "[{a: 1, b: [2, 3]} | skip(1; _path_value(..))]",
     json!([[["a"], 1], [["b"], [2, 3]], [["b", 0], 2], [["b", 1], 3]])
 );

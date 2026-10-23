@@ -231,6 +231,21 @@ static CASES: &[Case] = &[
         &["-c", "reduce .[] as {$a: [$b]} (0; . + $b)"],
     ),
     c("null", &["-c", "{(0):1}"]),
+    // Unknown formats fail at run time as jq's do; calls to names jq lacks
+    // in definitions nothing calls are harmless (M20, P-066).
+    c("null", &["-c", "try @foo catch ."]),
+    c("null", &["-c", "@foo \"x\""]),
+    c("null", &["-c", "[1, @foo]"]),
+    c("null", &["-c", "\"a\" | @foo"]),
+    c("null", &["-c", "@foo \"x\\(1)\""]),
+    c("null", &["-c", "def f: @foo; 1"]),
+    c("null", &["-c", "@base32"]),
+    c("null", &["-c", "\"&lt;\"|@htmld"]),
+    c("null", &["-c", "1|ilogb"]),
+    c("null", &["-c", "def f: isnumber; 1"]),
+    c("null", &["-c", "def g: tobytes(1); [1]"]),
+    c("null", &["-c", "def f: isarray; def f: 1; f"]),
+    c("null", &["-c", "[1, 8] | map(logb) == [0, 3]"]),
     // `format` with a name that is no string (a prelude bug on both engines).
     c("null", &["-c", "try (1|format(1)) catch ."]),
     c("null", &["-c", "try (1|format(null)) catch ."]),

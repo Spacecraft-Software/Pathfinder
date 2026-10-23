@@ -123,6 +123,11 @@ fn assemble_here(
 
     let header = &src[..info.header_end];
     let compile_error = compile_error(src, info.header_end);
+    if compile_error.is_none()
+        && let Some(cleaned) = drop_unreachable_undefined(src, info.header_end)
+    {
+        return assemble_here(&cleaned, ctx, wrap, loc_file);
+    }
     let shorthands: Vec<usize> = if info.loc_sites.is_empty() {
         Vec::new()
     } else {
@@ -248,6 +253,34 @@ fn compile_error(src: &str, header_end: usize) -> Option<CompileError> {
     e.span.start += header_end;
     e.span.end += header_end;
     Some(e)
+}
+
+/// `src` with calls to undefined names in code nothing reaches replaced by
+/// `empty`, when it has any (`check::unreachable_undefined`); `None` when
+/// it has none, or when definitions it does not show may be in scope.
+fn drop_unreachable_undefined(src: &str, header_end: usize) -> Option<String> {
+    if std::env::var_os(crate::syntax::rewrite::NO_REWRITE_ENV).is_some() {
+        return None;
+    }
+    let body = &src[header_end..];
+    let toks = crate::syntax::lex::lex(body).ok()?;
+    if !check::has_unknown_name(&toks) || definitions_elsewhere(header_end) {
+        return None;
+    }
+    let tree = crate::syntax::parse::parse(body).ok()?;
+    let spans = check::unreachable_undefined(&tree);
+    if spans.is_empty() {
+        return None;
+    }
+    let mut out = String::with_capacity(src.len());
+    let mut at = 0;
+    for s in spans {
+        out.push_str(&src[at..header_end + s.start]);
+        out.push_str("(empty)");
+        at = header_end + s.end;
+    }
+    out.push_str(&src[at..]);
+    Some(out)
 }
 
 /// Whether definitions this program does not show can be in scope: an

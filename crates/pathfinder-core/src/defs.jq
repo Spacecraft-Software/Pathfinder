@@ -1,7 +1,7 @@
 def empty: {}[] as $x | .;
 
-def error:                error_empty  as $x | .    ;
-def error(msgs):  (msgs | error_empty) as $x | .    ;
+def error:                _error_empty  as $x | .    ;
+def error(msgs):  (msgs | _error_empty) as $x | .    ;
 
 # Booleans
 def true:  0 == 0;
@@ -24,7 +24,7 @@ def until(cond; update): def rec: if cond then . else update | rec end; rec;
 
 # Paths
 def paths:    skip(1; path      (..));
-def paths(p): skip(1; path_value(..)) | if .[1] | p then .[0] else empty end;
+def paths(p): skip(1; _path_value(..)) | if .[1] | p then .[0] else empty end;
 # Pathfinder: jq's message for a path that is no array.
 def getpath($path): if $path < [] or $path >= {} then error("Path must be specified as an array") else reduce $path[] as $p (.; .[$p]) end;
 def setpath($path; $x): getpath($path) = $x;
@@ -47,7 +47,7 @@ def combinations($n): [limit($n; repeat(.))] | combinations;
 def nth(n; g): first(skip(n; g));
 
 # Objects <-> Arrays
-def   to_entries: [key_values[] as [$key, $value] | { $key, $value }];
+def   to_entries: [_key_values[] as [$key, $value] | { $key, $value }];
 def from_entries: reduce (.[] | { (.key): .value }) as $x ({}; . + $x);
 def with_entries(f): to_entries | map(f) | from_entries;
 

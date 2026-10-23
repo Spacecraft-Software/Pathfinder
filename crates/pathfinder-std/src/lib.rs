@@ -630,13 +630,13 @@ where
             let f = move |v| f.run((fc.clone(), v));
             box_once(by_input(cv.1, &f, "sorted").and_then(|a| group_by(a, f)))
         }),
-        ("min_by_or_empty", f(), |mut cv| {
+        ("_min_by_or_empty", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
             let f = move |v| f.run((fc.clone(), v));
             let a = by_input(cv.1, &f, "iterated over");
             once_or_empty(a.and_then(|a| cmp_by(a, f, |my, y| y < my)))
         }),
-        ("max_by_or_empty", f(), |mut cv| {
+        ("_max_by_or_empty", f(), |mut cv| {
             let (f, fc) = cv.0.pop_fun();
             let f = move |v| f.run((fc.clone(), v));
             let a = by_input(cv.1, &f, "iterated over");
@@ -684,13 +684,13 @@ where
         // Pathfinder: `@sh` natively, with jq's message for a value that
         // cannot be quoted.
         ("@sh", v(0), |cv| bome(sh(cv.1))),
-        ("escape_sh", v(0), |cv| {
+        ("_escape_sh", v(0), |cv| {
             bome(
                 cv.1.try_as_utf8_bytes()
                     .map(|s| ValT::from_utf8_bytes(s.replace(b"'", b"'\\''"))),
             )
         }),
-        ("halt", v(1), |mut cv| {
+        ("_halt", v(1), |mut cv| {
             let exit_code = cv.0.pop_var().try_as_i32().map_err(Exn::from);
             box_once(exit_code.and_then(|exit_code| Err(Exn::halt(exit_code))))
         }),
@@ -736,23 +736,23 @@ where
     const HTML_PATS: [&str; 5] = ["<", ">", "&", "\'", "\""];
     const HTML_REPS: [&str; 5] = ["&lt;", "&gt;", "&amp;", "&apos;", "&quot;"];
     Box::new([
-        ("escape_html", v(0), |cv| {
+        ("_escape_html", v(0), |cv| {
             bome(cv.1.map_utf8_str(|s| replace(s, &HTML_PATS, &HTML_REPS)))
         }),
-        ("unescape_html", v(0), |cv| {
+        ("_unescape_html", v(0), |cv| {
             bome(cv.1.map_utf8_str(|s| replace(s, &HTML_REPS, &HTML_PATS)))
         }),
-        ("encode_uri", v(0), |cv| {
+        ("_encode_uri", v(0), |cv| {
             bome(cv.1.map_utf8_str(|s| urlencoding::encode_binary(s).to_string()))
         }),
-        ("decode_uri", v(0), |cv| {
+        ("_decode_uri", v(0), |cv| {
             bome(cv.1.map_utf8_str(|s| urlencoding::decode_binary(s).to_vec()))
         }),
-        ("encode_base64", v(0), |cv| {
+        ("_encode_base64", v(0), |cv| {
             use base64::{engine::general_purpose::STANDARD, Engine};
             bome(cv.1.map_utf8_str(|s| STANDARD.encode(s)))
         }),
-        ("decode_base64", v(0), |cv| {
+        ("_decode_base64", v(0), |cv| {
             use base64::{engine::general_purpose::STANDARD, Engine};
             bome(cv.1.try_as_utf8_bytes().and_then(|s| {
                 STANDARD
@@ -788,7 +788,8 @@ where
         math::f_f!(expm1),
         math::f_f!(fabs),
         math::f_fi!(frexp),
-        math::f_i!(ilogb),
+        // Pathfinder: internal, as jq 1.8.1 has no `ilogb`.
+        rename("_ilogb", math::f_i!(ilogb)),
         math::f_f!(j0),
         math::f_f!(j1),
         math::f_f!(lgamma),
@@ -883,9 +884,9 @@ where
 {
     let vv = || [Bind::Var(()), Bind::Var(())].into();
     Box::new([
-        ("matches", vv(), |cv| bome(re(false, true, cv))),
-        ("split_matches", vv(), |cv| bome(re(true, true, cv))),
-        ("split_", vv(), |cv| bome(re(true, false, cv))),
+        ("_matches", vv(), |cv| bome(re(false, true, cv))),
+        ("_split_matches", vv(), |cv| bome(re(true, true, cv))),
+        ("_split_", vv(), |cv| bome(re(true, false, cv))),
     ])
 }
 
@@ -971,7 +972,7 @@ where
         };
     }
     Box::new([
-        ("debug_empty", v(0), empty_with!(|x| log::debug!("{x}"))),
-        ("stderr_empty", v(0), empty_with!(eprint_raw)),
+        ("_debug_empty", v(0), empty_with!(|x| log::debug!("{x}"))),
+        ("_stderr_empty", v(0), empty_with!(eprint_raw)),
     ])
 }

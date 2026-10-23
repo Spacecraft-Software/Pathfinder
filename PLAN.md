@@ -56,7 +56,7 @@ the same change.
 - [x] P-063 Assignment creates missing containers as jq does; the vivify rewrite is retired
 - [x] P-064 `del` and `delpaths` keep jq's order and semantics; `_pf_delpaths` is retired
 - [x] P-065 Indices, slices and operand order are jq's natively; their rewrites are retired
-- [ ] P-066 Builtins jq 1.8.1 does not define are removed from the engine (PRD R-004)
+- [x] P-066 Builtins jq 1.8.1 does not define are removed from the engine (PRD R-004)
 - [ ] P-067 The prelude shrinks to what jq defines in `builtin.jq`; every remaining entry is justified
 
 ## M21 — One parser

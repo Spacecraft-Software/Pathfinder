@@ -211,7 +211,11 @@ print. To keep the `jq` name untouched:
   and replaces jaq's report of an unknown name, which quoted the whole
   prelude. It follows jq's scoping: a definition counts only once something
   reachable calls it, arguments always count, and an `import`/`include` or a
-  `~/.jq` file turns it off.
+  `~/.jq` file turns it off. A call to such a name in code nothing reaches is
+  replaced by `empty` (`check::unreachable_undefined`): jq never compiles
+  it, the engine compiles every definition. The engine's own helpers are
+  `_`-prefixed, so a filter cannot call them (P-066); an unknown `@format`
+  is rewritten to jq's run-time error (`JQ_FORMATS`).
 - **Depth is bounded, because every pass recurses on the native stack.**
   The lexer stops at `MAX_INTERP` nested interpolations, the parser at
   `MAX_NESTING` recursive calls, `MAX_FOLDS` chain links (`,`, binary

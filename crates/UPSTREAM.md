@@ -463,6 +463,11 @@ changes land once, in the crates, not in `packaging/jaq/`.
   definitions of `from_entries` and `with_entries`. Object construction
   refuses a key that is no string (`Cannot use null (null) as object key`),
   where jaq built objects that are no JSON.
+- jaq's own helpers are internal (P-066): `isarray`, `isstring`, `tobytes`,
+  `key_values`, `matches`, `halt/1`, `ilogb` and the rest (28 names jq 1.8.1
+  does not define) are renamed with a leading `_` in the engine's natives,
+  definitions and tests, so a filter cannot reach them even where the
+  front end does not check; `@htmld`, which jq lacks, is gone.
 
 ## Licence of Pathfinder's changes
 
