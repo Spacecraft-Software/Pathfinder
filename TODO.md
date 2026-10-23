@@ -52,6 +52,14 @@ and keep it for the jaq engine until P-078.
 - [x] T-028 (P-067) The native engine's prelude holds only definitions jq's `builtin.jq` has, each justified; `input_filename` from the driver as jq answers it (done: `input_filename`)
 - [ ] T-030 jq's internal builtins a filter may call (`_plus/2`, `_modify/2`, `_negate/0`, `_sort_by_impl/1`, …; `check::JQ_INTERNAL`) defined in the engine, which reports them undefined (optional)
 
+## M21 — One parser
+
+- [ ] T-031 (P-068) jaq's loader takes the main module's parser as a parameter (`jaq::Cli`); jaq's parser stays the fallback for what Pathfinder's passes through
+- [ ] T-032 (P-068) Pathfinder's syntax tree converts to the engine's terms for every construct, as slices of the program text so positions stay true; the native engine compiles from it, and the suites pass unchanged
+- [ ] T-033 (P-068) The rewrites that only steer jaq's parser (a leading `-`, `.[a].[b]`, …) are off for the native engine
+- [ ] T-034 (P-069) Syntax errors are reported as jq reports them: `syntax error, unexpected …` with jq's position and exit 3
+- [ ] T-035 (P-070) `import`/`include` modules parsed by Pathfinder's parser too (optional)
+
 ## Standing
 
 - [ ] T-020 Review jaq's releases after the import quarterly; port fixes by hand, never send anything upstream (§6.4)
