@@ -676,21 +676,30 @@ mod tests {
         );
         assert_eq!(undefined("[.[] | halt(1)]"), ["halt/1 is not defined@7"]);
         assert!(undefined("halt").is_empty(), "jq has halt/0");
-        assert!(undefined("def f: isnumber; 1").is_empty());
+        assert_eq!(undefined("def f: isnumber; 1"), [] as [String; 0]);
         assert_eq!(
             undefined("def f: isnumber; f"),
             ["isnumber/0 is not defined@7"]
         );
-        assert!(undefined("def isarray: 1; isarray").is_empty());
+        assert_eq!(undefined("def isarray: 1; isarray"), [] as [String; 0]);
         assert_eq!(
             undefined("def f(g): 1; f(isarray)"),
             ["isarray/0 is not defined@15"],
             "arguments are checked even when unused"
         );
-        assert!(undefined("def f: isarray; def f: 1; f").is_empty());
-        assert!(undefined("def f: 1; def g: f; def f: isarray; g").is_empty());
-        assert!(undefined("def f(x): def x: isarray; 1; f(.)").is_empty());
-        assert!(undefined("def f($isarray): isarray; f(1)").is_empty());
+        assert_eq!(undefined("def f: isarray; def f: 1; f"), [] as [String; 0]);
+        assert_eq!(
+            undefined("def f: 1; def g: f; def f: isarray; g"),
+            [] as [String; 0]
+        );
+        assert_eq!(
+            undefined("def f(x): def x: isarray; 1; f(.)"),
+            [] as [String; 0]
+        );
+        assert_eq!(
+            undefined("def f($isarray): isarray; f(1)"),
+            [] as [String; 0]
+        );
         assert_eq!(
             undefined("def r: if . > 0 then .-1|r else isarray end; 1|r"),
             ["isarray/0 is not defined@32"]
@@ -709,8 +718,8 @@ mod tests {
         };
         assert_eq!(spans("def f: isnumber; 1"), ["isnumber"]);
         assert_eq!(spans("def g: tobytes(1); [1]"), ["tobytes(1)"]);
-        assert!(spans("def f(x): x; f(1)").is_empty());
-        assert!(spans("def isarray: 1; isarray").is_empty());
+        assert_eq!(spans("def f(x): x; f(1)"), [] as [String; 0]);
+        assert_eq!(spans("def isarray: 1; isarray"), [] as [String; 0]);
     }
 
     #[test]
