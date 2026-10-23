@@ -228,7 +228,12 @@ print. To keep the `jq` name untouched:
   replaced by `empty` (`check::unreachable_undefined`): jq never compiles
   it, the engine compiles every definition. The engine's own helpers are
   `_`-prefixed, so a filter cannot call them (P-066); an unknown `@format`
-  is rewritten to jq's run-time error (`JQ_FORMATS`).
+  is rewritten to jq's run-time error (`JQ_FORMATS`). Variables and labels
+  are checked by the same walk, in jq's scopes (`$x is not defined`,
+  `$*label-x is not defined`): `$ENV`, `$ARGS` and the command line's named
+  arguments (`prelude::Context::named`) are always bound; a `reduce`/`foreach`
+  init and a pattern's computed keys see only the outer scope; a definition
+  sees the variables where it is written.
 - **Depth is bounded, because every pass recurses on the native stack.**
   The lexer stops at `MAX_INTERP` nested interpolations, the parser at
   `MAX_NESTING` recursive calls, `MAX_FOLDS` chain links (`,`, binary

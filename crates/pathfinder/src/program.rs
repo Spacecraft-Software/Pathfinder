@@ -122,9 +122,9 @@ fn assemble_here(
         .collect();
 
     let header = &src[..info.header_end];
-    let compile_error = compile_error(src, info.header_end);
+    let compile_error = compile_error(src, info.header_end, &ctx.named);
     if compile_error.is_none()
-        && let Some(cleaned) = drop_unreachable_undefined(src, info.header_end)
+        && let Some(cleaned) = drop_unreachable_undefined(src, info.header_end, &ctx.named)
     {
         // The text is no longer the user's, so a `-f` file must not be read.
         let mut assembly = assemble_here(&cleaned, ctx, wrap, loc_file);
@@ -224,7 +224,7 @@ fn assemble_here(
 /// Parsing costs something, so the body is only examined when it has a
 /// construct that can be rejected: an object key computed with `(…)`, which
 /// follows a `{` or a `,`.
-fn compile_error(src: &str, header_end: usize) -> Option<CompileError> {
+fn compile_error(src: &str, header_end: usize, named: &[String]) -> Option<CompileError> {
     // The escape hatch covers the checks too: a false rejection must be
     // avoidable without editing the filter.
     if std::env::var_os(crate::syntax::rewrite::NO_REWRITE_ENV).is_some() {
@@ -240,9 +240,12 @@ fn compile_error(src: &str, header_end: usize) -> Option<CompileError> {
     } else {
         None
     };
-    if e.is_none() && check::has_unknown_name(&toks) && !definitions_elsewhere(header_end) {
+    if e.is_none()
+        && (check::has_unknown_name(&toks) || check::has_variable(&toks, named))
+        && !definitions_elsewhere(header_end)
+    {
         let tree = crate::syntax::parse::parse(body).ok()?;
-        let mut found = check::undefined_calls(&tree).into_iter();
+        let mut found = check::undefined_calls(&tree, body, named).into_iter();
         e = found.next().map(|mut first| {
             first.more = found.collect();
             first
@@ -261,17 +264,19 @@ fn compile_error(src: &str, header_end: usize) -> Option<CompileError> {
 /// `src` with calls to undefined names in code nothing reaches replaced by
 /// `empty`, when it has any (`check::unreachable_undefined`); `None` when
 /// it has none, or when definitions it does not show may be in scope.
-fn drop_unreachable_undefined(src: &str, header_end: usize) -> Option<String> {
+fn drop_unreachable_undefined(src: &str, header_end: usize, named: &[String]) -> Option<String> {
     if std::env::var_os(crate::syntax::rewrite::NO_REWRITE_ENV).is_some() {
         return None;
     }
     let body = &src[header_end..];
     let toks = crate::syntax::lex::lex(body).ok()?;
-    if !check::has_unknown_name(&toks) || definitions_elsewhere(header_end) {
+    if !(check::has_unknown_name(&toks) || check::has_variable(&toks, named))
+        || definitions_elsewhere(header_end)
+    {
         return None;
     }
     let tree = crate::syntax::parse::parse(body).ok()?;
-    let spans = check::unreachable_undefined(&tree);
+    let spans = check::unreachable_undefined(&tree, body, named);
     if spans.is_empty() {
         return None;
     }

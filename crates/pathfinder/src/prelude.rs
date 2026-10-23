@@ -1094,6 +1094,9 @@ pub struct Context {
     pub native: bool,
     /// `-n`: no input is read unless the program asks for it.
     pub null_input: bool,
+    /// The variables the command line binds (`--arg`, `--argjson`,
+    /// `--slurpfile`, `--rawfile`), which a program may use undeclared.
+    pub named: Vec<String>,
 }
 
 impl Context {

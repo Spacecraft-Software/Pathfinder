@@ -359,7 +359,8 @@ impl ObjKey {
 }
 
 impl Pattern {
-    fn collect<'a>(&'a self, out: &mut Vec<&'a Node>) {
+    /// The nodes inside the pattern: computed keys and interpolations.
+    pub fn collect<'a>(&'a self, out: &mut Vec<&'a Node>) {
         match self {
             Self::Var(_) => {}
             Self::Array(ps) => {

@@ -229,6 +229,7 @@ pub fn plan(
         regex_literals: Vec::new(),
         native: engine == Engine::Native,
         null_input: f.null_input,
+        named: args.named.iter().map(|(name, _)| name.clone()).collect(),
     };
 
     let source = program_source(args, read_file)?;

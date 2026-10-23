@@ -30,7 +30,9 @@
 
 use super::lex::{Kw, StrPart, Tok, Token, lex};
 use super::parse::parse;
-use super::{FuncDef, Kind, Node, ObjKey, ObjPair, ObjPat, Param, Pattern, Span, StrLit, StrSeg};
+use super::{
+    FuncDef, Kind, Node, ObjKey, ObjPair, ObjPat, ObjShort, Param, Pattern, Span, StrLit, StrSeg,
+};
 use std::fmt::Write as _;
 use std::rc::Rc;
 
@@ -197,6 +199,18 @@ pub fn has_unknown_name(toks: &[Token]) -> bool {
     })
 }
 
+/// Whether the tokens use a variable or label other than those every
+/// program has: the cheap test before the scopes are checked.
+pub fn has_variable(toks: &[Token], named: &[String]) -> bool {
+    toks.iter().any(|t| match &t.tok {
+        Tok::Binding(name) => !matches!(name.as_str(), "ENV" | "ARGS") && !named.contains(name),
+        Tok::Str(parts) => parts
+            .iter()
+            .any(|p| matches!(p, StrPart::Interp(inner, _) if has_variable(inner, named))),
+        _ => false,
+    })
+}
+
 /// The arguments of a call whose name precedes `after`: none without a `(`,
 /// else one more than its `;`s at the parenthesis' own depth.
 fn call_arity(after: &[Token]) -> usize {
@@ -228,6 +242,8 @@ struct Binding<'a> {
     /// The definition, and the scope it was written in; `None` for a
     /// parameter.
     def: Option<&'a FuncDef>,
+    /// The variables and labels in scope where the definition was written.
+    vars: Vars<'a>,
     outer: Scope<'a>,
 }
 
@@ -238,133 +254,354 @@ fn bind<'a>(
     name: &'a str,
     arity: usize,
     def: Option<&'a FuncDef>,
+    vars: &Vars<'a>,
 ) -> Rc<Binding<'a>> {
     Rc::new(Binding {
         name,
         arity,
         def,
+        vars: vars.clone(),
         outer: outer.clone(),
     })
 }
 
-/// The calls jq rejects as undefined, in the order jq reports them; spans
-/// are relative to the parsed text.
+/// A `$name` or a `label $name` in scope.
+struct Var<'a> {
+    name: &'a str,
+    label: bool,
+    outer: Vars<'a>,
+}
+
+type Vars<'a> = Option<Rc<Var<'a>>>;
+
+fn bind_var<'a>(outer: &Vars<'a>, name: &'a str, label: bool) -> Rc<Var<'a>> {
+    Rc::new(Var {
+        name,
+        label,
+        outer: outer.clone(),
+    })
+}
+
+fn has_var(vars: &Vars<'_>, name: &str, label: bool) -> bool {
+    let mut at = vars.as_ref();
+    while let Some(v) = at {
+        if v.name == name && v.label == label {
+            return true;
+        }
+        at = v.outer.as_ref();
+    }
+    false
+}
+
+/// The variables every program has: `$ENV`, `$ARGS`, and the names the
+/// command line binds (`--arg`, `--argjson`, `--slurpfile`, `--rawfile`).
+/// `$__loc__` is no variable to the parser.
+fn globals(named: &[String]) -> Vars<'_> {
+    let mut vars = Some(bind_var(&None, "ENV", false));
+    vars = Some(bind_var(&vars, "ARGS", false));
+    for n in named {
+        vars = Some(bind_var(&vars, n, false));
+    }
+    vars
+}
+
+/// The variables a pattern binds, every alternative's included.
+fn pattern_vars<'a>(p: &'a Pattern, out: &mut Vec<&'a str>) {
+    match p {
+        Pattern::Var(v) => out.push(v),
+        Pattern::Array(ps) => ps.iter().for_each(|p| pattern_vars(p, out)),
+        Pattern::Object(ps) => {
+            for p in ps {
+                match p {
+                    ObjPat::Var(v) => out.push(v),
+                    ObjPat::VarPattern(v, p) => {
+                        out.push(v);
+                        pattern_vars(p, out);
+                    }
+                    ObjPat::Key(_, p) => pattern_vars(p, out),
+                }
+            }
+        }
+    }
+}
+
+/// What the walk is looking for: the reachable errors jq reports, or every
+/// use of an undefined name, reachable or not.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Reachable,
+    Everywhere,
+}
+
+struct Walk<'a, 'o> {
+    mode: Mode,
+    seen: Vec<*const FuncDef>,
+    errors: &'o mut Vec<CompileError>,
+    /// For [`Mode::Everywhere`]: the spans to replace.
+    spans: &'o mut Vec<Span>,
+    /// The text, to find a `$name` written inside a construct's span.
+    src: &'a str,
+}
+
+impl<'a> Walk<'a, '_> {
+    fn undefined_var(&mut self, name: &str, span: Span, label: bool) {
+        match self.mode {
+            Mode::Reachable => self.errors.push(CompileError {
+                message: if label {
+                    format!("$*label-{name} is not defined")
+                } else {
+                    format!("${name} is not defined")
+                },
+                span,
+                more: Vec::new(),
+            }),
+            Mode::Everywhere => self.spans.push(span),
+        }
+    }
+
+    /// A `$name` used by a construct without a node of its own (`{$a}`,
+    /// `{$a: v}`): its span is found in the construct's text.
+    fn var_in(&mut self, name: &str, within: Span, vars: &Vars<'a>) {
+        if has_var(vars, name, false) {
+            return;
+        }
+        let written = format!("${name}");
+        let at = self
+            .src
+            .get(within.start..within.end)
+            .and_then(|t| t.find(&written))
+            .map_or(within, |i| {
+                Span::new(within.start + i, within.start + i + written.len())
+            });
+        self.undefined_var(name, at, false);
+    }
+
+    fn walk(&mut self, n: &'a Node, scope: &Scope<'a>, vars: &Vars<'a>) {
+        match &n.kind {
+            Kind::Def { def, rest } => {
+                let inner = Some(bind(scope, &def.name, def.params.len(), Some(def), vars));
+                if self.mode == Mode::Everywhere {
+                    self.body(def, &inner, vars);
+                }
+                self.walk(rest, &inner, vars);
+            }
+            Kind::Call { name, args } => self.call(n, name, args, scope, vars),
+            Kind::Var(name) => {
+                if !has_var(vars, name, false) {
+                    self.undefined_var(name, n.span, false);
+                }
+            }
+            Kind::Break(name) => {
+                if !has_var(vars, name, true) {
+                    self.undefined_var(name, n.span, true);
+                }
+            }
+            Kind::Label { name, body } => self.walk(body, scope, &Some(bind_var(vars, name, true))),
+            Kind::Bind {
+                source,
+                patterns,
+                body,
+            } => {
+                self.walk(source, scope, vars);
+                let inner = self.patterns(patterns, scope, vars);
+                self.walk(body, scope, &inner);
+            }
+            Kind::Reduce {
+                source,
+                patterns,
+                init,
+                update,
+            } => self.fold(source, patterns, init, &[update], scope, vars),
+            Kind::Foreach {
+                source,
+                patterns,
+                init,
+                update,
+                extract,
+            } => {
+                let mut bodies = Vec::from([&**update]);
+                bodies.extend(extract.as_deref());
+                self.fold(source, patterns, init, &bodies, scope, vars);
+            }
+            Kind::Object(pairs) => {
+                for p in pairs {
+                    match p {
+                        ObjPair::KeyValue {
+                            key: ObjKey::Var(v),
+                            ..
+                        }
+                        | ObjPair::Shorthand(ObjShort::Var(v)) => self.var_in(v, n.span, vars),
+                        _ => {}
+                    }
+                }
+                for c in n.children() {
+                    self.walk(c, scope, vars);
+                }
+            }
+            _ => {
+                for c in n.children() {
+                    self.walk(c, scope, vars);
+                }
+            }
+        }
+    }
+
+    /// A call: resolved in `scope`, its definition's body walked at the
+    /// first call; an unknown name is jq's error, or a span to replace.
+    fn call(
+        &mut self,
+        n: &'a Node,
+        name: &'a str,
+        args: &'a [Node],
+        scope: &Scope<'a>,
+        vars: &Vars<'a>,
+    ) {
+        let mut at = scope.as_ref();
+        while let Some(b) = at {
+            if b.name == name && b.arity == args.len() {
+                break;
+            }
+            at = b.outer.as_ref();
+        }
+        // The whole call is replaced, its arguments with it.
+        if self.mode == Mode::Everywhere && at.is_none() && !defined_by_jq(name, args.len()) {
+            self.spans.push(n.span);
+            return;
+        }
+        for a in args {
+            self.walk(a, scope, vars);
+        }
+        match at {
+            Some(b) => {
+                if self.mode == Mode::Reachable
+                    && let Some(def) = b.def
+                    && !self.seen.contains(&std::ptr::from_ref(def))
+                {
+                    self.seen.push(std::ptr::from_ref(def));
+                    // The definition sees itself, for recursion.
+                    let inner = Some(bind(
+                        &b.outer,
+                        &def.name,
+                        def.params.len(),
+                        Some(def),
+                        &b.vars,
+                    ));
+                    self.body(def, &inner, &b.vars);
+                }
+            }
+            None if !defined_by_jq(name, args.len()) => self.errors.push(CompileError {
+                message: format!("{name}/{} is not defined", args.len()),
+                span: Span::new(n.span.start, n.span.start + name.len()),
+                more: Vec::new(),
+            }),
+            None => {}
+        }
+    }
+
+    /// `reduce`/`foreach`: the source and the initial value see the outer
+    /// scope, the update (and `foreach`'s extract) the pattern's variables.
+    fn fold(
+        &mut self,
+        source: &'a Node,
+        patterns: &'a [Pattern],
+        init: &'a Node,
+        bodies: &[&'a Node],
+        scope: &Scope<'a>,
+        vars: &Vars<'a>,
+    ) {
+        self.walk(source, scope, vars);
+        let inner = self.patterns(patterns, scope, vars);
+        self.walk(init, scope, vars);
+        for b in bodies {
+            self.walk(b, scope, &inner);
+        }
+    }
+
+    /// A definition's body: its parameters bound, `$name` ones as
+    /// variables too.
+    fn body(&mut self, def: &'a FuncDef, scope: &Scope<'a>, vars: &Vars<'a>) {
+        let (mut scope, mut vars) = (scope.clone(), vars.clone());
+        for p in &def.params {
+            let (Param::Filter(p) | Param::Value(p)) = p;
+            scope = Some(bind(&scope, p.trim_start_matches('$'), 0, None, &None));
+        }
+        for p in &def.params {
+            if let Param::Value(v) = p {
+                vars = Some(bind_var(&vars, v.trim_start_matches('$'), false));
+            }
+        }
+        self.walk(&def.body, &scope, &vars);
+    }
+
+    /// Walk the patterns' computed keys, in the outer scope, and return the
+    /// scope with every variable they bind.
+    fn patterns(
+        &mut self,
+        patterns: &'a [Pattern],
+        scope: &Scope<'a>,
+        vars: &Vars<'a>,
+    ) -> Vars<'a> {
+        let mut inner = vars.clone();
+        for p in patterns {
+            let mut keys = Vec::new();
+            p.collect(&mut keys);
+            for k in keys {
+                self.walk(k, scope, vars);
+            }
+            let mut bound = Vec::new();
+            pattern_vars(p, &mut bound);
+            for v in bound {
+                inner = Some(bind_var(&inner, v, false));
+            }
+        }
+        inner
+    }
+}
+
+/// The calls and variables jq rejects as undefined, in the order jq reports
+/// them; spans are relative to `src`, the text `tree` was parsed from.
+/// `named` are the variables the command line binds.
 ///
 /// jq checks only reachable code: it drops a definition nothing calls before
 /// it looks for undefined names, so `def f: isarray; 1` runs and
 /// `def f: isarray; f` does not. A call's arguments are always checked, even
 /// those the callee never uses. Each definition is walked once, when first
 /// called, in the scope it was written in, with its parameters bound (a
-/// `$name` parameter binds `name/0` too, as in jq).
-pub fn undefined_calls(tree: &Node) -> Vec<CompileError> {
-    let mut out = Vec::new();
-    let mut seen: Vec<*const FuncDef> = Vec::new();
-    walk_calls(tree, &None, &mut seen, &mut out);
-    out
+/// `$name` parameter binds `name/0` too, as in jq). A variable is `$x is not
+/// defined`, a label `$*label-x is not defined`.
+pub fn undefined_calls(tree: &Node, src: &str, named: &[String]) -> Vec<CompileError> {
+    let (mut errors, mut spans) = (Vec::new(), Vec::new());
+    let mut walk = Walk {
+        mode: Mode::Reachable,
+        seen: Vec::new(),
+        errors: &mut errors,
+        spans: &mut spans,
+        src,
+    };
+    walk.walk(tree, &None, &globals(named));
+    errors
 }
 
-fn walk_calls<'a>(
-    n: &'a Node,
-    scope: &Scope<'a>,
-    seen: &mut Vec<*const FuncDef>,
-    out: &mut Vec<CompileError>,
-) {
-    match &n.kind {
-        Kind::Def { def, rest } => {
-            let inner = Some(bind(scope, &def.name, def.params.len(), Some(def)));
-            walk_calls(rest, &inner, seen, out);
-        }
-        Kind::Call { name, args } => {
-            for a in args {
-                walk_calls(a, scope, seen, out);
-            }
-            let mut at = scope.as_ref();
-            while let Some(b) = at {
-                if b.name == name && b.arity == args.len() {
-                    break;
-                }
-                at = b.outer.as_ref();
-            }
-            match at {
-                Some(b) => {
-                    if let Some(def) = b.def
-                        && !seen.contains(&std::ptr::from_ref(def))
-                    {
-                        seen.push(std::ptr::from_ref(def));
-                        // The definition sees itself, for recursion.
-                        let mut inner =
-                            Some(bind(&b.outer, &def.name, def.params.len(), Some(def)));
-                        for p in &def.params {
-                            let (Param::Filter(p) | Param::Value(p)) = p;
-                            inner = Some(bind(&inner, p.trim_start_matches('$'), 0, None));
-                        }
-                        walk_calls(&def.body, &inner, seen, out);
-                    }
-                }
-                None if !defined_by_jq(name, args.len()) => {
-                    out.push(CompileError {
-                        message: format!("{name}/{} is not defined", args.len()),
-                        span: Span::new(n.span.start, n.span.start + name.len()),
-                        more: Vec::new(),
-                    });
-                }
-                None => {}
-            }
-        }
-        _ => {
-            for c in n.children() {
-                walk_calls(c, scope, seen, out);
-            }
-        }
-    }
-}
-
-/// Calls to names jq does not define anywhere, reachable or not, as the
-/// spans of the whole calls; spans are relative to the parsed text.
+/// Uses of names jq does not define anywhere, reachable or not: whole calls,
+/// and variables and `break`s; spans are relative to `src`.
 ///
-/// jq never compiles a definition nothing calls, so in such a definition a
-/// call to an undefined name is harmless, where the engine compiles every
-/// definition and refuses it. The caller replaces these calls by `empty`
-/// once [`undefined_calls`] has found none reachable.
-pub fn unreachable_undefined(tree: &Node) -> Vec<Span> {
-    fn walk<'a>(n: &'a Node, scope: &Scope<'a>, out: &mut Vec<Span>) {
-        match &n.kind {
-            Kind::Def { def, rest } => {
-                let inner = Some(bind(scope, &def.name, def.params.len(), Some(def)));
-                let mut body = inner.clone();
-                for p in &def.params {
-                    let (Param::Filter(p) | Param::Value(p)) = p;
-                    body = Some(bind(&body, p.trim_start_matches('$'), 0, None));
-                }
-                walk(&def.body, &body, out);
-                walk(rest, &inner, out);
-            }
-            Kind::Call { name, args } => {
-                let mut at = scope.as_ref();
-                while let Some(b) = at {
-                    if b.name == name && b.arity == args.len() {
-                        break;
-                    }
-                    at = b.outer.as_ref();
-                }
-                if at.is_none() && !defined_by_jq(name, args.len()) {
-                    out.push(n.span);
-                    return;
-                }
-                for a in args {
-                    walk(a, scope, out);
-                }
-            }
-            _ => {
-                for c in n.children() {
-                    walk(c, scope, out);
-                }
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(tree, &None, &mut out);
-    out
+/// jq never compiles a definition nothing calls, so in such a definition an
+/// undefined name is harmless, where the engine compiles every definition
+/// and refuses it. The caller replaces these uses by `empty` once
+/// [`undefined_calls`] has found none reachable.
+pub fn unreachable_undefined(tree: &Node, src: &str, named: &[String]) -> Vec<Span> {
+    let (mut errors, mut spans) = (Vec::new(), Vec::new());
+    let mut walk = Walk {
+        mode: Mode::Everywhere,
+        seen: Vec::new(),
+        errors: &mut errors,
+        spans: &mut spans,
+        src,
+    };
+    walk.walk(tree, &None, &globals(named));
+    spans.sort_by_key(|s| s.start);
+    spans.dedup();
+    spans
 }
 
 /// Whether the tokens contain `?//` at any depth.
@@ -687,7 +924,7 @@ mod tests {
 
     fn undefined(src: &str) -> Vec<String> {
         let tree = parse(src).expect("parses");
-        undefined_calls(&tree)
+        undefined_calls(&tree, src, &["named".to_owned()])
             .into_iter()
             .map(|e| format!("{}@{}", e.message, e.span.start))
             .collect()
@@ -738,7 +975,7 @@ mod tests {
     fn undefined_calls_in_unreachable_code_are_found_lexically() {
         let spans = |src: &str| {
             let tree = parse(src).expect("parses");
-            super::unreachable_undefined(&tree)
+            super::unreachable_undefined(&tree, src, &[])
                 .into_iter()
                 .map(|s| &src[s.start..s.end])
                 .map(str::to_owned)
@@ -748,12 +985,69 @@ mod tests {
         assert_eq!(spans("def g: tobytes(1); [1]"), ["tobytes(1)"]);
         assert_eq!(spans("def f(x): x; f(1)"), [] as [String; 0]);
         assert_eq!(spans("def isarray: 1; isarray"), [] as [String; 0]);
+        assert_eq!(
+            spans("def f: $x + 1; def g: break $l; 1"),
+            ["$x", "break $l"]
+        );
+        assert_eq!(spans("def f: nosuch($x); 1"), ["nosuch($x)"]);
+    }
+
+    /// Measured against jq 1.8.1: the scopes of variables and labels.
+    #[test]
+    fn undefined_variables_and_labels_follow_jqs_scopes() {
+        assert_eq!(undefined("$x"), ["$x is not defined@0"]);
+        assert_eq!(undefined("[1, $foo]"), ["$foo is not defined@4"]);
+        assert_eq!(
+            undefined("$ENV, $ARGS, $named, $__loc__"),
+            [] as [String; 0]
+        );
+        assert_eq!(undefined("$__prog_args"), ["$__prog_args is not defined@0"]);
+        assert_eq!(
+            undefined("label $a | break $b"),
+            ["$*label-b is not defined@11"]
+        );
+        assert_eq!(
+            undefined("label $f | def g: break $f; g"),
+            [] as [String; 0]
+        );
+        assert_eq!(undefined("def f: $x; 1"), [] as [String; 0]);
+        assert_eq!(
+            undefined("def f: def g: $q; g; f"),
+            ["$q is not defined@14"]
+        );
+        assert_eq!(undefined("def f($x): $x; $x"), ["$x is not defined@15"]);
+        assert_eq!(undefined("(. as $a | $a), $a"), ["$a is not defined@16"]);
+        assert_eq!(undefined(". as $x | def f: $x; f"), [] as [String; 0]);
+        assert_eq!(
+            undefined("reduce 1 as $x ($x; .)"),
+            ["$x is not defined@16"]
+        );
+        assert_eq!(undefined("foreach 1 as $x (0; .; $x)"), [] as [String; 0]);
+        assert_eq!(
+            undefined("reduce . as $r (0; $r) | $r"),
+            ["$r is not defined@25"]
+        );
+        assert_eq!(
+            undefined(". as {a: $x, ($x): $y} | $y"),
+            ["$x is not defined@14"]
+        );
+        assert_eq!(
+            undefined(". as [$a] ?// {b: $c} | $a, $c"),
+            [] as [String; 0]
+        );
+        assert_eq!(undefined(". as {$a: [$b]} | [$a, $b]"), [] as [String; 0]);
+        assert_eq!(undefined("{$zz, a: 1}"), ["$zz is not defined@1"]);
+        assert_eq!(undefined("\"\\($zz)\""), ["$zz is not defined@3"]);
+        assert_eq!(
+            undefined("$x, $y"),
+            ["$x is not defined@0", "$y is not defined@4"]
+        );
     }
 
     #[test]
     fn several_errors_are_counted_as_jq_counts_them() {
         let tree = parse("isarray, isstring").expect("parses");
-        let mut all = undefined_calls(&tree).into_iter();
+        let mut all = undefined_calls(&tree, "isarray, isstring", &[]).into_iter();
         let mut e = all.next().expect("one");
         e.more = all.collect();
         let text = e.render("jq", "isarray, isstring");
