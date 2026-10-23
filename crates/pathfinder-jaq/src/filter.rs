@@ -10,6 +10,7 @@ pub fn parse_compile(
     code: &str,
     vars: &[String],
     paths: &[PathBuf],
+    front_end: Option<load::MainParser>,
 ) -> Result<(Vec<Val>, Filter), Vec<FileReports<PathBuf>>> {
     use compile::Compiler;
     use load::{import, Arena, File, Loader};
@@ -19,7 +20,9 @@ pub fn parse_compile(
 
     let vars: Vec<_> = vars.iter().map(|v| format!("${v}")).collect();
     let arena = Arena::default();
-    let loader = Loader::new(jaq_all::defs()).with_std_read(paths);
+    let loader = Loader::new(jaq_all::defs())
+        .with_std_read(paths)
+        .with_main_parser(front_end);
     //let loader = Loader::new([]).with_std_read(paths);
     let path = path.into();
     let modules = loader

@@ -219,6 +219,17 @@ fn p(n: &Node, src: &str, o: &mut String) {
             postfix_base(base, src, o);
             o.push_str(".[]");
         }
+        // jq's `?` after a postfix step makes that step optional (`.a.b?`
+        // still fails at `.a`); after anything else it is `try`.
+        Kind::Optional(t)
+            if matches!(
+                t.kind,
+                Kind::Field { .. } | Kind::Index { .. } | Kind::Slice { .. } | Kind::Iterate(_)
+            ) =>
+        {
+            p(t, src, o);
+            o.push('?');
+        }
         Kind::Optional(t) => {
             o.push('(');
             p(t, src, o);

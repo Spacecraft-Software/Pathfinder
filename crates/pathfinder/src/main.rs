@@ -24,6 +24,7 @@ mod compat;
 mod describe;
 mod diag;
 mod engine;
+mod front;
 mod inputs;
 mod jqargs;
 mod json;

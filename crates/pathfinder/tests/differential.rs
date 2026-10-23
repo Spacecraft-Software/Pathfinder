@@ -912,6 +912,11 @@ static PATCHED_STDERR_CASES: &[Case] = &[
 /// file it has open, where the jaq engine's prelude can only define a
 /// constant `input_filename`.
 static NATIVE_CASES: &[Case] = &[
+    // Read by Pathfinder's parser (M21): a second `?` is `try` over the
+    // whole term; a lone low surrogate escape is U+FFFD.
+    c("1", &["-c", "[.a.b??]"]),
+    c("1", &["-c", "[.a.b?]?"]),
+    c("null", &["-c", "\"\\ude00x\" | explode"]),
     // jq's evaluation order (PR #19 review): the right operand's error
     // before the left runs; a C builtin's last argument outermost; a slice
     // of `null` updated from `null`; jq's internal `_flatten/1`.

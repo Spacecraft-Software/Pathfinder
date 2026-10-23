@@ -37,6 +37,8 @@ mod jq;
 mod tests;
 
 pub use cli::{Cli, Filter as Program, Format};
+/// Pathfinder: the engine core, for a front end that builds its terms (M21).
+pub use jaq_all::jaq_core;
 pub use jq::Segment;
 
 use core::fmt::{self, Display, Formatter};
@@ -187,7 +189,7 @@ fn real_main(
                 cli::Filter::FromFile(path) => (path.into(), std::fs::read_to_string(path)?),
                 cli::Filter::Inline(filter) => ("<inline>".into(), filter.clone()),
             };
-            filter::parse_compile(&path, &code, &var_names, &cli.library_path)
+            filter::parse_compile(&path, &code, &var_names, &cli.library_path, cli.front_end)
                 .map_err(Error::Report)?
         }
     };

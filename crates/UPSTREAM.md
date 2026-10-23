@@ -495,6 +495,10 @@ changes land once, in the crates, not in `packaging/jaq/`.
   update to nothing through an absent child leaves it absent
   (`ValT::jq_absent`); a slice of `null` is updated from `null`;
   `setpath` is the native `_setpath`, which owns its input.
+- The main module's parser is a parameter (M21, T-031): `load::MainParser`,
+  `Loader::with_main_parser`, `jaq::Cli::front_end`; `parse::Module` and
+  its `Dep` are public so a front end can build one, and `jaq` re-exports
+  `jaq_core`. With none given, jaq's parser reads the program as before.
 
 ## Licence of Pathfinder's changes
 

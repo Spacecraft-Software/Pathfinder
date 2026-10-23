@@ -194,6 +194,18 @@ print. To keep the `jq` name untouched:
 
 ### The parser and the rewriter (`src/syntax/`)
 
+- **The native engine compiles what Pathfinder's parser reads** (M21,
+  `src/front.rs`): `jaq::Cli::front_end` hands jaq's loader
+  `front::main_module`, which turns the assembled program's syntax tree into
+  the engine's terms. Every string in them is a slice of the program text,
+  because the engine finds a name's position from where its slice points:
+  a use is the slice its node spans, a binding name any slice spelling it.
+  A module header, and what jq rejects (a syntax error, `\v`, a lone high
+  surrogate), answer `None` and jaq's parser reads them, as before M21.
+  jq's `?` after a postfix step makes that step optional (`1 | .a.b?` still
+  fails at `.a`); after anything else, a second `?` included, it is `try`.
+  `PATHFINDER_FRONT_END=jaq` puts jaq's parser back, to compare the two.
+
 - **The grammar is jq's.** `parse.rs` mirrors `src/parser.y`'s rules and
   precedence, `lex.rs` mirrors `src/lexer.l`. Validate a grouping change with
   `PATHFINDER_DEBUG_REPRINT=1 make conformance`, which runs the whole suite
@@ -385,6 +397,7 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
 | `crates/pathfinder/src/prelude.rs` | Polyfill and repair definitions, and the evidence for each. |
 | `crates/pathfinder/src/program.rs` | Program assembly: module header, prelude, `$ARGS` wrap, `$__loc__`. |
 | `crates/pathfinder/src/translate.rs` | jq argv → jaq argv. The only module that knows both dialects. |
+| `crates/pathfinder/src/front.rs` | The native engine's front end: the syntax tree as the engine's terms, slices of the program text. |
 | `crates/pathfinder/src/engine.rs` | The engine switch (`PATHFINDER_ENGINE`) and running the native engine in process. |
 | `crates/pathfinder/src/post.rs` | `-a` and `--seq` byte transforms: `Framer` (output) and `StripRs` (input), for both engines. |
 | `crates/pathfinder/src/inputs.rs` | Several input files: opened before the engine starts, read as one stream, and described to it — as `Segment`s in process, in `PATHFINDER_INPUTS` to a jaq binary. |

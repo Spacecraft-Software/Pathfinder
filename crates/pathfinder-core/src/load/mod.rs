@@ -27,6 +27,10 @@ extern crate std;
 /// I can't wait for it to happen!
 pub type Arena = typed_arena::Arena<String>;
 
+/// Pathfinder: a parser for the main module in place of jaq's (M21). `None`
+/// leaves the module to jaq's parser.
+pub type MainParser = for<'s> fn(&'s str) -> Option<parse::Module<&'s str, Term<&'s str>>>;
+
 /// Combined file loader, lexer, and parser for multiple modules.
 pub struct Loader<S, P, R> {
     #[allow(clippy::type_complexity)]
@@ -37,6 +41,8 @@ pub struct Loader<S, P, R> {
     ///
     /// This is used to detect circular dependencies between modules.
     open: Vec<P>,
+    /// Pathfinder: the main module's parser, if not jaq's.
+    main: Option<MainParser>,
 }
 
 /// Contents `C` and path `P` of a (module) file.
@@ -193,6 +199,7 @@ impl<'s, P: Default> Loader<&'s str, P, ReadFn<P>> {
             mods: Vec::from([(File::default(), Ok(prelude))]),
             read: |_path| Err("module loading not supported".into()),
             open: Vec::new(),
+            main: None,
         }
     }
 }
@@ -318,8 +325,22 @@ impl<S, P, R> Loader<S, P, R> {
     /// obtain the contents of the module.
     /// For example, if we have `include "foo"`, the loader calls `read("foo")`.
     pub fn with_read<R2>(self, read: R2) -> Loader<S, P, R2> {
-        let Self { mods, open, .. } = self;
-        Loader { mods, read, open }
+        let Self {
+            mods, open, main, ..
+        } = self;
+        Loader {
+            mods,
+            read,
+            open,
+            main,
+        }
+    }
+
+    /// Pathfinder: parse the main module with `main` where it answers, and
+    /// with jaq's parser where it does not.
+    pub fn with_main_parser(mut self, main: Option<MainParser>) -> Self {
+        self.main = main;
+        self
     }
 }
 
@@ -341,12 +362,15 @@ impl<'s, P: Clone + Eq, R: FnMut(Import<&'s str, P>) -> ReadResult<P>> Loader<&'
         arena: &'s Arena,
         file: File<&'s str, P>,
     ) -> Result<Modules<&'s str, P>, Errors<&'s str, P>> {
-        let result = parse_main(file.code).and_then(|m| {
-            m.map(|path, meta| {
-                let (parent, meta) = (&file.path, &meta);
-                self.find(arena, Import { parent, path, meta })
-            })
-        });
+        let parsed = self.main.and_then(|parse| parse(file.code));
+        let result = parsed
+            .map_or_else(|| parse_main(file.code), Ok)
+            .and_then(|m| {
+                m.map(|path, meta| {
+                    let (parent, meta) = (&file.path, &meta);
+                    self.find(arena, Import { parent, path, meta })
+                })
+            });
 
         let mut main = None;
         let mut deps = Vec::new();
