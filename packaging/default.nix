@@ -30,6 +30,16 @@ assert lib.assertOneOf "defaultEngine" defaultEngine [
 
 
 let
+  # The cut of patch `name` for the jaq being built: the 3.1.2 cut from 3.1.2
+  # on, the 3.1.0 cut (if `has310`) before 3.1.1, else the 3.1.1 one.
+  cut =
+    name: has310:
+    if lib.versionAtLeast jaq.version "3.1.2" then
+      ./jaq + "/${name}-3.1.2.patch"
+    else if has310 && lib.versionOlder jaq.version "3.1.1" then
+      ./jaq + "/${name}-3.1.0.patch"
+    else
+      ./jaq + "/${name}.patch";
   engine =
     if withPatchedJaq then
       jaq.overrideAttrs (old: {
@@ -42,15 +52,11 @@ let
           ./jaq/0005-string-repeat.patch
           ./jaq/0006-object-keys.patch
           ./jaq/0007-debug-format.patch
-          # 3.1.0 spells the lines this one replaces differently.
-          (
-            if lib.versionOlder jaq.version "3.1.1" then
-              ./jaq/0008-uncaught-errors-3.1.0.patch
-            else
-              ./jaq/0008-uncaught-errors.patch
-          )
+          # 3.1.0 spells the lines this one replaces differently, and 3.1.2
+          # passes `input_filename` to `run` (`cut`).
+          (cut "0008-uncaught-errors" true)
           ./jaq/0009-halt-error.patch
-          ./jaq/0010-path-errors.patch
+          (cut "0010-path-errors" false)
           ./jaq/0011-path-alternative.patch
           ./jaq/0012-remainder.patch
           # 3.1.0's `real_main` reads stdin differently.
@@ -61,14 +67,10 @@ let
               ./jaq/0013-parse-errors.patch
           )
           ./jaq/0014-lazy-input.patch
-          (
-            if lib.versionOlder jaq.version "3.1.1" then
-              ./jaq/0015-file-locations-3.1.0.patch
-            else
-              ./jaq/0015-file-locations.patch
-          )
-          ./jaq/0016-trailing-comment.patch
-        ];
+          (cut "0015-file-locations" true)
+        ]
+        # jaq 3.1.2 fixed this itself, the same way.
+        ++ lib.optional (lib.versionOlder jaq.version "3.1.2") ./jaq/0016-trailing-comment.patch;
         # jaq's own tests assert jaq's number format (`1.0`, `NaN`), which the
         # patches change on purpose. Pathfinder's check phase runs jq's suite
         # against this engine instead (crates/pathfinder/tests/jq-suite/FLOOR-patched).

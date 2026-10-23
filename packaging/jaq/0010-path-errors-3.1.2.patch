@@ -1,0 +1,382 @@
+Pathfinder patch for jaq 3.1.2: Fail a path expression that lost its path where and as jq 1.8.1 does.
+
+Carried in-tree (Steelbore Standard 4.2, 6.4); not sent upstream.
+diff --git a/jaq-core/src/exn.rs b/jaq-core/src/exn.rs
+index ec8faa7..0b8ba0a 100644
+--- a/jaq-core/src/exn.rs
++++ b/jaq-core/src/exn.rs
+@@ -141,6 +141,49 @@ impl<V: From<String>> Error<V> {
+     }
+ }
+ 
++/// Pathfinder: jq 1.8.1's errors for a path expression that lost its path,
++/// raised where jq raises them: at the first path operation applied to the
++/// value afterwards, else at the end of `path(f)`.
++impl<V: From<String> + Display> Error<V> {
++    /// `Invalid path expression with result v`.
++    pub fn path_result(v: &V) -> Self {
++        let v = dump_trunc(v.to_string(), 30);
++        Self::new(V::from(alloc::format!(
++            "Invalid path expression with result {v}"
++        )))
++    }
++
++    /// `Invalid path expression near attempt to access element k of v`,
++    /// `k` being the key already written as JSON.
++    pub fn path_index(v: &V, k: String) -> Self {
++        let (k, v) = (dump_trunc(k, 15), dump_trunc(v.to_string(), 30));
++        let msg =
++            alloc::format!("Invalid path expression near attempt to access element {k} of {v}");
++        Self::new(V::from(msg))
++    }
++
++    /// `Invalid path expression near attempt to iterate through v`.
++    pub fn path_iter(v: &V) -> Self {
++        let v = dump_trunc(v.to_string(), 30);
++        let msg = alloc::format!("Invalid path expression near attempt to iterate through {v}");
++        Self::new(V::from(msg))
++    }
++}
++
++/// Pathfinder: jq's `jv_dump_string_trunc` into a buffer of `size` bytes:
++/// text longer than `size - 1` bytes is cut to `size - 4` and ends in `...`,
++/// never splitting a character.
++fn dump_trunc(s: String, size: usize) -> String {
++    if s.len() < size {
++        return s;
++    }
++    let mut end = size - 4;
++    while !s.is_char_boundary(end) {
++        end -= 1;
++    }
++    alloc::format!("{}...", &s[..end])
++}
++
+ impl<V> FromIterator<Part<V>> for Error<V> {
+     fn from_iter<T: IntoIterator<Item = Part<V>>>(iter: T) -> Self {
+         Self(Part::Str(iter.into_iter().collect()))
+diff --git a/jaq-core/src/filter.rs b/jaq-core/src/filter.rs
+index f888aff..343afaa 100644
+--- a/jaq-core/src/filter.rs
++++ b/jaq-core/src/filter.rs
+@@ -416,10 +416,50 @@ fn recurse_update<'a, V: ValT + 'a>(v: V, f: &dyn Update<'a, V>) -> ValXs<'a, V>
+     box_iter::then(v.map_values(Optional, |v| recurse_update(v, f)), f)
+ }
+ 
++/// Pathfinder: the value at the path of `vp` and that path, intact.
++///
++/// jq 1.8.1 keeps, beside the path, the value at it (`value_at_path`), and
++/// leaves both unchanged when a filter that is no path expression runs.
++fn at_path<V: Clone>((v, p): &(V, RcList<V>)) -> (V, RcList<V>) {
++    match p.lost() {
++        Some((at, p)) => (at.clone(), p.clone()),
++        None => (v.clone(), p.clone()),
++    }
++}
++
++/// Pathfinder: outputs `ys` of a filter that is no path expression, run
++/// inside a path expression at path `p`, where the value is `at`.
++///
++/// jq 1.8.1 runs such a filter normally. An output keeps the path only if it
++/// is identical to the value at the path (`jv_identical`), which for values
++/// that are not shared in memory means `null`, `true` or `false`; otherwise
++/// the path is lost, and the first path operation on the output, or else the
++/// end of `path(...)`, fails.
++fn lost<'a, V: ValT + 'a>(ys: ValXs<'a, V>, at: V, p: RcList<V>) -> ValPathXs<'a, V> {
++    Box::new(ys.map(move |y| {
++        let y = y?;
++        let same = y == at && (!y.as_bool() || y == V::from(true));
++        Ok(if same {
++            (y, p.clone())
++        } else {
++            (y, p.clone().lose(at.clone()))
++        })
++    }))
++}
++
++/// Pathfinder: `v | f` inside a path expression, for a filter `f` that is
++/// no path expression (see `lost`).
++fn lose<'a, D: DataT>(f: &Id, cv: Cvp<'a, D>) -> ValPathXs<'a, D::V<'a>> {
++    let (at, p) = at_path(&cv.1);
++    lost(f.run((cv.0, cv.1 .0)), at, p)
++}
++
+ /// A filter which is implemented using function pointers.
+ pub struct Native<D: DataT + ?Sized> {
+     run: RunPtr<D>,
+-    paths: PathsPtr<D>,
++    // Pathfinder: `None` for a filter that is no path expression, which
++    // `Id::paths` then runs as jq 1.8.1 does (see `lose`).
++    paths: Option<PathsPtr<D>>,
+     update: UpdatePtr<D>,
+ }
+ 
+@@ -441,13 +481,14 @@ impl<D: DataT> Native<D> {
+     pub const fn new(run: RunPtr<D>) -> Self {
+         Self {
+             run,
+-            paths: |cv| box_once(Err(Exn::from(Error::path_expr(cv.1 .0)))),
++            paths: None,
+             update: |cv, _| box_once(Err(Exn::from(Error::path_expr(cv.1)))),
+         }
+     }
+ 
+     /// Specify a paths function (used for `path(...)`).
+     pub const fn with_paths(self, paths: PathsPtr<D>) -> Self {
++        let paths = Some(paths);
+         Self { paths, ..self }
+     }
+ 
+@@ -576,17 +617,37 @@ impl Id {
+     /// In particular, `v | path(f)` in context `c` yields the same paths as
+     /// `f.paths((c, (v, Default::default())))`.
+     pub fn paths<'a, D: DataT>(&self, cv: Cvp<'a, D>) -> ValPathXs<'a, D::V<'a>> {
+-        let err = |v| box_once(Err(Exn::from(Error::path_expr(v))));
+         let proj_cv = |cv: &Cvp<'a, D>| (cv.0.clone(), cv.1 .0.clone());
+         let proj_val = |(val, _path): &(D::V<'a>, _)| val.clone();
+         match &cv.0.lut().terms[self.0] {
+-            Ast::ToString => err(cv.1 .0),
+-            Ast::Int(_) | Ast::Num(_) | Ast::Str(_) => err(cv.1 .0),
+-            Ast::Arr(_) | Ast::ObjEmpty | Ast::ObjSingle(..) => err(cv.1 .0),
+-            Ast::Neg(_) | Ast::Logic(..) | Ast::Math(..) | Ast::Cmp(..) => err(cv.1 .0),
+-            Ast::Update(..) | Ast::Assign(..) => err(cv.1 .0),
+-            Ast::UpdateMath(..) | Ast::UpdateAlt(..) => err(cv.1 .0),
++            // Pathfinder: no path expression; jq 1.8.1 runs it all the same,
++            // and fails only when the path it lost is used.
++            Ast::ToString => lose(self, cv),
++            Ast::Int(_) | Ast::Num(_) | Ast::Str(_) => lose(self, cv),
++            Ast::ObjEmpty | Ast::ObjSingle(..) => lose(self, cv),
++            Ast::Logic(..) | Ast::Math(..) | Ast::Cmp(..) => lose(self, cv),
++            // Pathfinder: jq 1.8.1 collects `[f]` and negates `-f` without
++            // leaving the path expression, so `f` runs as one, and a path
++            // operation in it on a value with a lost path fails.
++            Ast::Arr(f) => {
++                let (at, p) = at_path(&cv.1);
++                let arr = f.paths(cv).map(|r| r.map(|(v, _p)| v)).collect();
++                lost(box_once(arr), at, p)
++            }
++            Ast::Neg(f) => Box::new(f.paths(cv).map(|r| {
++                let y = r?;
++                let (at, p) = at_path(&y);
++                Ok(((-y.0)?, p.lose(at)))
++            })),
++            Ast::Update(..) | Ast::Assign(..) => lose(self, cv),
++            Ast::UpdateMath(..) | Ast::UpdateAlt(..) => lose(self, cv),
+             Ast::Id => box_once(Ok(cv.1)),
++            // Pathfinder: `..` is `., (.[]? | ..)` in jq 1.8.1, so on a lost
++            // path it yields the value, then fails at `.[]?`.
++            Ast::Recurse if cv.1 .1.lost().is_some() => {
++                let e = Error::path_iter(&cv.1 .0);
++                Box::new(core::iter::once(Ok(cv.1)).chain(core::iter::once(Err(Exn::from(e)))))
++            }
+             Ast::Recurse => recurse_run(cv.1, &|(v, p)| {
+                 v.key_values()
+                     .map(move |r| r.map(|(k, v_)| (v_, p.clone().cons(k))))
+@@ -613,10 +674,15 @@ impl Id {
+                     if v.as_bool() { then_ } else { else_ }.paths(cv)
+                 })
+             }
+-            Ast::TryCatch(f, c) => try_catch_run(f.paths((cv.0.clone(), cv.1)), move |e| {
+-                c.run((cv.0.clone(), e.into_val()))
+-                    .map(|e| Err(Exn::from(Error::path_expr(e?))))
+-            }),
++            // Pathfinder: the handler runs as a path expression on the error,
++            // whose path is lost (see `lost`), as in jq 1.8.1.
++            Ast::TryCatch(f, c) => {
++                let (at, p) = at_path(&cv.1);
++                try_catch_run(f.paths((cv.0.clone(), cv.1)), move |e| {
++                    let e = lost(box_once(Ok(e.into_val())), at.clone(), p.clone());
++                    flat_map_then_with(e, cv.0.clone(), move |e, ctx| c.paths((ctx, e)))
++                })
++            }
+             Ast::Path(f, path) => {
+                 let path = path.map_ref(|i| {
+                     let cv = (cv.0.clone(), cv.1 .0.clone());
+@@ -629,7 +695,7 @@ impl Id {
+                 })
+             }
+             Ast::Var(v) => match cv.0.vars.get(*v).unwrap() {
+-                Bind::Var(_) => err(cv.1 .0),
++                Bind::Var(_) => lose(self, cv),
+                 Bind::Fun(l) => l.0.paths((cv.0.with_vars(l.1.clone()), cv.1)),
+                 Bind::Label(l) => box_once(Err(Exn(exn::Inner::Break(*l)))),
+             },
+@@ -649,10 +715,13 @@ impl Id {
+                 def_run(id, call_typ, cvs, Id::paths, with_vars, into, from)
+             }
+             Ast::Label(id) => label_run(cv, |cv| id.paths(cv)),
+-            Ast::Native(id, args) => {
+-                let cvs = bind_vars(args, cv.0.with_vars(Vars::new([])), cv, proj_val);
+-                flat_map_then(cvs, |cv| (cv.0.lut().funs[*id].paths)(cv))
+-            }
++            Ast::Native(id, args) => match cv.0.lut().funs[*id].paths {
++                Some(paths) => {
++                    let cvs = bind_vars(args, cv.0.with_vars(Vars::new([])), cv, proj_val);
++                    flat_map_then(cvs, move |cv| paths(cv))
++                }
++                None => lose(self, cv),
++            },
+         }
+     }
+ 
+diff --git a/jaq-core/src/funs.rs b/jaq-core/src/funs.rs
+index 02ad9e9..f487b2b 100644
+--- a/jaq-core/src/funs.rs
++++ b/jaq-core/src/funs.rs
+@@ -14,7 +14,11 @@ where
+             let (f, fc) = cv.0.pop_fun();
+             let cvp = (fc, (cv.1, Default::default()));
+             Box::new(f.paths(cvp).map(|vp| {
+-                let (_v, path) = vp?;
++                let (v, path) = vp?;
++                // Pathfinder: a path lost on the way fails here, as in jq 1.8.1.
++                if path.lost().is_some() {
++                    return Err(Exn::from(Error::path_result(&v)));
++                }
+                 let path: Vec<_> = path.iter().cloned().collect();
+                 Ok(path.into_iter().rev().collect())
+             }))
+@@ -24,6 +28,10 @@ where
+             let cvp = (fc, (cv.1, Default::default()));
+             Box::new(f.paths(cvp).map(|vp| {
+                 let (v, path) = vp?;
++                // Pathfinder: as in `path`.
++                if path.lost().is_some() {
++                    return Err(Exn::from(Error::path_result(&v)));
++                }
+                 let path: Vec<_> = path.iter().cloned().collect();
+                 Ok([path.into_iter().rev().collect(), v].into_iter().collect())
+             }))
+diff --git a/jaq-core/src/path.rs b/jaq-core/src/path.rs
+index 0acdf15..e261f49 100644
+--- a/jaq-core/src/path.rs
++++ b/jaq-core/src/path.rs
+@@ -80,6 +80,11 @@ impl<'a, V: ValT + 'a> Path<V> {
+     }
+ 
+     pub(crate) fn paths(self, vp: (V, RcList<V>)) -> ValRs<'a, (V, RcList<V>), V> {
++        // Pathfinder: on a value whose path is lost, the first part fails,
++        // `?` or not, as jq 1.8.1's INDEX_OPT and EACH_OPT do.
++        if let (Some(_), Some((part, _))) = (vp.1.lost(), self.0.first()) {
++            return box_once(Err(part.lost(&vp.0)));
++        }
+         run(self.0.into_iter(), vp, |part, vp| part.paths(vp))
+     }
+ 
+@@ -146,6 +151,21 @@ impl<'a, V: ValT + 'a> Part<V> {
+         }
+     }
+ 
++    /// Pathfinder: jq 1.8.1's error for this part applied to `v`, a value
++    /// whose path is lost. jq writes a slice key with both bounds.
++    fn lost(&self, v: &V) -> crate::Error<V> {
++        use alloc::string::ToString;
++        let bound = |b: &Option<V>| b.as_ref().map_or("null".into(), ToString::to_string);
++        match self {
++            Self::Index(idx) => crate::Error::path_index(v, idx.to_string()),
++            Self::Range(None, None) => crate::Error::path_iter(v),
++            Self::Range(from, upto) => {
++                let k = alloc::format!("{{\"start\":{},\"end\":{}}}", bound(from), bound(upto));
++                crate::Error::path_index(v, k)
++            }
++        }
++    }
++
+     fn update<F, I>(&self, v: V, opt: Opt, f: F) -> ValX<'a, V>
+     where
+         F: Fn(V) -> I,
+diff --git a/jaq-core/src/rc_list.rs b/jaq-core/src/rc_list.rs
+index 7f7e5d2..76eb87f 100644
+--- a/jaq-core/src/rc_list.rs
++++ b/jaq-core/src/rc_list.rs
+@@ -5,6 +5,10 @@ pub struct List<T>(alloc::rc::Rc<Node<T>>);
+ enum Node<T> {
+     Nil,
+     Cons(T, List<T>),
++    /// Pathfinder: a path that a path expression lost, as jq 1.8.1 tracks it:
++    /// the value at the path when it was lost, and the path itself.
++    /// Only paths (`path(f)`) ever carry it; to everything else it is `Nil`.
++    Lost(T, List<T>),
+ }
+ 
+ impl<T> Clone for List<T> {
+@@ -22,7 +26,7 @@ impl<T> Default for List<T> {
+ impl<T: Clone> List<T> {
+     pub fn pop(self) -> Option<(T, Self)> {
+         match alloc::rc::Rc::try_unwrap(self.0).unwrap_or_else(|rc| (*rc).clone()) {
+-            Node::Nil => None,
++            Node::Nil | Node::Lost(..) => None,
+             Node::Cons(head, tail) => Some((head, tail)),
+         }
+     }
+@@ -44,10 +48,23 @@ impl<T> List<T> {
+         iter.into_iter().fold(self, Self::cons)
+     }
+ 
++    /// Pathfinder: mark the path `self` as lost, `x` being the value at it.
++    pub fn lose(self, x: T) -> Self {
++        Self(Node::Lost(x, self).into())
++    }
++
++    /// Pathfinder: if the path is lost, the value at it and the path.
++    pub fn lost(&self) -> Option<(&T, &Self)> {
++        match &*self.0 {
++            Node::Lost(x, xs) => Some((x, xs)),
++            _ => None,
++        }
++    }
++
+     /// Return the element most recently added to the list.
+     pub fn head(&self) -> Option<&T> {
+         match &*self.0 {
+-            Node::Nil => None,
++            Node::Nil | Node::Lost(..) => None,
+             Node::Cons(x, _) => Some(x),
+         }
+     }
+@@ -65,7 +82,7 @@ impl<T> List<T> {
+         for _ in 0..n {
+             match &*cur.0 {
+                 Node::Cons(_, xs) => cur = xs,
+-                Node::Nil => break,
++                Node::Nil | Node::Lost(..) => break,
+             }
+         }
+         cur
+@@ -83,7 +100,7 @@ impl<'a, T> Iterator for Iter<'a, T> {
+     fn next(&mut self) -> Option<Self::Item> {
+         let (x, xs) = match &*self.0 .0 {
+             Node::Cons(x, xs) => (x, xs),
+-            Node::Nil => return None,
++            Node::Nil | Node::Lost(..) => return None,
+         };
+         self.0 = xs;
+         Some(x)
+diff --git a/jaq-std/src/defs.jq b/jaq-std/src/defs.jq
+index 2cba19a..075b28a 100644
+--- a/jaq-std/src/defs.jq
++++ b/jaq-std/src/defs.jq
+@@ -1,5 +1,3 @@
+-def null:  [][0];
+-
+ def stderr:      (       stderr_empty  as $x | .), .;
+ def debug:       (        debug_empty  as $x | .), .;
+ def debug(msgs): ((msgs | debug_empty) as $x | .), .;
+diff --git a/jaq-std/src/lib.rs b/jaq-std/src/lib.rs
+index bcaee67..c3198f8 100644
+--- a/jaq-std/src/lib.rs
++++ b/jaq-std/src/lib.rs
+@@ -489,6 +489,13 @@ where
+ {
+     let f = || [Bind::Fun(())].into();
+     Box::new([
++        // Pathfinder: native, not `def null: [][0];`, so that inside a path
++        // expression `null` is a value, as jq 1.8.1's literal is, and not the
++        // path operation `.[0]` on a constructed array. It is also cheaper.
++        ("null", v(0), |_| {
++            let empty: D::V<'_> = core::iter::empty().collect();
++            bome(empty.index(&D::V::from(0usize)))
++        }),
+         ("floor", v(0), |cv| bome(cv.1.round(floor))),
+         ("round", v(0), |cv| bome(cv.1.round(round))),
+         ("ceil", v(0), |cv| bome(cv.1.round(ceil))),
