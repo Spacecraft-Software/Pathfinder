@@ -78,6 +78,13 @@ pub trait ValT:
     /// for jq's error messages.
     fn jq_type(&self) -> &'static str;
 
+    /// Pathfinder: whether `.[index]` names nothing in the value: a key the
+    /// object lacks, an index past either end of the array, anything of
+    /// `null`. jq deletes a path through such a child without creating it.
+    fn jq_absent(&self, _index: &Self) -> bool {
+        false
+    }
+
     /// Pathfinder: a string's text, unescaped, for jq's error messages.
     fn jq_string(&self) -> Option<alloc::string::String>;
 

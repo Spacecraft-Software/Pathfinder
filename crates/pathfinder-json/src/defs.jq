@@ -18,6 +18,8 @@ def @json: tojson;
 # which deletes the paths together.
 def delpaths($paths): _delpaths($paths);
 def del(f): delpaths([path(f)]);
+# jq's `setpath` is a C builtin: its last argument runs outermost.
+def setpath(p; x): x as $x | p as $p | _setpath($p; $x);
 
 # Pathfinder: jq 1.8.1's own definitions (src/builtin.jq) of names jaq lacks
 # or defines differently (M20, T-027).

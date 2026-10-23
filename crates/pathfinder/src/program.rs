@@ -126,7 +126,10 @@ fn assemble_here(
     if compile_error.is_none()
         && let Some(cleaned) = drop_unreachable_undefined(src, info.header_end)
     {
-        return assemble_here(&cleaned, ctx, wrap, loc_file);
+        // The text is no longer the user's, so a `-f` file must not be read.
+        let mut assembly = assemble_here(&cleaned, ctx, wrap, loc_file);
+        assembly.rewritten = true;
+        return assembly;
     }
     let shorthands: Vec<usize> = if info.loc_sites.is_empty() {
         Vec::new()

@@ -87,7 +87,8 @@ yields!(logb_zero, "0 | logb | . == -infinite", true);
 yields!(
     match_many,
     r#""ABab" | [match("a", "b"; "", "i") | .string]"#,
-    ["a", "A", "b", "B"]
+    // jq 1.8.1's order: `match` is its C `_match_impl`, last argument outermost.
+    ["a", "b", "A", "B"]
 );
 
 #[test]
@@ -190,7 +191,7 @@ yields!(
 yields!(
     scan,
     r#""abAB" | [scan("a", "b"; "g", "gi")]"#,
-    // TODO: is this order really desired?
+    // jq 1.8.1's order: `scan($re; $flags)` binds `$re` outermost.
     json!(["a", "a", "A", "b", "b", "B"])
 );
 

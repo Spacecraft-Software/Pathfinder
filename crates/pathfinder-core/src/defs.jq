@@ -13,6 +13,9 @@ def select(f): if f then . else empty end;
 def tostring: "\(.)";
 
 # Generators
+# Pathfinder: jq's `range/3` is a definition, binding its first argument
+# outermost; natives bind their last outermost, as jq's C builtins.
+def range($from; $upto; $by): _range($from; $upto; $by);
 def range(from; to): range(from; to; 1);
 def range(to): range(0; to);
 def repeat(f): def rec: f, rec; rec;

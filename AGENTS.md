@@ -205,8 +205,9 @@ print. To keep the `jq` name untouched:
   non-string object key (by jq's own folding rules, `check.rs`), non-constant or
   non-object `module` metadata, a parse failure *at* a `?//` token, and a
   reachable call to a name/arity that is neither one of jq 1.8.1's
-  `builtins` (`prelude::JQ_BUILTINS`), a literal, a `_` name, nor defined by
-  the program (`check::undefined_calls`). That covers jaq's own helpers
+  `builtins` (`prelude::JQ_BUILTINS`), one of its internal `_` builtins
+  (`check::JQ_INTERNAL`, measured), a literal, nor defined by the program
+  (`check::undefined_calls`). That covers jaq's own helpers
   (`isarray`, `tobytes`, `halt/1`, …), which a filter could otherwise call,
   and replaces jaq's report of an unknown name, which quoted the whole
   prelude. It follows jq's scoping: a definition counts only once something
@@ -233,7 +234,17 @@ print. To keep the `jq` name untouched:
   to the end (`Rewrites::comma_update`). Keep the engine's update from
   holding a second reference to the value it updates: `Rc::make_mut` then
   copies it on every step, which made a 100 000-key `reduce` take 10^12
-  instructions.
+  instructions; `setpath` is the native `_setpath` for the same reason
+  (`fromstream` went quadratic through `getpath($p) = $x`). An update to
+  nothing deletes the path, as jq's does: a step whose child is absent
+  (`ValT::jq_absent`) and still `null` after the rest of the path yields
+  nothing, so the parent creates no key and pads no array.
+- **Arguments run in jq's order.** jq runs a C builtin's last argument in
+  the outermost loop and a definition's first (`def f($a; $b)` is
+  `a as $a | b as $b | …`). The engine's natives bind as C builtins do
+  (`filter::bind_native`), so a native standing for a jq *definition* sits
+  behind one that binds its `$` parameters (`range/3` → `_range`), and a
+  definition standing for a C builtin binds them last first (`setpath`).
 - **On the jaq engine, assignment is vivify-then-native.** Prepare the containers (inline guard for
   a literal target, `_pf_vivify` otherwise), then let jaq's own operator run —
   it matches jq once the containers exist. jq's `_modify` transcribed into jaq

@@ -133,10 +133,38 @@ pub fn module_header(src: &str) -> Option<CompileError> {
     })
 }
 
+/// The internal builtins jq 1.8.1 accepts in a program though `builtins`
+/// leaves them out: every `_` name in jq's binary and `builtin.jq`, kept
+/// where `jq -n 'if false then NAME(args) else 1 end'` compiles.
+const JQ_INTERNAL: &[(&str, usize)] = &[
+    ("_assign", 2),
+    ("_divide", 2),
+    ("_equal", 2),
+    ("_flatten", 1),
+    ("_greater", 2),
+    ("_greatereq", 2),
+    ("_group_by_impl", 1),
+    ("_less", 2),
+    ("_lesseq", 2),
+    ("_match_impl", 3),
+    ("_max_by_impl", 1),
+    ("_min_by_impl", 1),
+    ("_minus", 2),
+    ("_mod", 2),
+    ("_modify", 2),
+    ("_multiply", 2),
+    ("_negate", 0),
+    ("_notequal", 2),
+    ("_plus", 2),
+    ("_sort_by_impl", 1),
+    ("_strindices", 1),
+    ("_unique_by_impl", 1),
+];
+
 /// Whether jq 1.8.1 defines `name/arity` without the program's help: one of
-/// its `builtins` (`prelude::JQ_BUILTINS`, captured from jq), a literal, or
-/// a name starting with `_`. jq leaves its internal `_` builtins out of
-/// `builtins` (`_modify/2` runs), so those are left to the engine.
+/// its `builtins` (`prelude::JQ_BUILTINS`, captured from jq), one of its
+/// internal `_` builtins ([`JQ_INTERNAL`]), or a literal. The engine's own
+/// `_` helpers (`_isarray`, `_tobytes`, …) are none of these.
 fn defined_by_jq(name: &str, arity: usize) -> bool {
     static BUILTINS: std::sync::OnceLock<Vec<(String, usize)>> = std::sync::OnceLock::new();
     let builtins = BUILTINS.get_or_init(|| {
@@ -148,7 +176,7 @@ fn defined_by_jq(name: &str, arity: usize) -> bool {
             })
             .collect()
     });
-    name.starts_with('_')
+    JQ_INTERNAL.contains(&(name, arity))
         || (arity == 0 && matches!(name, "true" | "false" | "null"))
         || builtins.iter().any(|(n, a)| n == name && *a == arity)
 }

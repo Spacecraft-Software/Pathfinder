@@ -178,6 +178,52 @@ fn bind_vars<'a, D: DataT, T: 'a + Clone>(
     }
 }
 
+/// Pathfinder: [`bind_vars`] for a native filter, which jq 1.8.1 calls as
+/// it calls a C builtin: the last variable argument in the outermost loop
+/// (`[pow(2,3; 1,2)]` is 2, 3, 4, 9). The variables are bound in the
+/// arguments' order all the same, as the natives pop them.
+fn bind_native<'a, D: DataT, T: 'a + Clone>(
+    args: &'a [Arg<Id>],
+    ctx: Ctx<'a, D>,
+    cv: Cv<'a, D, T>,
+    proj: fn(&T) -> D::V<'a>,
+) -> ValXs<'a, Cv<'a, D, T>, D::V<'a>> {
+    if args.iter().filter(|a| matches!(a, Arg::Var(_))).count() < 2 {
+        return bind_vars(args, ctx, cv, proj);
+    }
+    bind_native_from(args, args.len(), alloc::vec::Vec::new(), ctx, cv, proj)
+}
+
+/// Run the variable arguments among the first `n`, the last outermost,
+/// collecting their values in `vals`, last first; then bind them all.
+fn bind_native_from<'a, D: DataT, T: 'a + Clone>(
+    args: &'a [Arg<Id>],
+    n: usize,
+    mut vals: alloc::vec::Vec<D::V<'a>>,
+    ctx: Ctx<'a, D>,
+    cv: Cv<'a, D, T>,
+    proj: fn(&T) -> D::V<'a>,
+) -> ValXs<'a, Cv<'a, D, T>, D::V<'a>> {
+    match args[..n].split_last() {
+        Some((Arg::Var(arg), _)) => flat_map_then_with(
+            arg.run((cv.0.clone(), proj(&cv.1))),
+            (vals, ctx, cv),
+            move |y, (mut vals, ctx, cv)| {
+                vals.push(y);
+                bind_native_from(args, n - 1, vals, ctx, cv, proj)
+            },
+        ),
+        Some((Arg::Fun(_), _)) => bind_native_from(args, n - 1, vals, ctx, cv, proj),
+        None => {
+            let ctx = args.iter().fold(ctx, |ctx, arg| match arg {
+                Arg::Var(_) => ctx.cons_var(vals.pop().expect("a value per variable argument")),
+                Arg::Fun(arg) => ctx.cons_fun((*arg, cv.0.clone())),
+            });
+            box_once(Ok((ctx, cv.1)))
+        }
+    }
+}
+
 fn bind_pat<'a, D: DataT>(
     (idxs, pat): &'a (Id, Pattern<Id>),
     ctx: Ctx<'a, D>,
@@ -310,15 +356,18 @@ fn cartesian<'a, D: DataT>(l: &'a Id, r: &'a Id, cv: Cv<'a, D>) -> Pairs<'a, Val
 
 /// Pathfinder: [`cartesian`] with the right operand in the outer loop, as
 /// jq 1.8.1 evaluates arithmetic and comparisons: `(1,2) + (10,20)` is 11,
-/// 12, 21, 22, `input - input` reads the right operand first, and of two
-/// failing operands the right one's error is raised.
+/// 12, 21, 22, `input - input` reads the right operand first, and an error
+/// of the right operand is raised before the left one runs at all, so
+/// `empty + error("R")` fails. The callers look at the right value first;
+/// the left one beside an error is a placeholder.
 fn cartesian_rl<'a, D: DataT>(
     l: &'a Id,
     r: &'a Id,
     cv: Cv<'a, D>,
 ) -> Pairs<'a, ValX<'a, D::V<'a>>> {
-    flat_map_with(r.run(cv.clone()), cv, move |r, cv| {
-        map_with(l.run(cv), r, |l, r| (l, r))
+    flat_map_with(r.run(cv.clone()), cv, move |r, cv| match r {
+        Err(e) => box_once((Ok(D::V::from(false)), Err(e))),
+        r => map_with(l.run(cv), r, |l, r| (l, r)),
     })
 }
 
@@ -669,7 +718,7 @@ impl Id {
                 def_run(id, call_typ, cvs, Id::run, with_vars, into, from)
             }
             Ast::Native(id, args) => {
-                let cvs = bind_vars(args, cv.0.with_vars(Vars::new([])), cv, Clone::clone);
+                let cvs = bind_native(args, cv.0.with_vars(Vars::new([])), cv, Clone::clone);
                 flat_map_then(cvs, |cv| (cv.0.lut().funs[*id].run)(cv))
             }
             Ast::Label(id) => label_run(cv, |cv| id.run(cv)),
@@ -789,7 +838,7 @@ impl Id {
             Ast::Label(id) => label_run(cv, |cv| id.paths(cv)),
             Ast::Native(id, args) => match cv.0.lut().funs[*id].paths {
                 Some(paths) => {
-                    let cvs = bind_vars(args, cv.0.with_vars(Vars::new([])), cv, proj_val);
+                    let cvs = bind_native(args, cv.0.with_vars(Vars::new([])), cv, proj_val);
                     flat_map_then(cvs, move |cv| paths(cv))
                 }
                 None => lose(self, cv),
@@ -874,7 +923,7 @@ impl Id {
             }
             Ast::Native(id, args) => {
                 let init = cv.1.clone();
-                let cvs = bind_vars(args, cv.0.with_vars(Vars::new([])), cv, Clone::clone);
+                let cvs = bind_native(args, cv.0.with_vars(Vars::new([])), cv, Clone::clone);
                 reduce(cvs, init, move |cv, v| {
                     (cv.0.lut().funs[*id].update)((cv.0, v), f.clone())
                 })

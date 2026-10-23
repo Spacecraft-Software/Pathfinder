@@ -121,8 +121,16 @@ where
     F: Fn(V) -> ValXs<'a, V>,
 {
     if let Some((part, opt)) = iter.next() {
-        use core::iter::once;
-        part.update(v, opt, |v| once(update(iter.clone(), last.clone(), v, f)))
+        // Pathfinder: jq updates a path to nothing by deleting it, which
+        // leaves an absent child absent (`{} | .a[0] |= empty` is `{}`). A
+        // child that was absent and still has nothing set in it (`null`)
+        // yields nothing, so the parent creates no key and pads no array.
+        let absent = matches!(&part, Part::Index(idx) if v.jq_absent(idx));
+        part.update(v, opt, |v| {
+            let r = update(iter.clone(), last.clone(), v, f);
+            let untouched = absent && matches!(&r, Ok(y) if y.jq_type() == "null");
+            (!untouched).then_some(r).into_iter()
+        })
     } else {
         last.0.update(v, last.1, f)
     }

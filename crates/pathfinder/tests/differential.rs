@@ -231,6 +231,50 @@ static CASES: &[Case] = &[
         &["-c", "reduce .[] as {$a: [$b]} (0; . + $b)"],
     ),
     c("null", &["-c", "{(0):1}"]),
+    // An update to nothing through an absent child leaves it absent, as jq's
+    // `delpaths` does; `setpath` and `fromstream` stay linear; the engine's
+    // `_` helpers are undefined, as in jq (PR #19 review).
+    c(
+        "null",
+        &["-c", "try ([1] | .[0] += (empty, error(\"R\"))) catch ."],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "[{} | (.a[0] |= empty), (.a.b |= empty), (.a.b.c |= empty)]",
+        ],
+    ),
+    c(
+        "null",
+        &["-c", "[{\"a\":null} | (.a[0] |= empty), (.a.b |= empty)]"],
+    ),
+    c(
+        "null",
+        &["-c", "[[], [1] | (.[3].a |= empty), (.[-5].a |= empty)]"],
+    ),
+    c(
+        "null",
+        &["-c", "reduce range(3) as $i ({}; .a[$i] |= empty)"],
+    ),
+    c(
+        "null",
+        &["-c", "[null | (.[0:1] |= empty), (.[2:4] |= [5])]"],
+    ),
+    c("null", &["-c", "[range(0, 1; 3, 4)]"]),
+    c("null", &["-c", "_isarray"]),
+    c("null", &["-c", "1 | _tobytes"]),
+    c(
+        "null",
+        &[
+            "-c",
+            "reduce range(2000) as $i ([]; setpath([$i]; $i)) | length",
+        ],
+    ),
+    c(
+        "null",
+        &["-c", "[range(2000)] | [fromstream(tostream)] | length"],
+    ),
     // Unknown formats fail at run time as jq's do; calls to names jq lacks
     // in definitions nothing calls are harmless (M20, P-066).
     c("null", &["-c", "try @foo catch ."]),
@@ -868,6 +912,21 @@ static PATCHED_STDERR_CASES: &[Case] = &[
 /// file it has open, where the jaq engine's prelude can only define a
 /// constant `input_filename`.
 static NATIVE_CASES: &[Case] = &[
+    // jq's evaluation order (PR #19 review): the right operand's error
+    // before the left runs; a C builtin's last argument outermost; a slice
+    // of `null` updated from `null`; jq's internal `_flatten/1`.
+    c("null", &["-c", "[empty + error(\"R\")]"]),
+    c("null", &["-c", "[empty == error(\"R\")]"]),
+    c("null", &["-c", "null | .[0:1] |= ."]),
+    c("null", &["-c", "{} | .a[1:] |= ."]),
+    c("null", &["-c", "[null] | .[0][0:1] |= empty"]),
+    c(
+        "null",
+        &["-c", "[{\"a\":1} | setpath([\"a\"], [\"b\"]; 1, 2)]"],
+    ),
+    c("null", &["-c", "[pow(2, 3; 1, 2)]"]),
+    c("null", &["-c", "[fma(1, 2; 3, 4; 5, 6)]"]),
+    c("null", &["-c", "[[1, [2]]] | _flatten(1)"]),
     // `@base64d` and `@urid` are jq's in the engine (M20, P-067); bytes that
     // are not UTF-8 become U+FFFD as jq's `jvp_utf8_next` reads them, which
     // a jaq binary does not do.
@@ -1847,6 +1906,9 @@ static FILE_CASES: &[Case] = &[
     c("", &["-n", "input_filename", "f1.json"]),
     c("", &["-c", "-f", "filt.jq"]),
     c("", &["-c", "-f", "filt2.jq", "f1.json"]),
+    // A call jq never compiles, in a definition nothing calls: the file is
+    // read through the cleaned text, not handed to the engine as it is.
+    c("null", &["-c", "-f", "unreach.jq"]),
     c("", &["-nc", "--rawfile", "r", "f1.json", "$r"]),
     c("", &["-nc", "--slurpfile", "s", "f1.json", "$s"]),
     // jq treats several files as ONE stream; jaq runs the program once per
@@ -1874,6 +1936,7 @@ fn write_fixtures(dir: &std::path::Path) {
         ("f2.json", r#"{"a":2}"#),
         ("filt.jq", ".a\n"),
         ("filt2.jq", "[tostream]\n"),
+        ("unreach.jq", "def f: isnumber; 1\n"),
         ("-5", "[5]"),
         ("l1.json", "1\n2\n\"x\"\n"),
         ("l2.json", "{\"a\":1}\n\n\"y\"\n3\n"),

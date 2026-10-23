@@ -88,21 +88,21 @@ def flatten($d): if $d > 0 then map(if _isarray then flatten($d-1) else [.] end)
 def _capture_of_match: map(select(.name) | { (.name): .string} ) | add + {};
 
 def    test(re; flags): _matches(re; flags) | any;
-def    scan(re; flags): _matches(re; flags)[] | .[0].string;
+def    scan($re; $flags): _matches($re; $flags)[] | .[0].string;
 def   match(re; flags): _matches(re; flags)[] | .[0] + { captures: .[1:] };
 def capture(re; flags): _matches(re; flags)[] | _capture_of_match;
 
 def split($sep):
   if _isstring and ($sep | _isstring) then . / $sep
   else error("split input and separator must be strings") end;
-def split (re; flags): _split_(re; flags + "g");
-def splits(re; flags): split(re; flags)[];
+def split ($re; $flags): _split_($re; $flags + "g");
+def splits($re; $flags): split($re; $flags)[];
 
-def sub(re; f; flags):
+def sub($re; f; $flags):
   def handle: if _isarray then _capture_of_match | f end;
-  reduce _split_matches(re; flags)[] as $x (""; . + ($x | handle));
+  reduce _split_matches($re; $flags)[] as $x (""; . + ($x | handle));
 
-def gsub(re; f; flags): sub(re; f; "g" + flags);
+def gsub($re; f; flags): sub($re; f; "g" + flags);
 
 def    test(re):    test(re; "");
 def    scan(re):    scan(re; "");

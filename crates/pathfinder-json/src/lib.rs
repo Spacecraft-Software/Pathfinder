@@ -165,6 +165,19 @@ fn rc_unwrap_or_clone<T: Clone>(a: Rc<T>) -> T {
 }
 
 impl jaq_core::ValT for Val {
+    fn jq_absent(&self, index: &Self) -> bool {
+        match (self, index) {
+            (Val::Null, _) => true,
+            (Val::Obj(o), Val::BStr(_) | Val::TStr(_)) => !o.contains_key(index),
+            (Val::Arr(a), Val::Num(n)) => {
+                // NaN is neither: `map_index` raises jq's error for it.
+                let (t, len) = (n.as_f64().trunc(), a.len() as f64);
+                t >= len || -t > len
+            }
+            _ => false,
+        }
+    }
+
     fn jq_type(&self) -> &'static str {
         match self {
             Self::Null => "null",
@@ -375,9 +388,17 @@ impl jaq_core::ValT for Val {
         opt: path::Opt,
         f: impl Fn(Self) -> I,
     ) -> ValX<'a> {
-        // Pathfinder: jq updates a slice of `null` as of an empty array.
+        // Pathfinder: jq updates a slice of `null` from `null`: nothing
+        // leaves it `null`, an array replaces it, anything else fails.
         if let Val::Null = self {
-            self = Val::Arr(Rc::default());
+            return match f(Val::Null).next().transpose()? {
+                None => Ok(Val::Null),
+                Some(Val::Arr(a)) => Ok(Val::Arr(a)),
+                Some(_) => opt.fail(Val::Null, |_| {
+                    let e = "A slice of an array can only be assigned another array";
+                    Exn::from(Error::str(e))
+                }),
+            };
         }
         let fs = |b: Bytes, range, skip_take: SkipTakeFn, from: ValBytesFn, into: BytesValFn| {
             let (skip, take) = match Self::range_int(range) {

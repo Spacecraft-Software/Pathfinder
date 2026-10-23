@@ -139,13 +139,15 @@ yields!(
 yields!(
     math_2_argument_filters,
     "[pow(0.25, 4, 9; 1, 0.5, 2)]",
-    [0.25, 0.5, 0.0625, 4.0, 2.0, 16.0, 9.0, 3.0, 81.0]
+    // jq 1.8.1's order: a C builtin's last argument runs outermost.
+    [0.25, 4.0, 9.0, 0.5, 2.0, 3.0, 0.0625, 16.0, 81.0]
 );
 
 yields!(
     math_3_argument_filters,
     "[fma(2, 1; 3, 4; 4, 5)]",
-    [10.0, 11.0, 12.0, 13.0, 7.0, 8.0, 8.0, 9.0]
+    // jq 1.8.1's order, as for `pow`.
+    [10.0, 7.0, 12.0, 8.0, 11.0, 8.0, 13.0, 9.0]
 );
 
 #[test]

@@ -36,7 +36,7 @@ where
                 Ok([path.into_iter().rev().collect(), v].into_iter().collect())
             }))
         }),
-        ("range", v(3), |mut cv| {
+        ("_range", v(3), |mut cv| {
             let by = cv.0.pop_var();
             let to = cv.0.pop_var();
             let from = cv.0.pop_var();

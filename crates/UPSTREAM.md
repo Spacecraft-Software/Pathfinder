@@ -475,6 +475,14 @@ changes land once, in the crates, not in `packaging/jaq/`.
   jq's `jvp_utf8_next` reads them (`jq_lossy_utf8`). `format/1`, a C
   builtin in jq, is defined in `pathfinder-all`'s new `defs.jq`, the one
   place that sees `jaq_fmts`'s `@csv`/`@tsv`.
+- jq's evaluation order (PR #19's review): an error of a binary operator's
+  right operand is raised before the left runs (`cartesian_rl`); natives
+  bind their arguments last outermost, as jq calls its C builtins
+  (`bind_native`; `range/3` is `_range` behind a definition, `scan`,
+  `split`, `splits`, `sub` and `gsub` bind `$` parameters as jq's do); an
+  update to nothing through an absent child leaves it absent
+  (`ValT::jq_absent`); a slice of `null` is updated from `null`;
+  `setpath` is the native `_setpath`, which owns its input.
 
 ## Licence of Pathfinder's changes
 

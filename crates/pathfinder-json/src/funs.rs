@@ -2,9 +2,9 @@ use crate::{read, Error, Val, ValR};
 use alloc::{boxed::Box, string::ToString, vec::Vec};
 use bstr::ByteSlice;
 use bytes::{BufMut, Bytes, BytesMut};
-use jaq_core::box_iter::BoxIter;
+use jaq_core::box_iter::{box_once, BoxIter};
 use jaq_core::native::{bome, run, unary, v, Filter, Fun};
-use jaq_core::{DataT, RunPtr};
+use jaq_core::{DataT, Exn, RunPtr};
 use jaq_std::ValT as _;
 
 impl Val {
@@ -174,6 +174,16 @@ pub fn funs<D: for<'a> DataT<V<'a> = Val>>() -> impl Iterator<Item = Fun<D>> {
 fn base<D: for<'a> DataT<V<'a> = Val>>() -> Box<[Filter<RunPtr<D>>]> {
     Box::new([
         ("_delpaths", v(1), |cv| unary(cv, delpaths)),
+        // Pathfinder: `getpath($path) = $x` on the input it owns, so no
+        // second reference makes each step copy it (`fromstream`, `reduce`).
+        ("_setpath", v(2), |mut cv| {
+            let x = cv.0.pop_var();
+            let path = cv.0.pop_var();
+            box_once(match path {
+                Val::Arr(path) => setpath(cv.1, &path, &x),
+                _ => Err(Exn::from(Error::str("Path must be specified as an array"))),
+            })
+        }),
         // Pathfinder: exactly one value, with jq 1.8.1's error messages.
         ("fromjson", v(0), |cv| {
             let parse = |s: &[u8]| read::parse_jq_single(s).map_err(Error::str);
@@ -359,6 +369,16 @@ fn dels(v: Val, keys: &[Val]) -> ValR {
 
 /// Pathfinder: jq 1.8.1's `has`: an object takes a string key, an array a
 /// number (truncated; NaN is no index), `null` has nothing.
+/// `v | getpath(path) = x`: each step is the update `.[k] |= …` makes.
+fn setpath<'a>(v: Val, path: &[Val], x: &Val) -> jaq_core::ValX<'a, Val> {
+    match path.split_first() {
+        None => Ok(x.clone()),
+        Some((k, rest)) => jaq_core::ValT::map_index(v, k, jaq_core::path::Opt::Essential, |c| {
+            core::iter::once(setpath(c, rest, x))
+        }),
+    }
+}
+
 fn has(v: Val, k: Val) -> ValR {
     use jaq_core::ValT;
     let fail = || {

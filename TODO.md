@@ -50,6 +50,7 @@ and keep it for the jaq engine until P-078.
 - [x] T-027 (P-066) The engine's builtins are jq 1.8.1's: names jq lacks removed, the polyfilled ones defined natively (the 28 engine-only names are refused as jq refuses them; the polyfills remain)
 - [x] T-029 (P-065) `def f($a): …` binds `a` as a filter too, as jq's desugaring `def f(a): a as $a | …` does; jaq leaves `a` undefined
 - [x] T-028 (P-067) The native engine's prelude holds only definitions jq's `builtin.jq` has, each justified; `input_filename` from the driver as jq answers it (done: `input_filename`)
+- [ ] T-030 jq's internal builtins a filter may call (`_plus/2`, `_modify/2`, `_negate/0`, `_sort_by_impl/1`, …; `check::JQ_INTERNAL`) defined in the engine, which reports them undefined (optional)
 
 ## Standing
 
