@@ -336,6 +336,18 @@ crate would be. Two ways to repair it in the sources: move `halt_error` into
 `pathfinder-json/src/defs.jq`, next to `tojson`, or merge the crates when the
 engine's crate layout is settled.
 
+## jaq 3.1.2 (the packaged engine)
+
+Bravais's nixpkgs moved to jaq 3.1.2 (2026-10-23), and patch `0008` stopped
+applying. The patch commits were replayed onto 3.1.2 in jaq's source tree:
+3.1.2 passes `input_filename` to `jaq_all::data::run` and keeps it in `Data`
+(the CLI hunks now pass `Val::Null` there, the patched CLI's
+`$!input_filename` binding still answering), rounds with helpers of its
+own (`0010` merged), and fixed the lexer bug of `0016` itself. `0008`,
+`0010` and `0015` have 3.1.2 cuts, applied without fuzz; on the patched
+3.1.2 the suites pass at 815/820, the same five failures as on 3.1.1. The
+in-tree crates stay on 3.1.1.
+
 ## M19: the CLI as a library
 
 M19 (PLAN P-055–P-057) runs the engine in the `pathfinder` binary's own
