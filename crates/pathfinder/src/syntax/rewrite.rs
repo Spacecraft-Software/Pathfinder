@@ -142,6 +142,7 @@ impl Rewrites {
         slice: false,
         assignment: false,
         delete: false,
+        decoders: false,
         ..Self::ALL
     };
 }

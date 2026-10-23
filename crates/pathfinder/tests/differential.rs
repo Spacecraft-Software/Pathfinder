@@ -868,6 +868,30 @@ static PATCHED_STDERR_CASES: &[Case] = &[
 /// file it has open, where the jaq engine's prelude can only define a
 /// constant `input_filename`.
 static NATIVE_CASES: &[Case] = &[
+    // `@base64d` and `@urid` are jq's in the engine (M20, P-067); bytes that
+    // are not UTF-8 become U+FFFD as jq's `jvp_utf8_next` reads them, which
+    // a jaq binary does not do.
+    c(
+        "null",
+        &[
+            "-c",
+            "[null, 123, \"/w==\", \"6WVl\", \"4oI=\", \"8J+Y\", \"7aCA\", \"wIA=\", \"4oJBQQ==\", \"4ICA\", \"9JCAgA==\", \"+A==\", \"8J+YgA==\"] | map(@base64d | explode)",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "[\"QR\", \"QQ==!!\", \"=QQ\", \"Q\", \"QUJDQ\", \"Q!Q=\", \"QUJD QUJD\"] | map(try @base64d catch .)",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "[\"%e2%82%ac\", \"%C0%80\", \"%ED%A0%80\", \"%F4%90%80%80\", \"%%41\", \"a%41%\", \"%EF%BF%BD\", 12] | map(try @urid catch .)",
+        ],
+    ),
     // Native builtins with jq's semantics and messages (M20, T-027):
     // `has`, `tonumber`, `toboolean`, `utf8bytelength`, `bsearch`, `trim`,
     // `from_entries`, objects with non-string keys.

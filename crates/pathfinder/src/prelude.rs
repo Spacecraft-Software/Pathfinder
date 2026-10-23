@@ -1111,6 +1111,8 @@ impl Context {
 /// name as jq does (PLAN M20). An entry joins in the change that gives the
 /// engine the behaviour, with the differential cases that pin it; the jaq
 /// engine keeps the definition until its path is removed (P-078).
+/// What the native engine still takes, and why, is the tests'
+/// `KEPT_ON_NATIVE`: a polyfill or repair is in exactly one of the two.
 pub static NATIVE: &[&str] = &[
     // The driver answers from its reader's position: `null` before any
     // input is read, then the file the reader has open (`jq::Position`).
@@ -1162,6 +1164,8 @@ pub static NATIVE: &[&str] = &[
     // jq 1.8.1's definitions, in `pathfinder-json`'s `defs.jq`.
     "from_entries",
     "with_entries",
+    // jq 1.8.1's `format` (a C builtin), in `pathfinder-json`'s `defs.jq`.
+    "format",
 ];
 
 fn find<'a>(name: &str, table: &'a [Def]) -> Option<&'a Def> {
@@ -1336,7 +1340,73 @@ pub fn known_names() -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Context, inexpressible, json_string, known_names, render};
+    use super::{
+        Context, INTERNAL, NATIVE, POLYFILLS, REPAIRS, inexpressible, json_string, known_names,
+        render,
+    };
+
+    /// What the native engine still takes from the prelude, and why (P-067).
+    /// Everything else in [`POLYFILLS`] and [`REPAIRS`] is in [`NATIVE`].
+    const KEPT_ON_NATIVE: &[&str] = &[
+        // A table of some 230 names, emitted only when a filter names it;
+        // in the engine's definitions it would be compiled on every run.
+        "builtins",
+        // The engine's regex is not Oniguruma; M22 replaces it.
+        "match",
+        "test",
+        "capture",
+        "scan",
+        "sub",
+        "gsub",
+        // The engine's time builtins are not C's; M23 replaces them.
+        "mktime",
+        "strftime",
+        "strflocaltime",
+        "todate",
+        "todateiso8601",
+    ];
+
+    #[test]
+    fn every_prelude_entry_is_native_or_kept_for_a_reason() {
+        for def in POLYFILLS.iter().chain(REPAIRS) {
+            assert!(
+                NATIVE.contains(&def.name) != KEPT_ON_NATIVE.contains(&def.name),
+                "{} must be in exactly one of NATIVE and KEPT_ON_NATIVE",
+                def.name
+            );
+        }
+    }
+
+    #[test]
+    fn the_native_engine_takes_only_the_helpers_of_what_it_keeps() {
+        // `_pf_modify` is the one rewrite still on for the native engine
+        // (`Rewrites::comma_update`): jq defers the deletions of an update
+        // of several paths to the end, which the engine's update does not.
+        let mut wanted = want(KEPT_ON_NATIVE);
+        wanted.push("_pf_modify".to_owned());
+        let ctx = Context {
+            native: true,
+            regex_literals: vec!["(a)".to_owned()],
+            ..Context::default()
+        };
+        let out = render(&wanted, &ctx);
+        let used: Vec<&str> = INTERNAL
+            .iter()
+            .map(|d| d.name)
+            .filter(|n| out.contains(&format!("def {n}")) || out.contains(&format!("as ${n}")))
+            .collect();
+        assert!(used.contains(&"_pf_modify") && used.contains(&"_pf_pad_tm"));
+        for gone in [
+            "_pf_base64d",
+            "_pf_urid",
+            "_pf_err",
+            "_pf_neg",
+            "_pf_vivify",
+            "_pf_assign",
+        ] {
+            assert!(!used.contains(&gone), "{gone} reaches the native engine");
+        }
+    }
 
     fn want(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| (*s).to_owned()).collect()

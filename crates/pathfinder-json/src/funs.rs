@@ -203,6 +203,11 @@ fn base<D: for<'a> DataT<V<'a> = Val>>() -> Box<[Filter<RunPtr<D>>]> {
                 Ok(Val::from(x.contains(&y)))
             })
         }),
+        // Pathfinder: the value as jq's error messages show it, for the
+        // messages `defs.jq` raises.
+        ("_jq_quoted", v(0), |cv| {
+            bome(Ok(Val::from(jaq_core::ValT::jq_quoted(&cv.1))))
+        }),
         ("has", v(1), |cv| unary(cv, has)),
         ("tonumber", v(0), |cv| bome(tonumber(cv.1))),
         ("toboolean", v(0), |cv| bome(toboolean(cv.1))),

@@ -745,23 +745,125 @@ where
         ("_encode_uri", v(0), |cv| {
             bome(cv.1.map_utf8_str(|s| urlencoding::encode_binary(s).to_string()))
         }),
-        ("_decode_uri", v(0), |cv| {
-            bome(cv.1.map_utf8_str(|s| urlencoding::decode_binary(s).to_vec()))
-        }),
+        // Pathfinder: jq's `@urid` (M20, P-067).
+        ("_decode_uri", v(0), |cv| bome(jq_decode_uri(cv.1))),
         ("_encode_base64", v(0), |cv| {
             use base64::{engine::general_purpose::STANDARD, Engine};
             bome(cv.1.map_utf8_str(|s| STANDARD.encode(s)))
         }),
-        ("_decode_base64", v(0), |cv| {
-            use base64::{engine::general_purpose::STANDARD, Engine};
-            bome(cv.1.try_as_utf8_bytes().and_then(|s| {
-                STANDARD
-                    .decode(s)
-                    .map_err(Error::str)
-                    .map(ValT::from_utf8_bytes)
-            }))
-        }),
+        // Pathfinder: jq's `@base64d` (M20, P-067).
+        ("_decode_base64", v(0), |cv| bome(jq_decode_base64(cv.1))),
     ])
+}
+
+/// Pathfinder: jq's `@base64d`. jq decodes up to the first `=` and ignores
+/// the rest, accepts missing padding and ignores the unused low bits of the
+/// last character (`"QR"` is `"A"`); it rejects only a character outside
+/// the standard alphabet before the `=`, or a single leftover character.
+/// Bytes that are not UTF-8 are replaced as jq replaces them.
+#[cfg(feature = "format")]
+fn jq_decode_base64<V: ValT>(v: V) -> ValR<V> {
+    let s = v.try_as_utf8_bytes()?;
+    let text = s.split(|&c| c == b'=').next().unwrap_or_default();
+    let sextet = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let fail = |what| Err(Error::str(alloc::format!("{} {what}", v.jq_quoted())));
+    let Some(sextets) = text.iter().map(|&c| sextet(c)).collect::<Option<Vec<u8>>>() else {
+        return fail("is not valid base64 data");
+    };
+    if sextets.len() % 4 == 1 {
+        return fail("trailing base64 byte found");
+    }
+    let mut bytes = Vec::with_capacity(sextets.len() / 4 * 3 + 2);
+    for group in sextets.chunks(4) {
+        let word = group
+            .iter()
+            .enumerate()
+            .fold(0u32, |w, (i, &x)| w | u32::from(x) << (18 - 6 * i));
+        // Two characters make one byte, three make two, four make three.
+        let [_, b0, b1, b2] = word.to_be_bytes();
+        bytes.extend_from_slice(&[b0, b1, b2][..group.len() - 1]);
+    }
+    Ok(V::from_utf8_bytes(jq_lossy_utf8(&bytes)))
+}
+
+/// Pathfinder: jq's `@urid`: a `%` must be followed by two hex digits, and
+/// the decoded bytes must be UTF-8.
+#[cfg(feature = "format")]
+fn jq_decode_uri<V: ValT>(v: V) -> ValR<V> {
+    let s = v.try_as_utf8_bytes()?;
+    if !s.contains(&b'%') {
+        return Ok(v);
+    }
+    let hex = |c: u8| char::from(c).to_digit(16);
+    let mut bytes = Vec::with_capacity(s.len());
+    let mut i = 0;
+    let decoded = loop {
+        match s.get(i..) {
+            Some([b'%', high, low, ..]) => match (hex(*high), hex(*low)) {
+                (Some(high), Some(low)) => {
+                    bytes.push((high << 4 | low) as u8);
+                    i += 3;
+                }
+                _ => break None,
+            },
+            Some([b'%', ..]) => break None,
+            Some([c, ..]) => {
+                bytes.push(*c);
+                i += 1;
+            }
+            _ => break core::str::from_utf8(&bytes).is_ok().then_some(()),
+        }
+    };
+    match decoded {
+        Some(()) => Ok(V::from_utf8_bytes(bytes)),
+        None => Err(Error::str(alloc::format!(
+            "{} is not a valid uri encoding",
+            v.jq_quoted()
+        ))),
+    }
+}
+
+/// Pathfinder: bytes as jq makes a string of them (`jvp_utf8_next`): each
+/// sequence that is not UTF-8 becomes one U+FFFD. A stray continuation byte
+/// or a byte no sequence starts with is one sequence; a sequence cut short
+/// by a byte that does not continue it ends before that byte; one cut short
+/// by the end of the input runs to the end; an overlong form, a surrogate or
+/// a code point past U+10FFFF is one sequence of its full length.
+#[cfg(feature = "format")]
+fn jq_lossy_utf8(mut bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    while !bytes.is_empty() {
+        let valid = match core::str::from_utf8(bytes) {
+            Ok(_) => bytes.len(),
+            Err(e) => e.valid_up_to(),
+        };
+        out.extend_from_slice(&bytes[..valid]);
+        bytes = &bytes[valid..];
+        let Some(&first) = bytes.first() else { break };
+        let length = match first {
+            0xC2..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF4 => 4,
+            _ => 1,
+        };
+        let length = if length > bytes.len() {
+            bytes.len()
+        } else {
+            (1..length)
+                .find(|&i| bytes[i] & 0xC0 != 0x80)
+                .unwrap_or(length)
+        };
+        out.extend_from_slice("\u{FFFD}".as_bytes());
+        bytes = &bytes[length..];
+    }
+    out
 }
 
 #[cfg(feature = "math")]

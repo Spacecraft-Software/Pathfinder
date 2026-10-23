@@ -104,9 +104,15 @@ pub fn compile_with<D: DataT>(
         .map_err(compile_errors)
 }
 
-/// Definitions from `jaq_core`, `jaq_std` and `jaq_json`.
+/// Definitions from `jaq_core`, `jaq_std` and `jaq_json`, and Pathfinder's
+/// that need all of them (`defs.jq`).
 pub fn defs() -> impl Iterator<Item = Def> {
     jaq_core::defs()
         .chain(jaq_std::defs())
         .chain(jaq_json::defs())
+        .chain(
+            // A constant source: failing to parse it is a bug in this crate.
+            jaq_core::load::parse(include_str!("defs.jq"), |p| p.defs())
+                .expect("pathfinder-all's defs.jq parses"),
+        )
 }

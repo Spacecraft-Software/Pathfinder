@@ -468,6 +468,13 @@ changes land once, in the crates, not in `packaging/jaq/`.
   does not define) are renamed with a leading `_` in the engine's natives,
   definitions and tests, so a filter cannot reach them even where the
   front end does not check; `@htmld`, which jq lacks, is gone.
+- `@base64d` and `@urid` are jq's (P-067): `@base64d` decodes up to the
+  first `=`, ignores missing padding and unused low bits, and raises jq's
+  two messages; `@urid` rejects a malformed `%` escape and bytes that are
+  not UTF-8. Bytes `@base64d` yields that are not UTF-8 become U+FFFD as
+  jq's `jvp_utf8_next` reads them (`jq_lossy_utf8`). `format/1`, a C
+  builtin in jq, is defined in `pathfinder-all`'s new `defs.jq`, the one
+  place that sees `jaq_fmts`'s `@csv`/`@tsv`.
 
 ## Licence of Pathfinder's changes
 
