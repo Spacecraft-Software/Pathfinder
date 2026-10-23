@@ -272,21 +272,36 @@ impl<'s> Cx<'s> {
         })
     }
 
+    /// A definition. jq compiles `def f($a): body` as
+    /// `def f(a): a as $a | body`, so `a` is a filter in the body too; the
+    /// engine binds only `$a`. Where the body calls `a`, the definition is
+    /// written out as jq's, binding the values in order, the first outermost.
     fn def(&self, def: &FuncDef, near: Span) -> Option<Def<&'s str>> {
         let name = self.spelled(&def.name, near)?;
+        let as_filter = def.params.iter().any(|p| match p {
+            Param::Value(v) => calls(&def.body, v),
+            Param::Filter(_) => false,
+        });
         let args = def
             .params
             .iter()
             .map(|p| match p {
                 Param::Filter(f) => self.spelled(f, near),
+                Param::Value(v) if as_filter => self.spelled(v, near),
                 Param::Value(v) => self.binder(v, near),
             })
-            .collect::<Option<_>>()?;
-        Some(Def {
-            name,
-            args,
-            body: self.term(&def.body)?,
-        })
+            .collect::<Option<Vec<_>>>()?;
+        let mut body = self.term(&def.body)?;
+        if as_filter {
+            for p in def.params.iter().rev() {
+                if let Param::Value(v) = p {
+                    let call = Term::Call(self.spelled(v, near)?, Vec::new());
+                    let var = JPattern::Var(self.binder(v, near)?);
+                    body = Term::BinOp(Box::new(call), BinaryOp::Pipe(Some(var)), Box::new(body));
+                }
+            }
+        }
+        Some(Def { name, args, body })
     }
 
     fn pattern(&self, p: &Pattern, near: Span) -> Option<JPattern<&'s str>> {
@@ -297,26 +312,38 @@ impl<'s> Cx<'s> {
                     .map(|p| self.pattern(p, near))
                     .collect::<Option<_>>()?,
             ),
-            Pattern::Object(ps) => JPattern::Obj(
-                ps.iter()
-                    .map(|p| self.obj_pattern(p, near))
-                    .collect::<Option<_>>()?,
-            ),
+            Pattern::Object(ps) => {
+                let mut entries = Vec::new();
+                for p in ps {
+                    self.obj_pattern(p, near, &mut entries)?;
+                }
+                JPattern::Obj(entries)
+            }
         })
     }
 
-    fn obj_pattern(&self, p: &ObjPat, near: Span) -> Option<(Term<&'s str>, JPattern<&'s str>)> {
-        Some(match p {
+    fn obj_pattern(
+        &self,
+        p: &ObjPat,
+        near: Span,
+        out: &mut Vec<(Term<&'s str>, JPattern<&'s str>)>,
+    ) -> Option<()> {
+        match p {
             // `{$a}` binds `$a` to `.a`.
             ObjPat::Var(v) => {
                 let var = self.binder(v, near)?;
-                (literal(&var[1..]), JPattern::Var(var))
+                out.push((literal(&var[1..]), JPattern::Var(var)));
             }
-            // `{$a: p}` binds `$a` to `.a` and destructures it with `p`;
-            // jaq has no such entry, so the object is matched twice.
-            ObjPat::VarPattern(..) => return None,
-            ObjPat::Key(k, p) => (self.obj_key(k, near)?, self.pattern(p, near)?),
-        })
+            // `{$a: p}` binds `$a` to `.a` and destructures it with `p`: the
+            // engine has no such entry, so `.a` is matched twice.
+            ObjPat::VarPattern(v, p) => {
+                let var = self.binder(v, near)?;
+                out.push((literal(&var[1..]), JPattern::Var(var)));
+                out.push((literal(&var[1..]), self.pattern(p, near)?));
+            }
+            ObjPat::Key(k, p) => out.push((self.obj_key(k, near)?, self.pattern(p, near)?)),
+        }
+        Some(())
     }
 
     fn obj_key(&self, k: &ObjKey, near: Span) -> Option<Term<&'s str>> {
@@ -416,6 +443,12 @@ fn unicode(after: &str) -> Option<(char, usize)> {
         0xDC00..=0xDFFF => Some(('\u{FFFD}', 6)),
         c => Some((char::from_u32(c)?, 6)),
     }
+}
+
+/// Whether `node` calls `name` with no arguments anywhere.
+fn calls(node: &Node, name: &str) -> bool {
+    matches!(&node.kind, Kind::Call { name: n, args } if n == name && args.is_empty())
+        || node.children().into_iter().any(|c| calls(c, name))
 }
 
 /// A string literal without escapes: an object key, a field name.

@@ -56,9 +56,13 @@ and keep it for the jaq engine until P-078.
 
 - [x] T-031 (P-068) jaq's loader takes the main module's parser as a parameter (`jaq::Cli`); jaq's parser stays the fallback for what Pathfinder's passes through
 - [x] T-032 (P-068) Pathfinder's syntax tree converts to the engine's terms for every construct, as slices of the program text so positions stay true; the native engine compiles from it, and the suites pass unchanged
-- [ ] T-033 (P-068) The rewrites that only steer jaq's parser (a leading `-`, `.[a].[b]`, …) are off for the native engine
+- [x] T-033 (P-068) The rewrites that only steer jaq's parser (a leading `-`, `.[a].[b]`, …) are off for the native engine
 - [ ] T-034 (P-069) Syntax errors are reported as jq reports them: `syntax error, unexpected …` with jq's position and exit 3
 - [ ] T-035 (P-070) `import`/`include` modules parsed by Pathfinder's parser too (optional)
+
+## M23 — Numbers and the remaining gaps
+
+- [ ] T-036 (P-073) A literal prints as jq's decNumber prints it: `1.` is `1`, `1.0` stays `1.0` (measured: `[.5, 1., 1.e2, 00012]` is `[0.5,1,1E+2,12]` in jq, `1.` here)
 
 ## Standing
 
