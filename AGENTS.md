@@ -206,6 +206,25 @@ print. To keep the `jq` name untouched:
   fails at `.a`); after anything else, a second `?` included, it is `try`.
   `PATHFINDER_FRONT_END=jaq` puts jaq's parser back, to compare the two.
 
+- **A syntax error is found by jq's own grammar** (M21, P-069,
+  `syntax/jq_errors.rs`): bison 3.8's driver over the tables bison generated
+  for jq 1.8.1 (`syntax/jq_tables.rs`, written by `tools/jq-tables.py` from
+  jq's release tarball, then `rustfmt`; never edited), fed by a port of
+  `lexer.l`. It runs on every program first, so a program is a syntax error
+  exactly when jq's grammar says so, worded and located as jq does
+  (`unexpected X, expecting …`, the error rules' `Possibly unterminated
+  'if' statement`, the lexer's `Invalid escape …`), and an accepted program
+  with no main expression is `Top-level program not given`. Every lexer
+  match, whitespace and comments included, moves the location, as jq's
+  `YY_USER_ACTION` does. The semantic errors jq raises inside a parse that
+  also has a syntax error (a constant non-string key, module metadata) are
+  not reported with it; module loading errors are jaq's (T-035).
+- **Undefined names are reported in jq's compile order** (`check::Levels`):
+  a function body's own names in its instruction order (an index's key
+  before its base, a `reduce`'s init before its source, a C builtin's
+  arguments inline, `jq_tables::C_BUILTINS`), then its closures (another
+  call's arguments, both sides of `=`/`|=`, the target of `op=`) and
+  definitions, in order, only if the body had no error itself.
 - **The grammar is jq's.** `parse.rs` mirrors `src/parser.y`'s rules and
   precedence, `lex.rs` mirrors `src/lexer.l`. Validate a grouping change with
   `PATHFINDER_DEBUG_REPRINT=1 make conformance`, which runs the whole suite
@@ -413,6 +432,7 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
 | `crates/pathfinder/src/syntax/lex.rs`, `parse.rs` | jq's lexer and grammar, transcribed. Every node keeps its span. |
 | `crates/pathfinder/src/regex.rs` | Facts about literal regexes for the regex repairs: group naming (mirrors the prelude's run-time scan), whether a group can be skipped, whether the regex can match empty. |
 | `crates/pathfinder/src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
+| `crates/pathfinder/src/syntax/jq_errors.rs`, `jq_tables.rs` | jq's syntax errors: its lexer ported, and bison's driver over jq 1.8.1's generated tables (`tools/jq-tables.py`). |
 | `crates/pathfinder/src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
 | `crates/pathfinder/src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
 | `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`, path expressions, `l // r` as a path, `%`, parse errors, lazy input reading, file names in error locations, a comment at the end of the program), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); Bravais builds whatever its own nixpkgs has, by making this flake follow it, so every jaq it may carry needs a cut that applies without fuzz. `0008`, `0013` and `0015` have a 3.1.0 cut (3.1.0's `real_main` differs on the lines they replace); `0008`, `0010` and `0015` have a 3.1.2 cut (3.1.2 passes `input_filename` to `run` and rounds with its own helpers); `0016` is skipped from 3.1.2, which fixed the same bug the same way. `cut` in `default.nix` picks by version. When nixpkgs moves jaq, replay the patch commits onto the new release in jaq's source tree, apply the old cuts with `patch -p1` and cut anew only those that fail or fuzz. MIT for jaq's text, Pathfinder's changes GPL-3.0-or-later OR MIT; never sent upstream. |
@@ -422,6 +442,7 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
 | `crates/pathfinder/tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
 | `crates/pathfinder/tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
 | `crates/pathfinder/tests/native.rs` | The native surface: mode cascade, JSON shapes, exit codes, and that the `jq` name is unchanged under an agent environment. |
+| `tools/jq-tables.py` | Writes `jq_tables.rs` from jq 1.8.1's `src/` (parser tables, C builtins). |
 | `fuzz/` | `cargo fuzz` targets for jq's argv, the front end, and evaluation through the engine crates; see Fuzzing. Its own Cargo root. |
 | `SKILL.md` | Agent-facing description of the shim. Frontmatter first, so its licence is in `REUSE.toml`; keep `description` ≤ 1000 rendered characters. |
 

@@ -61,8 +61,8 @@ the same change.
 
 ## M21 — One parser
 
-- [ ] P-068 The engine compiles from Pathfinder's jq syntax tree (`src/syntax/`), not jaq's loader
-- [ ] P-069 jq's compile errors, with jq's wording and positions
+- [x] P-068 The engine compiles from Pathfinder's jq syntax tree (`src/syntax/`), not jaq's loader
+- [x] P-069 jq's compile errors, with jq's wording and positions
 - [ ] P-070 Modules: `import`, `include`, search paths and `modulemeta` as jq 1.8.1 has them (optional)
 
 ## M22 — Regular expressions

@@ -230,6 +230,12 @@ fn compile_error(src: &str, header_end: usize, named: &[String]) -> Option<Compi
     if std::env::var_os(crate::syntax::rewrite::NO_REWRITE_ENV).is_some() {
         return None;
     }
+    // jq's own grammar first: a syntax error is all jq reports.
+    let mut syntax = crate::syntax::jq_errors::syntax_errors(src).into_iter();
+    if let Some(mut first) = syntax.next() {
+        first.more = syntax.collect();
+        return Some(first);
+    }
     if let Some(e) = check::module_header(src) {
         return Some(e);
     }

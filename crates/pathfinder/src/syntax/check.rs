@@ -31,7 +31,8 @@
 use super::lex::{Kw, StrPart, Tok, Token, lex};
 use super::parse::parse;
 use super::{
-    FuncDef, Kind, Node, ObjKey, ObjPair, ObjPat, ObjShort, Param, Pattern, Span, StrLit, StrSeg,
+    FieldName, FuncDef, Kind, Node, ObjKey, ObjPair, ObjPat, ObjShort, Param, Pattern, Span,
+    StrLit, StrSeg,
 };
 use std::fmt::Write as _;
 use std::rc::Rc;
@@ -46,6 +47,9 @@ pub struct CompileError {
 }
 
 impl CompileError {
+    /// jq's `UNKNOWN_LOCATION`: an error reported without a place.
+    pub const UNLOCATED: Span = Span::new(usize::MAX, usize::MAX);
+
     /// jq's rendering: the message with its location, the source line, and a
     /// caret under the offending text.
     pub fn render(&self, prog: &str, src: &str) -> String {
@@ -60,22 +64,32 @@ impl CompileError {
         out
     }
 
-    /// One error's lines, without jq's closing count.
+    /// One error's lines, without jq's closing count, as jq's
+    /// `locfile_locate` writes them: the column counts bytes, and the carets
+    /// run to the span's end on its first line, at least one past its start.
     fn render_one(&self, prog: &str, src: &str) -> String {
-        let start = self.span.start.min(src.len());
-        let line_start = src[..start].rfind('\n').map_or(0, |i| i + 1);
-        let line_end = src[start..].find('\n').map_or(src.len(), |i| start + i);
-        let line = src[..start].matches('\n').count() + 1;
-        let column = src[line_start..start].chars().count() + 1;
-        let width = src[start..self.span.end.clamp(start, line_end)]
-            .chars()
-            .count()
-            .max(1);
+        if self.span == Self::UNLOCATED {
+            return format!("{prog}: error: {}\n", self.message);
+        }
+        let b = src.as_bytes();
+        let start = self.span.start.min(b.len());
+        let line_start = b[..start]
+            .iter()
+            .rposition(|&c| c == b'\n')
+            .map_or(0, |i| i + 1);
+        let line_end = b[start..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .map_or(b.len(), |i| start + i);
+        let line = b[..start].split(|&c| c == b'\n').count();
+        let end = self.span.end.min(line_end.max(start + 1));
+        let width = end.saturating_sub(start);
         format!(
-            "{prog}: error: {} at <top-level>, line {line}, column {column}:\n    {}\n    {}{}\n",
+            "{prog}: error: {} at <top-level>, line {line}, column {}:\n    {}\n    {}{}\n",
             self.message,
-            &src[line_start..line_end],
-            " ".repeat(column - 1),
+            start - line_start + 1,
+            String::from_utf8_lossy(&b[line_start..line_end]),
+            " ".repeat(start - line_start),
             "^".repeat(width),
         )
     }
@@ -168,19 +182,21 @@ const JQ_INTERNAL: &[(&str, usize)] = &[
 /// internal `_` builtins ([`JQ_INTERNAL`]), or a literal. The engine's own
 /// `_` helpers (`_isarray`, `_tobytes`, …) are none of these.
 fn defined_by_jq(name: &str, arity: usize) -> bool {
-    static BUILTINS: std::sync::OnceLock<Vec<(String, usize)>> = std::sync::OnceLock::new();
+    // A set: every call and every identifier token asks.
+    static BUILTINS: std::sync::OnceLock<std::collections::HashSet<(&'static str, usize)>> =
+        std::sync::OnceLock::new();
     let builtins = BUILTINS.get_or_init(|| {
         crate::prelude::JQ_BUILTINS
             .split('"')
             .filter_map(|entry| {
                 let (n, a) = entry.rsplit_once('/')?;
-                Some((n.to_owned(), a.parse().ok()?))
+                Some((n, a.parse().ok()?))
             })
             .collect()
     });
-    JQ_INTERNAL.contains(&(name, arity))
+    builtins.contains(&(name, arity))
+        || JQ_INTERNAL.contains(&(name, arity))
         || (arity == 0 && matches!(name, "true" | "false" | "null"))
-        || builtins.iter().any(|(n, a)| n == name && *a == arity)
 }
 
 /// Whether the tokens may call a name jq does not define: the cheap test
@@ -570,16 +586,302 @@ impl<'a> Walk<'a, '_> {
 /// `$name` parameter binds `name/0` too, as in jq). A variable is `$x is not
 /// defined`, a label `$*label-x is not defined`.
 pub fn undefined_calls(tree: &Node, src: &str, named: &[String]) -> Vec<CompileError> {
-    let (mut errors, mut spans) = (Vec::new(), Vec::new());
+    // Which definitions jq keeps: those something reachable calls.
+    let (mut ignored, mut spans) = (Vec::new(), Vec::new());
     let mut walk = Walk {
         mode: Mode::Reachable,
         seen: Vec::new(),
-        errors: &mut errors,
+        errors: &mut ignored,
         spans: &mut spans,
         src,
     };
-    walk.walk(tree, &None, &globals(named));
-    errors
+    let vars = globals(named);
+    walk.walk(tree, &None, &vars);
+    let mut levels = Levels {
+        reachable: walk.seen,
+        errors: Vec::new(),
+        src,
+    };
+    levels.function(tree, &None, &vars);
+    levels.errors
+}
+
+/// A function body jq compiles on its own: a definition's, or a closure's
+/// (an argument to anything but a C builtin, either side of `=`/`|=`, the
+/// target of `op=`).
+struct Pending<'a> {
+    body: &'a Node,
+    scope: Scope<'a>,
+    vars: Vars<'a>,
+}
+
+/// The order jq's `compile` reports undefined names in. Within one
+/// function body, the names are found in the order of its instructions,
+/// which is the source's except where jq's code generation reorders it (an
+/// index before its base, a `reduce`'s initial value before its source),
+/// and a C builtin's arguments are compiled inline. The function's
+/// closures and definitions are compiled after it, in order, and only if it
+/// had no error itself.
+struct Levels<'a> {
+    reachable: Vec<*const FuncDef>,
+    errors: Vec<CompileError>,
+    src: &'a str,
+}
+
+impl<'a> Levels<'a> {
+    fn function(&mut self, body: &'a Node, scope: &Scope<'a>, vars: &Vars<'a>) {
+        let before = self.errors.len();
+        let mut pending = Vec::new();
+        self.level(body, scope, vars, &mut pending);
+        if self.errors.len() == before {
+            for p in pending {
+                self.function(p.body, &p.scope, &p.vars);
+            }
+        }
+    }
+
+    fn undefined_var(&mut self, message: String, span: Span) {
+        self.errors.push(CompileError {
+            message,
+            span,
+            more: Vec::new(),
+        });
+    }
+
+    fn var_in(&mut self, name: &str, within: Span, vars: &Vars<'a>) {
+        if has_var(vars, name, false) {
+            return;
+        }
+        let written = format!("${name}");
+        let at = self
+            .src
+            .get(within.start..within.end)
+            .and_then(|t| t.find(&written))
+            .map_or(within, |i| {
+                Span::new(within.start + i, within.start + i + written.len())
+            });
+        self.undefined_var(format!("${name} is not defined"), at);
+    }
+
+    fn closure(body: &'a Node, scope: &Scope<'a>, vars: &Vars<'a>, pending: &mut Vec<Pending<'a>>) {
+        pending.push(Pending {
+            body,
+            scope: scope.clone(),
+            vars: vars.clone(),
+        });
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per construct jq orders its own way; the match is the index of them"
+    )]
+    fn level(
+        &mut self,
+        n: &'a Node,
+        scope: &Scope<'a>,
+        vars: &Vars<'a>,
+        pending: &mut Vec<Pending<'a>>,
+    ) {
+        match &n.kind {
+            Kind::Def { def, rest } => {
+                let inner = Some(bind(scope, &def.name, def.params.len(), Some(def), vars));
+                if self.reachable.contains(&std::ptr::from_ref(&**def)) {
+                    let (mut body_scope, mut body_vars) = (inner.clone(), vars.clone());
+                    for p in &def.params {
+                        let (Param::Filter(p) | Param::Value(p)) = p;
+                        body_scope =
+                            Some(bind(&body_scope, p.trim_start_matches('$'), 0, None, &None));
+                    }
+                    for p in &def.params {
+                        if let Param::Value(v) = p {
+                            body_vars =
+                                Some(bind_var(&body_vars, v.trim_start_matches('$'), false));
+                        }
+                    }
+                    pending.push(Pending {
+                        body: &def.body,
+                        scope: body_scope,
+                        vars: body_vars,
+                    });
+                }
+                self.level(rest, &inner, vars, pending);
+            }
+            Kind::Call { name, args } => {
+                let mut at = scope.as_ref();
+                while let Some(b) = at {
+                    if b.name == name && b.arity == args.len() {
+                        break;
+                    }
+                    at = b.outer.as_ref();
+                }
+                match at {
+                    None if !defined_by_jq(name, args.len()) => {
+                        // jq does not look into an unknown call's arguments.
+                        self.undefined_var(
+                            format!("{name}/{} is not defined", args.len()),
+                            Span::new(n.span.start, n.span.start + name.len()),
+                        );
+                    }
+                    None if super::jq_tables::C_BUILTINS
+                        .binary_search(&(name.as_str(), args.len()))
+                        .is_ok() =>
+                    {
+                        for a in args {
+                            self.level(a, scope, vars, pending);
+                        }
+                    }
+                    // A definition, a parameter, or a builtin jq defines in
+                    // jq: the arguments are closures.
+                    _ => {
+                        for a in args {
+                            Self::closure(a, scope, vars, pending);
+                        }
+                    }
+                }
+            }
+            Kind::Var(name) => {
+                if !has_var(vars, name, false) {
+                    self.undefined_var(format!("${name} is not defined"), n.span);
+                }
+            }
+            Kind::Break(name) => {
+                if !has_var(vars, name, true) {
+                    self.undefined_var(format!("$*label-{name} is not defined"), n.span);
+                }
+            }
+            Kind::Label { name, body } => {
+                self.level(body, scope, &Some(bind_var(vars, name, true)), pending);
+            }
+            Kind::Bind {
+                source,
+                patterns,
+                body,
+            } => {
+                self.level(source, scope, vars, pending);
+                let inner = self.patterns(patterns, scope, vars, pending);
+                self.level(body, scope, &inner, pending);
+            }
+            // jq's `gen_reduce`/`gen_foreach` evaluate the initial value first.
+            Kind::Reduce {
+                source,
+                patterns,
+                init,
+                update,
+            } => {
+                self.level(init, scope, vars, pending);
+                self.level(source, scope, vars, pending);
+                let inner = self.patterns(patterns, scope, vars, pending);
+                self.level(update, scope, &inner, pending);
+            }
+            Kind::Foreach {
+                source,
+                patterns,
+                init,
+                update,
+                extract,
+            } => {
+                self.level(init, scope, vars, pending);
+                self.level(source, scope, vars, pending);
+                let inner = self.patterns(patterns, scope, vars, pending);
+                self.level(update, scope, &inner, pending);
+                if let Some(e) = extract {
+                    self.level(e, scope, &inner, pending);
+                }
+            }
+            // `L = R` is `_assign(L; R)` and `L |= R` is `_modify(L; R)`:
+            // both sides are closures. `L op= R` is
+            // `R as $t | _modify(L; . op $t)`: only `L` is one.
+            Kind::Binary { op, lhs, rhs } if matches!(*op, "=" | "|=") => {
+                Self::closure(lhs, scope, vars, pending);
+                Self::closure(rhs, scope, vars, pending);
+            }
+            Kind::Binary { op, lhs, rhs }
+                if matches!(*op, "+=" | "-=" | "*=" | "/=" | "%=" | "//=") =>
+            {
+                self.level(rhs, scope, vars, pending);
+                Self::closure(lhs, scope, vars, pending);
+            }
+            // `gen_index`: the key, then the base.
+            Kind::Index { base, index } => {
+                self.level(index, scope, vars, pending);
+                self.level(base, scope, vars, pending);
+            }
+            Kind::Slice { base, from, to } => {
+                for b in [from, to].into_iter().flatten() {
+                    self.level(b, scope, vars, pending);
+                }
+                self.level(base, scope, vars, pending);
+            }
+            Kind::Field { base, name } => {
+                if let FieldName::Str(s) = name {
+                    let mut keys = Vec::new();
+                    s.collect(&mut keys);
+                    for k in keys {
+                        self.level(k, scope, vars, pending);
+                    }
+                }
+                self.level(base, scope, vars, pending);
+            }
+            Kind::Object(pairs) => {
+                for p in pairs {
+                    match p {
+                        ObjPair::KeyValue { key, value } => {
+                            match key {
+                                ObjKey::Var(v) => self.var_in(v, n.span, vars),
+                                ObjKey::Expr(e) => self.level(e, scope, vars, pending),
+                                ObjKey::Str(s) => {
+                                    let mut keys = Vec::new();
+                                    s.collect(&mut keys);
+                                    for k in keys {
+                                        self.level(k, scope, vars, pending);
+                                    }
+                                }
+                                ObjKey::Ident(_) => {}
+                            }
+                            self.level(value, scope, vars, pending);
+                        }
+                        ObjPair::Shorthand(ObjShort::Var(v)) => self.var_in(v, n.span, vars),
+                        ObjPair::Shorthand(ObjShort::Str(s)) => {
+                            let mut keys = Vec::new();
+                            s.collect(&mut keys);
+                            for k in keys {
+                                self.level(k, scope, vars, pending);
+                            }
+                        }
+                        ObjPair::Shorthand(_) => {}
+                    }
+                }
+            }
+            _ => {
+                for c in n.children() {
+                    self.level(c, scope, vars, pending);
+                }
+            }
+        }
+    }
+
+    fn patterns(
+        &mut self,
+        patterns: &'a [Pattern],
+        scope: &Scope<'a>,
+        vars: &Vars<'a>,
+        pending: &mut Vec<Pending<'a>>,
+    ) -> Vars<'a> {
+        let mut inner = vars.clone();
+        for p in patterns {
+            let mut keys = Vec::new();
+            p.collect(&mut keys);
+            for k in keys {
+                self.level(k, scope, vars, pending);
+            }
+            let mut bound = Vec::new();
+            pattern_vars(p, &mut bound);
+            for v in bound {
+                inner = Some(bind_var(&inner, v, false));
+            }
+        }
+        inner
+    }
 }
 
 /// Uses of names jq does not define anywhere, reachable or not: whole calls,

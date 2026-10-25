@@ -25,6 +25,8 @@
 //! suite sees it.
 
 pub mod check;
+pub mod jq_errors;
+pub mod jq_tables;
 pub mod lex;
 pub mod parse;
 pub mod print;
@@ -339,7 +341,8 @@ impl Node {
 }
 
 impl StrLit {
-    fn collect<'a>(&'a self, out: &mut Vec<&'a Node>) {
+    /// The interpolations inside the string.
+    pub fn collect<'a>(&'a self, out: &mut Vec<&'a Node>) {
         for seg in &self.parts {
             if let StrSeg::Interp(n) = seg {
                 out.push(n);
