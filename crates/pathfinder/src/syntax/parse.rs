@@ -800,15 +800,15 @@ impl Parser {
                 Ok(ObjPair::Shorthand(ObjShort::Ident(name)))
             }
             Tok::Binding(name) => {
-                self.bump();
+                let span = self.bump().span;
                 if self.eat_op(":") {
                     let value = self.dict_expr()?;
                     return Ok(ObjPair::KeyValue {
-                        key: ObjKey::Var(name),
+                        key: ObjKey::Var(name, span),
                         value,
                     });
                 }
-                Ok(ObjPair::Shorthand(ObjShort::Var(name)))
+                Ok(ObjPair::Shorthand(ObjShort::Var(name, span)))
             }
             Tok::Loc => {
                 let span = self.bump().span;

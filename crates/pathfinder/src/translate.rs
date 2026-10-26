@@ -228,7 +228,9 @@ pub fn plan(
         ambiguous_filename: args.files.len() > 1,
         regex_literals: Vec::new(),
         native: engine == Engine::Native,
+        jaq_front_end: crate::front::selected().is_none(),
         null_input: f.null_input,
+        named: args.named.iter().map(|(name, _)| name.clone()).collect(),
     };
 
     let source = program_source(args, read_file)?;
@@ -417,6 +419,7 @@ fn run_options(
         monochrome_output: f.monochrome,
         exit_status: f.exit_status,
         filter: Some(program),
+        front_end: crate::front::selected(),
         ..jaq::Cli::default()
     };
     if f.raw_input {
@@ -753,6 +756,8 @@ mod tests {
                 }
             }
             from_argv.files.retain(|f| f.as_os_str() != "-");
+            // Which parser reads the program is no argv matter.
+            from_argv.front_end = p.cli.front_end;
             assert_eq!(
                 format!("{:?}", p.cli),
                 format!("{from_argv:?}"),

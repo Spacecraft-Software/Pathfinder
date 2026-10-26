@@ -25,6 +25,8 @@
 //! suite sees it.
 
 pub mod check;
+pub mod jq_errors;
+pub mod jq_tables;
 pub mod lex;
 pub mod parse;
 pub mod print;
@@ -200,8 +202,8 @@ pub enum ObjKey {
     /// An identifier or keyword: `{a: …}`, `{if: …}`.
     Ident(String),
     Str(StrLit),
-    /// `{$x: …}` — the key is `$x`'s value.
-    Var(String),
+    /// `{$x: …}` — the key is `$x`'s value; the span is `$x`'s.
+    Var(String, Span),
     /// `{(q): …}`
     Expr(Box<Node>),
 }
@@ -211,7 +213,8 @@ pub enum ObjKey {
 pub enum ObjShort {
     Ident(String),
     Str(StrLit),
-    Var(String),
+    /// `{$x}`; the span is `$x`'s.
+    Var(String, Span),
     Loc(Span),
 }
 
@@ -339,7 +342,8 @@ impl Node {
 }
 
 impl StrLit {
-    fn collect<'a>(&'a self, out: &mut Vec<&'a Node>) {
+    /// The interpolations inside the string.
+    pub fn collect<'a>(&'a self, out: &mut Vec<&'a Node>) {
         for seg in &self.parts {
             if let StrSeg::Interp(n) = seg {
                 out.push(n);
@@ -353,13 +357,14 @@ impl ObjKey {
         match self {
             Self::Str(s) => s.collect(out),
             Self::Expr(n) => out.push(n),
-            Self::Ident(_) | Self::Var(_) => {}
+            Self::Ident(_) | Self::Var(..) => {}
         }
     }
 }
 
 impl Pattern {
-    fn collect<'a>(&'a self, out: &mut Vec<&'a Node>) {
+    /// The nodes inside the pattern: computed keys and interpolations.
+    pub fn collect<'a>(&'a self, out: &mut Vec<&'a Node>) {
         match self {
             Self::Var(_) => {}
             Self::Array(ps) => {

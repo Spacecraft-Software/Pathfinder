@@ -122,9 +122,9 @@ fn assemble_here(
         .collect();
 
     let header = &src[..info.header_end];
-    let compile_error = compile_error(src, info.header_end);
+    let compile_error = compile_error(src, info.header_end, &ctx.named);
     if compile_error.is_none()
-        && let Some(cleaned) = drop_unreachable_undefined(src, info.header_end)
+        && let Some(cleaned) = drop_unreachable_undefined(src, info.header_end, &ctx.named)
     {
         // The text is no longer the user's, so a `-f` file must not be read.
         let mut assembly = assemble_here(&cleaned, ctx, wrap, loc_file);
@@ -149,7 +149,10 @@ fn assemble_here(
     // Rewrite what jaq would run differently from jq (assignment, chiefly).
     // `None` means the body needed nothing, or could not be parsed: either way
     // it goes to jaq exactly as written.
-    let rewritten_body = crate::syntax::rewrite::rewrite(body, ctx.rewrites());
+    let mut rewrites = ctx.rewrites();
+    // jaq's parser reads a program with a header (`front::main_module`).
+    rewrites.syntax |= !header.is_empty();
+    let rewritten_body = crate::syntax::rewrite::rewrite(body, rewrites);
     let mut wanted = wanted;
     if let Some(rw) = &rewritten_body {
         for name in &rw.needs {
@@ -224,11 +227,17 @@ fn assemble_here(
 /// Parsing costs something, so the body is only examined when it has a
 /// construct that can be rejected: an object key computed with `(…)`, which
 /// follows a `{` or a `,`.
-fn compile_error(src: &str, header_end: usize) -> Option<CompileError> {
+fn compile_error(src: &str, header_end: usize, named: &[String]) -> Option<CompileError> {
     // The escape hatch covers the checks too: a false rejection must be
     // avoidable without editing the filter.
     if std::env::var_os(crate::syntax::rewrite::NO_REWRITE_ENV).is_some() {
         return None;
+    }
+    // jq's own grammar first: a syntax error is all jq reports.
+    let mut syntax = crate::syntax::jq_errors::syntax_errors(src).into_iter();
+    if let Some(mut first) = syntax.next() {
+        first.more = syntax.collect();
+        return Some(first);
     }
     if let Some(e) = check::module_header(src) {
         return Some(e);
@@ -240,9 +249,12 @@ fn compile_error(src: &str, header_end: usize) -> Option<CompileError> {
     } else {
         None
     };
-    if e.is_none() && check::has_unknown_name(&toks) && !definitions_elsewhere(header_end) {
+    if e.is_none()
+        && (check::has_unknown_name(&toks) || check::has_variable(&toks, named))
+        && !definitions_elsewhere(header_end)
+    {
         let tree = crate::syntax::parse::parse(body).ok()?;
-        let mut found = check::undefined_calls(&tree).into_iter();
+        let mut found = check::undefined_calls(&tree, named).into_iter();
         e = found.next().map(|mut first| {
             first.more = found.collect();
             first
@@ -261,25 +273,27 @@ fn compile_error(src: &str, header_end: usize) -> Option<CompileError> {
 /// `src` with calls to undefined names in code nothing reaches replaced by
 /// `empty`, when it has any (`check::unreachable_undefined`); `None` when
 /// it has none, or when definitions it does not show may be in scope.
-fn drop_unreachable_undefined(src: &str, header_end: usize) -> Option<String> {
+fn drop_unreachable_undefined(src: &str, header_end: usize, named: &[String]) -> Option<String> {
     if std::env::var_os(crate::syntax::rewrite::NO_REWRITE_ENV).is_some() {
         return None;
     }
     let body = &src[header_end..];
     let toks = crate::syntax::lex::lex(body).ok()?;
-    if !check::has_unknown_name(&toks) || definitions_elsewhere(header_end) {
+    if !(check::has_unknown_name(&toks) || check::has_variable(&toks, named))
+        || definitions_elsewhere(header_end)
+    {
         return None;
     }
     let tree = crate::syntax::parse::parse(body).ok()?;
-    let spans = check::unreachable_undefined(&tree);
+    let spans = check::unreachable_undefined(&tree, named);
     if spans.is_empty() {
         return None;
     }
     let mut out = String::with_capacity(src.len());
     let mut at = 0;
-    for s in spans {
+    for (s, with) in spans {
         out.push_str(&src[at..header_end + s.start]);
-        out.push_str("(empty)");
+        out.push_str(with);
         at = header_end + s.end;
     }
     out.push_str(&src[at..]);
@@ -397,6 +411,25 @@ mod tests {
             .expect("spawns")
             .join()
             .expect("no overflow, no panic");
+    }
+
+    /// The syntax rewrites are off on the native engine only while its own
+    /// front end reads the program: jaq's parser, chosen or taking a program
+    /// with a header, reads `.5` as `.` and `5`.
+    #[test]
+    fn syntax_rewrites_follow_the_parser_that_reads_the_program() {
+        let on = |src: &str, jaq_front_end: bool| {
+            let ctx = Context {
+                native: true,
+                jaq_front_end,
+                ..Context::default()
+            };
+            assemble(src, &ctx, None, "<top-level>").syntax_rewritten
+        };
+        assert!(!on(".5", false));
+        assert!(on(".5", true));
+        assert!(on("include \"m\"; .5", false));
+        assert!(on("import \"m\" as m; .5", false));
     }
 
     #[test]

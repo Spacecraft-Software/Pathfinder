@@ -80,10 +80,10 @@ pub const NO_REWRITE_ENV: &str = "PATHFINDER_NO_REWRITE";
 /// The jaq engine needs every one. The native engine has them one by one as
 /// they move into it (PLAN M20); a behaviour it has natively is switched off
 /// in [`Rewrites::NATIVE`] in the same change, and the differential cases
-/// that pin it then hold the engine to it. Rewrites that only make jq's
-/// syntax parse (`.5`, `?//`, `{$b: p}`, a compound `reduce` source) are not
-/// listed: both engines need them until the engine compiles Pathfinder's
-/// syntax tree (M21).
+/// that pin it then hold the engine to it. The rewrites that only make jaq's
+/// parser read jq's syntax are one switch, [`Rewrites::syntax`]: the native
+/// engine compiles Pathfinder's syntax tree (M21). `?//` is a transform,
+/// not syntax, and both engines take it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -113,6 +113,10 @@ pub struct Rewrites {
     pub negation: bool,
     /// `@base64d` and `@urid` decode by jq's rules.
     pub decoders: bool,
+    /// jq's syntax jaq's parser reads otherwise or not at all: `.5`,
+    /// `{$b: pattern}`, a compound `reduce`/`foreach` source, and
+    /// `def f($a)` whose body calls `a`.
+    pub syntax: bool,
 }
 
 impl Rewrites {
@@ -129,6 +133,7 @@ impl Rewrites {
         catch_wording: true,
         negation: true,
         decoders: true,
+        syntax: true,
     };
 
     /// What the native engine still needs.
@@ -143,6 +148,7 @@ impl Rewrites {
         assignment: false,
         delete: false,
         decoders: false,
+        syntax: false,
         ..Self::ALL
     };
 }
@@ -340,7 +346,7 @@ impl Cx<'_> {
                 (format!("(({r}) as {t} | ({l}) {op} {t})"), true)
             }
             // `.5`: jaq reads only `0.5`.
-            Kind::Number if self.src[node.span.start..].starts_with('.') => (
+            Kind::Number if self.on.syntax && self.src[node.span.start..].starts_with('.') => (
                 format!("0{}", &self.src[node.span.start..node.span.end]),
                 true,
             ),
@@ -348,7 +354,9 @@ impl Cx<'_> {
                 source,
                 patterns,
                 body,
-            } if patterns.len() > 1 || patterns.iter().any(binds_and_destructures) => {
+            } if patterns.len() > 1
+                || (self.on.syntax && patterns.iter().any(binds_and_destructures)) =>
+            {
                 (self.bind(source, patterns, body), true)
             }
             Kind::Reduce {
@@ -356,7 +364,7 @@ impl Cx<'_> {
                 patterns,
                 init,
                 update,
-            } if patterns.len() == 1 && binds_and_destructures(&patterns[0]) => {
+            } if self.on.syntax && patterns.len() == 1 && binds_and_destructures(&patterns[0]) => {
                 let (s, _) = self.emit(source);
                 let (i, _) = self.emit(init);
                 let (u, _) = self.emit(update);
@@ -369,7 +377,7 @@ impl Cx<'_> {
                 init,
                 update,
                 extract,
-            } if patterns.len() == 1 && binds_and_destructures(&patterns[0]) => {
+            } if self.on.syntax && patterns.len() == 1 && binds_and_destructures(&patterns[0]) => {
                 let (src, _) = self.emit(source);
                 let (init, _) = self.emit(init);
                 let (update, _) = self.emit(update);
@@ -386,10 +394,11 @@ impl Cx<'_> {
             // it as `def f(a): a as $a | body`; jaq binds only `$a`. Written
             // out only when the body calls a value parameter as a filter.
             Kind::Def { def, rest }
-                if def.params.iter().any(|p| match p {
-                    super::Param::Value(v) => calls(&def.body, v.trim_start_matches('$')),
-                    super::Param::Filter(_) => false,
-                }) =>
+                if self.on.syntax
+                    && def.params.iter().any(|p| match p {
+                        super::Param::Value(v) => calls(&def.body, v.trim_start_matches('$')),
+                        super::Param::Filter(_) => false,
+                    }) =>
             {
                 let names: Vec<&str> = def
                     .params
@@ -422,7 +431,9 @@ impl Cx<'_> {
                     true,
                 )
             }
-            Kind::Reduce { source, .. } | Kind::Foreach { source, .. } if is_compound(source) => {
+            Kind::Reduce { source, .. } | Kind::Foreach { source, .. }
+                if self.on.syntax && is_compound(source) =>
+            {
                 (self.splice_wrapping(node, Some(source.span)).0, true)
             }
             Kind::Call { name, args }
@@ -1437,7 +1448,7 @@ fn single_valued(node: &Node) -> bool {
             super::ObjPair::KeyValue { key, value } => {
                 single_valued(value)
                     && match key {
-                        super::ObjKey::Ident(_) | super::ObjKey::Var(_) => true,
+                        super::ObjKey::Ident(_) | super::ObjKey::Var(..) => true,
                         super::ObjKey::Str(s) => plain_string(s),
                         super::ObjKey::Expr(k) => single_valued(k),
                     }

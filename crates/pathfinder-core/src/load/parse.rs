@@ -793,7 +793,9 @@ impl<'s, 't> Parser<'s, 't> {
     }
 }
 
-type Dep<S> = (S, Option<S>, Option<Term<S>>);
+/// A dependency: the module's path, its name (`None` for `include`, a `$`
+/// name for data), and its metadata.
+pub type Dep<S> = (S, Option<S>, Option<Term<S>>);
 
 /// jq module, consisting of metadata, imports/includes, and a body.
 ///
@@ -808,9 +810,12 @@ type Dep<S> = (S, Option<S>, Option<Term<S>>);
 /// def iter: .[];
 /// ~~~
 #[derive(Debug, Default)]
-pub(crate) struct Module<S, B> {
+pub struct Module<S, B> {
+    /// metadata, `module {…};`
     pub meta: Option<Term<S>>,
+    /// `import`s and `include`s
     pub deps: Vec<Dep<S>>,
+    /// definitions, or the main module's term
     pub body: B,
 }
 

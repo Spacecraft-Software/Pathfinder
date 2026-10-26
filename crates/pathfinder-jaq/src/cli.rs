@@ -44,6 +44,8 @@ pub struct Cli {
     pub args: Vec<String>,
     //pub jsonargs: Vec<String>,
     pub run_tests: Option<Vec<PathBuf>>,
+    /// Pathfinder: the parser of the main program, if not jaq's (M21).
+    pub front_end: Option<jaq_all::jaq_core::load::MainParser>,
     /// If there is some last output value `v`,
     /// then the exit status code is
     /// 1 if `v < true` (that is, if `v` is `false` or `null`) and
