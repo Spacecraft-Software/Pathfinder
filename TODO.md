@@ -62,6 +62,7 @@ and keep it for the jaq engine until P-078.
 
 ## M23 — Numbers and the remaining gaps
 
+- [ ] T-037 (P-070) A program with a `module` directive takes the syntax rewrites: Pathfinder's parser rejects the directive, so `module {}; .5` reaches jaq's parser unrewritten and fails there, on both engines (measured: jq prints `0.5`)
 - [ ] T-036 (P-073) A literal prints as jq's decNumber prints it: `1.` is `1`, `1.0` stays `1.0` (measured: `[.5, 1., 1.e2, 00012]` is `[0.5,1,1E+2,12]` in jq, `1.` here)
 
 ## Standing

@@ -1092,6 +1092,9 @@ pub struct Context {
     /// The program runs on the native engine, which has the behaviours in
     /// [`NATIVE`] itself.
     pub native: bool,
+    /// On the native engine, jaq's parser reads the program
+    /// (`crate::front::FRONT_END_ENV`), so it takes the syntax rewrites.
+    pub jaq_front_end: bool,
     /// `-n`: no input is read unless the program asks for it.
     pub null_input: bool,
     /// The variables the command line binds (`--arg`, `--argjson`,
@@ -1102,10 +1105,14 @@ pub struct Context {
 impl Context {
     /// The rewrites the engine needs (`crate::syntax::rewrite`).
     pub const fn rewrites(&self) -> crate::syntax::rewrite::Rewrites {
+        use crate::syntax::rewrite::Rewrites;
         if self.native {
-            crate::syntax::rewrite::Rewrites::NATIVE
+            Rewrites {
+                syntax: self.jaq_front_end,
+                ..Rewrites::NATIVE
+            }
         } else {
-            crate::syntax::rewrite::Rewrites::ALL
+            Rewrites::ALL
         }
     }
 }

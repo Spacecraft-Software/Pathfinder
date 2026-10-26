@@ -205,6 +205,9 @@ print. To keep the `jq` name untouched:
   jq's `?` after a postfix step makes that step optional (`1 | .a.b?` still
   fails at `.a`); after anything else, a second `?` included, it is `try`.
   `PATHFINDER_FRONT_END=jaq` puts jaq's parser back, to compare the two.
+  Whenever jaq's parser reads a program (that switch, or an
+  `import`/`include` header), the program takes the syntax rewrites
+  (`Rewrites::syntax`) as on the jaq engine.
 
 - **A syntax error is found by jq's own grammar** (M21, P-069,
   `syntax/jq_errors.rs`): bison 3.8's driver over the tables bison generated

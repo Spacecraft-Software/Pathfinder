@@ -350,7 +350,7 @@ impl<'s> Cx<'s> {
         Some(match k {
             ObjKey::Ident(name) => literal(self.spelled(name, near)?),
             ObjKey::Str(s) => self.string(s, near)?,
-            ObjKey::Var(v) => Term::Var(self.binder(v, near)?),
+            ObjKey::Var(v, at) => Term::Var(self.binder(v, *at)?),
             ObjKey::Expr(e) => self.term(e)?,
         })
     }
@@ -360,7 +360,7 @@ impl<'s> Cx<'s> {
             ObjPair::KeyValue { key, value } => (self.obj_key(key, near)?, Some(self.term(value)?)),
             ObjPair::Shorthand(ObjShort::Ident(name)) => (literal(self.spelled(name, near)?), None),
             ObjPair::Shorthand(ObjShort::Str(s)) => (self.string(s, near)?, None),
-            ObjPair::Shorthand(ObjShort::Var(v)) => (Term::Var(self.binder(v, near)?), None),
+            ObjPair::Shorthand(ObjShort::Var(v, at)) => (Term::Var(self.binder(v, *at)?), None),
             ObjPair::Shorthand(ObjShort::Loc(_)) => return None,
         })
     }

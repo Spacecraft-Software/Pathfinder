@@ -1448,7 +1448,7 @@ fn single_valued(node: &Node) -> bool {
             super::ObjPair::KeyValue { key, value } => {
                 single_valued(value)
                     && match key {
-                        super::ObjKey::Ident(_) | super::ObjKey::Var(_) => true,
+                        super::ObjKey::Ident(_) | super::ObjKey::Var(..) => true,
                         super::ObjKey::Str(s) => plain_string(s),
                         super::ObjKey::Expr(k) => single_valued(k),
                     }

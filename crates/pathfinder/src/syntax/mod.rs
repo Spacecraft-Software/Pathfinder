@@ -202,8 +202,8 @@ pub enum ObjKey {
     /// An identifier or keyword: `{a: …}`, `{if: …}`.
     Ident(String),
     Str(StrLit),
-    /// `{$x: …}` — the key is `$x`'s value.
-    Var(String),
+    /// `{$x: …}` — the key is `$x`'s value; the span is `$x`'s.
+    Var(String, Span),
     /// `{(q): …}`
     Expr(Box<Node>),
 }
@@ -213,7 +213,8 @@ pub enum ObjKey {
 pub enum ObjShort {
     Ident(String),
     Str(StrLit),
-    Var(String),
+    /// `{$x}`; the span is `$x`'s.
+    Var(String, Span),
     Loc(Span),
 }
 
@@ -356,7 +357,7 @@ impl ObjKey {
         match self {
             Self::Str(s) => s.collect(out),
             Self::Expr(n) => out.push(n),
-            Self::Ident(_) | Self::Var(_) => {}
+            Self::Ident(_) | Self::Var(..) => {}
         }
     }
 }

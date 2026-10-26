@@ -349,17 +349,15 @@ enum Mode {
     Everywhere,
 }
 
-struct Walk<'a, 'o> {
+struct Walk<'o> {
     mode: Mode,
     seen: Vec<*const FuncDef>,
     errors: &'o mut Vec<CompileError>,
-    /// For [`Mode::Everywhere`]: the spans to replace.
-    spans: &'o mut Vec<Span>,
-    /// The text, to find a `$name` written inside a construct's span.
-    src: &'a str,
+    /// For [`Mode::Everywhere`]: the spans to replace, and their replacements.
+    spans: &'o mut Vec<(Span, &'static str)>,
 }
 
-impl<'a> Walk<'a, '_> {
+impl<'a> Walk<'_> {
     fn undefined_var(&mut self, name: &str, span: Span, label: bool) {
         match self.mode {
             Mode::Reachable => self.errors.push(CompileError {
@@ -371,25 +369,8 @@ impl<'a> Walk<'a, '_> {
                 span,
                 more: Vec::new(),
             }),
-            Mode::Everywhere => self.spans.push(span),
+            Mode::Everywhere => self.spans.push((span, "(empty)")),
         }
-    }
-
-    /// A `$name` used by a construct without a node of its own (`{$a}`,
-    /// `{$a: v}`): its span is found in the construct's text.
-    fn var_in(&mut self, name: &str, within: Span, vars: &Vars<'a>) {
-        if has_var(vars, name, false) {
-            return;
-        }
-        let written = format!("${name}");
-        let at = self
-            .src
-            .get(within.start..within.end)
-            .and_then(|t| t.find(&written))
-            .map_or(within, |i| {
-                Span::new(within.start + i, within.start + i + written.len())
-            });
-        self.undefined_var(name, at, false);
     }
 
     fn walk(&mut self, n: &'a Node, scope: &Scope<'a>, vars: &Vars<'a>) {
@@ -442,11 +423,24 @@ impl<'a> Walk<'a, '_> {
             Kind::Object(pairs) => {
                 for p in pairs {
                     match p {
+                        // jq locates the error over the whole entry.
                         ObjPair::KeyValue {
-                            key: ObjKey::Var(v),
-                            ..
+                            key: ObjKey::Var(v, at),
+                            value,
+                        } if !has_var(vars, v, false) => match self.mode {
+                            Mode::Reachable => {
+                                self.undefined_var(v, Span::new(at.start, value.span.end), false);
+                            }
+                            Mode::Everywhere => self.spans.push((*at, "(empty)")),
+                        },
+                        // `{(empty)}` is not jq's syntax: the shorthand
+                        // becomes a whole entry.
+                        ObjPair::Shorthand(ObjShort::Var(v, at)) if !has_var(vars, v, false) => {
+                            match self.mode {
+                                Mode::Reachable => self.undefined_var(v, *at, false),
+                                Mode::Everywhere => self.spans.push((*at, "(empty): (empty)")),
+                            }
                         }
-                        | ObjPair::Shorthand(ObjShort::Var(v)) => self.var_in(v, n.span, vars),
                         _ => {}
                     }
                 }
@@ -481,7 +475,7 @@ impl<'a> Walk<'a, '_> {
         }
         // The whole call is replaced, its arguments with it.
         if self.mode == Mode::Everywhere && at.is_none() && !defined_by_jq(name, args.len()) {
-            self.spans.push(n.span);
+            self.spans.push((n.span, "(empty)"));
             return;
         }
         for a in args {
@@ -575,7 +569,7 @@ impl<'a> Walk<'a, '_> {
 }
 
 /// The calls and variables jq rejects as undefined, in the order jq reports
-/// them; spans are relative to `src`, the text `tree` was parsed from.
+/// them; spans are relative to the text `tree` was parsed from.
 /// `named` are the variables the command line binds.
 ///
 /// jq checks only reachable code: it drops a definition nothing calls before
@@ -585,7 +579,7 @@ impl<'a> Walk<'a, '_> {
 /// called, in the scope it was written in, with its parameters bound (a
 /// `$name` parameter binds `name/0` too, as in jq). A variable is `$x is not
 /// defined`, a label `$*label-x is not defined`.
-pub fn undefined_calls(tree: &Node, src: &str, named: &[String]) -> Vec<CompileError> {
+pub fn undefined_calls(tree: &Node, named: &[String]) -> Vec<CompileError> {
     // Which definitions jq keeps: those something reachable calls.
     let (mut ignored, mut spans) = (Vec::new(), Vec::new());
     let mut walk = Walk {
@@ -593,14 +587,12 @@ pub fn undefined_calls(tree: &Node, src: &str, named: &[String]) -> Vec<CompileE
         seen: Vec::new(),
         errors: &mut ignored,
         spans: &mut spans,
-        src,
     };
     let vars = globals(named);
     walk.walk(tree, &None, &vars);
     let mut levels = Levels {
         reachable: walk.seen,
         errors: Vec::new(),
-        src,
     };
     levels.function(tree, &None, &vars);
     levels.errors
@@ -622,13 +614,12 @@ struct Pending<'a> {
 /// and a C builtin's arguments are compiled inline. The function's
 /// closures and definitions are compiled after it, in order, and only if it
 /// had no error itself.
-struct Levels<'a> {
+struct Levels {
     reachable: Vec<*const FuncDef>,
     errors: Vec<CompileError>,
-    src: &'a str,
 }
 
-impl<'a> Levels<'a> {
+impl<'a> Levels {
     fn function(&mut self, body: &'a Node, scope: &Scope<'a>, vars: &Vars<'a>) {
         let before = self.errors.len();
         let mut pending = Vec::new();
@@ -648,19 +639,11 @@ impl<'a> Levels<'a> {
         });
     }
 
-    fn var_in(&mut self, name: &str, within: Span, vars: &Vars<'a>) {
-        if has_var(vars, name, false) {
-            return;
+    /// A `$name` used by an object entry, which has no node of its own.
+    fn var_at(&mut self, name: &str, at: Span, vars: &Vars<'a>) {
+        if !has_var(vars, name, false) {
+            self.undefined_var(format!("${name} is not defined"), at);
         }
-        let written = format!("${name}");
-        let at = self
-            .src
-            .get(within.start..within.end)
-            .and_then(|t| t.find(&written))
-            .map_or(within, |i| {
-                Span::new(within.start + i, within.start + i + written.len())
-            });
-        self.undefined_var(format!("${name} is not defined"), at);
     }
 
     fn closure(body: &'a Node, scope: &Scope<'a>, vars: &Vars<'a>, pending: &mut Vec<Pending<'a>>) {
@@ -827,7 +810,9 @@ impl<'a> Levels<'a> {
                     match p {
                         ObjPair::KeyValue { key, value } => {
                             match key {
-                                ObjKey::Var(v) => self.var_in(v, n.span, vars),
+                                ObjKey::Var(v, at) => {
+                                    self.var_at(v, Span::new(at.start, value.span.end), vars);
+                                }
                                 ObjKey::Expr(e) => self.level(e, scope, vars, pending),
                                 ObjKey::Str(s) => {
                                     let mut keys = Vec::new();
@@ -840,7 +825,7 @@ impl<'a> Levels<'a> {
                             }
                             self.level(value, scope, vars, pending);
                         }
-                        ObjPair::Shorthand(ObjShort::Var(v)) => self.var_in(v, n.span, vars),
+                        ObjPair::Shorthand(ObjShort::Var(v, at)) => self.var_at(v, *at, vars),
                         ObjPair::Shorthand(ObjShort::Str(s)) => {
                             let mut keys = Vec::new();
                             s.collect(&mut keys);
@@ -885,24 +870,24 @@ impl<'a> Levels<'a> {
 }
 
 /// Uses of names jq does not define anywhere, reachable or not: whole calls,
-/// and variables and `break`s; spans are relative to `src`.
+/// and variables and `break`s, each with its replacement; spans are
+/// relative to the text `tree` was parsed from.
 ///
 /// jq never compiles a definition nothing calls, so in such a definition an
 /// undefined name is harmless, where the engine compiles every definition
 /// and refuses it. The caller replaces these uses by `empty` once
 /// [`undefined_calls`] has found none reachable.
-pub fn unreachable_undefined(tree: &Node, src: &str, named: &[String]) -> Vec<Span> {
+pub fn unreachable_undefined(tree: &Node, named: &[String]) -> Vec<(Span, &'static str)> {
     let (mut errors, mut spans) = (Vec::new(), Vec::new());
     let mut walk = Walk {
         mode: Mode::Everywhere,
         seen: Vec::new(),
         errors: &mut errors,
         spans: &mut spans,
-        src,
     };
     walk.walk(tree, &None, &globals(named));
-    spans.sort_by_key(|s| s.start);
-    spans.dedup();
+    spans.sort_by_key(|(s, _)| s.start);
+    spans.dedup_by_key(|(s, _)| *s);
     spans
 }
 
@@ -1226,7 +1211,7 @@ mod tests {
 
     fn undefined(src: &str) -> Vec<String> {
         let tree = parse(src).expect("parses");
-        undefined_calls(&tree, src, &["named".to_owned()])
+        undefined_calls(&tree, &["named".to_owned()])
             .into_iter()
             .map(|e| format!("{}@{}", e.message, e.span.start))
             .collect()
@@ -1277,9 +1262,9 @@ mod tests {
     fn undefined_calls_in_unreachable_code_are_found_lexically() {
         let spans = |src: &str| {
             let tree = parse(src).expect("parses");
-            super::unreachable_undefined(&tree, src, &[])
+            super::unreachable_undefined(&tree, &[])
                 .into_iter()
-                .map(|s| &src[s.start..s.end])
+                .map(|(s, _)| &src[s.start..s.end])
                 .map(str::to_owned)
                 .collect::<Vec<_>>()
         };
@@ -1292,6 +1277,21 @@ mod tests {
             ["$x", "break $l"]
         );
         assert_eq!(spans("def f: nosuch($x); 1"), ["nosuch($x)"]);
+        // An object entry's own `$name`, never another's or a string's.
+        assert_eq!(spans("def f: {$xx: 1, $x: 2}; 1"), ["$xx", "$x"]);
+        assert_eq!(spans("def f: {a: \"$x\", $x}; 1"), ["$x"]);
+    }
+
+    /// `{(empty)}` is not jq's syntax: a shorthand becomes a whole entry.
+    #[test]
+    fn an_undefined_shorthand_is_replaced_by_an_entry() {
+        let src = "def f: {a: \"$x\", $x}; 1";
+        let tree = parse(src).expect("parses");
+        let found = super::unreachable_undefined(&tree, &[]);
+        let [(span, with)] = found.as_slice() else {
+            panic!("{found:?}");
+        };
+        assert_eq!((span.start, *with), (17, "(empty): (empty)"));
     }
 
     /// Measured against jq 1.8.1: the scopes of variables and labels.
@@ -1349,7 +1349,7 @@ mod tests {
     #[test]
     fn several_errors_are_counted_as_jq_counts_them() {
         let tree = parse("isarray, isstring").expect("parses");
-        let mut all = undefined_calls(&tree, "isarray, isstring", &[]).into_iter();
+        let mut all = undefined_calls(&tree, &[]).into_iter();
         let mut e = all.next().expect("one");
         e.more = all.collect();
         let text = e.render("jq", "isarray, isstring");

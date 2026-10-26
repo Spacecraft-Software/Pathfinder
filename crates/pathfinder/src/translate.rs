@@ -228,6 +228,7 @@ pub fn plan(
         ambiguous_filename: args.files.len() > 1,
         regex_literals: Vec::new(),
         native: engine == Engine::Native,
+        jaq_front_end: crate::front::selected().is_none(),
         null_input: f.null_input,
         named: args.named.iter().map(|(name, _)| name.clone()).collect(),
     };

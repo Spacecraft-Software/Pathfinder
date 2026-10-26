@@ -149,7 +149,10 @@ fn assemble_here(
     // Rewrite what jaq would run differently from jq (assignment, chiefly).
     // `None` means the body needed nothing, or could not be parsed: either way
     // it goes to jaq exactly as written.
-    let rewritten_body = crate::syntax::rewrite::rewrite(body, ctx.rewrites());
+    let mut rewrites = ctx.rewrites();
+    // jaq's parser reads a program with a header (`front::main_module`).
+    rewrites.syntax |= !header.is_empty();
+    let rewritten_body = crate::syntax::rewrite::rewrite(body, rewrites);
     let mut wanted = wanted;
     if let Some(rw) = &rewritten_body {
         for name in &rw.needs {
@@ -251,7 +254,7 @@ fn compile_error(src: &str, header_end: usize, named: &[String]) -> Option<Compi
         && !definitions_elsewhere(header_end)
     {
         let tree = crate::syntax::parse::parse(body).ok()?;
-        let mut found = check::undefined_calls(&tree, body, named).into_iter();
+        let mut found = check::undefined_calls(&tree, named).into_iter();
         e = found.next().map(|mut first| {
             first.more = found.collect();
             first
@@ -282,15 +285,15 @@ fn drop_unreachable_undefined(src: &str, header_end: usize, named: &[String]) ->
         return None;
     }
     let tree = crate::syntax::parse::parse(body).ok()?;
-    let spans = check::unreachable_undefined(&tree, body, named);
+    let spans = check::unreachable_undefined(&tree, named);
     if spans.is_empty() {
         return None;
     }
     let mut out = String::with_capacity(src.len());
     let mut at = 0;
-    for s in spans {
+    for (s, with) in spans {
         out.push_str(&src[at..header_end + s.start]);
-        out.push_str("(empty)");
+        out.push_str(with);
         at = header_end + s.end;
     }
     out.push_str(&src[at..]);
@@ -408,6 +411,25 @@ mod tests {
             .expect("spawns")
             .join()
             .expect("no overflow, no panic");
+    }
+
+    /// The syntax rewrites are off on the native engine only while its own
+    /// front end reads the program: jaq's parser, chosen or taking a program
+    /// with a header, reads `.5` as `.` and `5`.
+    #[test]
+    fn syntax_rewrites_follow_the_parser_that_reads_the_program() {
+        let on = |src: &str, jaq_front_end: bool| {
+            let ctx = Context {
+                native: true,
+                jaq_front_end,
+                ..Context::default()
+            };
+            assemble(src, &ctx, None, "<top-level>").syntax_rewritten
+        };
+        assert!(!on(".5", false));
+        assert!(on(".5", true));
+        assert!(on("include \"m\"; .5", false));
+        assert!(on("import \"m\" as m; .5", false));
     }
 
     #[test]
