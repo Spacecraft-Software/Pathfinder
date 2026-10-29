@@ -408,6 +408,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pathfinder-regex"
+version = "0.1.0"
+
+[[package]]
 name = "pathfinder-std"
 version = "3.0.1"
 dependencies = [
@@ -419,7 +423,7 @@ dependencies = [
  "log",
  "pathfinder-core",
  "pathfinder-json",
- "regex-bites",
+ "pathfinder-regex",
  "serde_json",
  "urlencoding",
 ]
@@ -509,12 +513,6 @@ dependencies = [
  "memchr",
  "regex-syntax",
 ]
-
-[[package]]
-name = "regex-bites"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6a15a2fa0bfda9361941c45550896ae87b15cc6c8c939ea350079670332e211"
 
 [[package]]
 name = "regex-syntax"

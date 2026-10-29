@@ -67,8 +67,8 @@ the same change.
 
 ## M22 — Regular expressions
 
-- [ ] P-071 A pure-Rust engine with lookaround and Unicode `\b` (`fancy-regex` or equivalent), measured against jq's regex suite
-- [ ] P-072 Oniguruma's flags and capture semantics for the cases in jq's suite
+- [x] P-071 A pure-Rust engine with lookaround and Unicode `\b` (`fancy-regex` or equivalent), measured against jq's regex suite
+- [x] P-072 Oniguruma's flags and capture semantics for the cases in jq's suite
 
 ## M23 — Numbers and the remaining gaps
 

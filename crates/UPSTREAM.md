@@ -233,7 +233,7 @@ that only a non-jq format needed was removed in T-004 and is listed as such.
 | `arbitrary` | 1.4.2 | core, optional | Generates parser input for fuzzing (`load/arbitrary.rs`); off unless the `arbitrary` feature is on, which only jaq's `fuzz/` crate enables | Kept for T-019 |
 | `bstr` | 1.13.1 | std, json, fmts | Byte strings: jq strings are not required to be valid UTF-8 internally | Kept |
 | `jiff` | 0.2.35 | std, `time` | Date and time builtins (`strftime`, `mktime`, `todate`, …) | Kept |
-| `regex-bites` | 0.1.6 | std, `regex` | `test`, `match`, `capture`, `sub`, … | Kept until M22 replaces it (P-071) |
+| `regex-bites` | 0.1.6 | std, `regex` | `test`, `match`, `capture`, `sub`, … | Replaced in M22 (T-042) by `crates/pathfinder-regex`, Pathfinder's port of the Oniguruma 6.9.10 jq 1.8.1 matches with; it has no dependencies |
 | `log` | 0.4.29 | std, `log` | Routes `debug` and `stderr` messages to the CLI's logger | Kept; revisit when M19 writes them in-process |
 | `libm` | 0.2.16 | std, `math` | The C math library functions jq exposes (`ilogb`, `scalbln`, `frexp`, …) | Kept |
 | `aho-corasick` | 1.1.5 | std (`format`), fmts (`tabular`) | Escaping for `@sh`, `@html` and the other `@format`s; `@csv`/`@tsv` writing in fmts | Kept |
@@ -500,6 +500,42 @@ changes land once, in the crates, not in `packaging/jaq/`.
   its `Dep` are public so a front end can build one, and `jaq` re-exports
   `jaq_core`. With none given, jaq's parser reads the program as before.
 
+## M22: Oniguruma, as jq 1.8.1 runs it
+
+`crates/pathfinder-regex` is not imported from jaq. It is Pathfinder's
+Rust rendering of the one configuration of Oniguruma that jq 1.8.1's
+release binary runs: the Oniguruma **6.9.10** vendored in jq's tarball
+(`vendor/oniguruma`; the binary is built `--with-oniguruma=builtin`),
+compiling with `ONIG_SYNTAX_PERL_NG`, UTF-8 and
+`ONIG_OPTION_CAPTURE_GROUP` (`f_match` in jq's `src/builtin.c`). The
+tarball is jq's release `jq-1.8.1.tar.gz`, sha256
+`2be64e7129cecb11d5906290eba10af694fb9e3e7f9fc208a311dc33ca837eb0`.
+
+- `src/tables.rs` is Oniguruma's Unicode data (properties, case folding,
+  grapheme cluster breaks, the ISO-8859-1 character types), written by
+  `tools/onig-tables.py` from `unicode_property_data.c`,
+  `unicode_fold_data.c`, `unicode_egcb_data.c` and `unicode.c`; it is
+  regenerated, never edited.
+- `src/parse.rs`, `src/tune.rs`, `src/compile.rs` and `src/exec.rs`
+  transcribe `regparse.c`, the parts of `regcomp.c` that change what is
+  accepted or matched, and `regexec.c`'s matcher, keeping Oniguruma's
+  function names and control flow, so that every pattern is accepted,
+  rejected, worded and matched as jq does. `src/error.rs` holds
+  `regerror.c`'s messages.
+- Not carried over: Oniguruma's optimisations, which do not change a
+  result (search skips, exact-string tables, the anychar-star and
+  peek-next instructions), and what TODO T-044 lists (subexpression
+  calls, the absent operator, callouts), which are rejected.
+- `pathfinder-std`'s `_match_impl` is jq's `f_match`, and its `defs.jq`
+  takes jq 1.8.1's `match`, `test`, `capture`, `scan`, `splits`, `split/2`,
+  `sub` and `gsub` (`src/builtin.jq`). jaq's unit tests of its own regex
+  internals (`funs::regex`) now test those filters, and `defs::gsub_many`
+  expects jq's answer, `["XxYy","!Xx!Yy"]`, where jaq's was the product
+  of the replacements.
+
+The packaged jaq keeps `regex-bites` and the shim's prelude repairs until
+P-078 retires it; the native engine needs neither.
+
 ## Licence of Pathfinder's changes
 
 The text taken from jaq keeps jaq's MIT licence and its copyright notice
@@ -511,3 +547,9 @@ are offered under `GPL-3.0-or-later OR MIT`, at the recipient's choice.
 as a whole, every file under `crates/pathfinder-{core,std,json,fmts,all,jaq}`
 can always be used under MIT, as jaq can. The shim crate, `crates/pathfinder`,
 is `GPL-3.0-or-later` only.
+
+`crates/pathfinder-regex` carries its licences inline. Its tables are
+Oniguruma's data, under Oniguruma's `BSD-2-Clause` and K.Kosako's notice;
+the files that transcribe Oniguruma's code are
+`BSD-2-Clause AND (GPL-3.0-or-later OR MIT)`, keeping that notice; the
+rest are Pathfinder's, `GPL-3.0-or-later OR MIT`.

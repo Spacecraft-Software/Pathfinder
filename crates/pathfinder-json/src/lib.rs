@@ -244,7 +244,10 @@ impl jaq_core::ValT for Val {
         };
         match self {
             Val::BStr(b) => fs(*b, range, skip_take_bytes).map(Val::byte_str),
-            Val::TStr(b) => fs(*b, range, skip_take_chars).map(Val::utf8_str),
+            // Pathfinder: through the cache of character starts (M22).
+            Val::TStr(b) => Self::range_int(range)
+                .map(|range_char| skip_take_chars_cached(range_char, &b))
+                .map(|(skip, take)| Val::utf8_str(b.slice(skip..skip + take))),
             Val::Arr(a) => Self::range_int(range)
                 .map(|range| skip_take(range, a.len()))
                 .map(|(skip, take)| a.iter().skip(skip).take(take).cloned().collect()),
@@ -536,6 +539,47 @@ fn skip_take_chars(range: val::Range<num::PosUsize>, b: &[u8]) -> (usize, usize)
     let from_byte = range.start.map_or(0, byte_index);
     let upto_byte = range.end.map_or(b.len(), byte_index);
     (from_byte, upto_byte.saturating_sub(from_byte))
+}
+
+/// Pathfinder: `skip_take_chars` for a string sliced again and again, as
+/// jq's `sub` and `splits` slice their input once per match: the second
+/// slice of one string records where each character starts, so that every
+/// later one is found at once instead of by counting from the start. One
+/// string is remembered, held so that its bytes cannot be reused.
+#[cfg(feature = "std")]
+fn skip_take_chars_cached(range: val::Range<num::PosUsize>, b: &Bytes) -> (usize, usize) {
+    extern crate std;
+    type Starts = Option<(Bytes, Option<Vec<usize>>)>;
+    std::thread_local! {
+        static STARTS: core::cell::RefCell<Starts> = const { core::cell::RefCell::new(None) };
+    }
+    STARTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let starts = match &mut *cache {
+            Some((k, starts)) if k.as_ptr() == b.as_ptr() && k.len() == b.len() => {
+                starts.get_or_insert_with(|| b.char_indices().map(|(start, ..)| start).collect())
+            }
+            _ => {
+                *cache = Some((b.clone(), None));
+                return skip_take_chars(range, b);
+            }
+        };
+        let byte_index = |num::PosUsize(pos, c)| {
+            if pos {
+                starts.get(c).copied().unwrap_or(b.len())
+            } else {
+                starts.len().checked_sub(c).map_or(0, |i| starts[i])
+            }
+        };
+        let from_byte = range.start.map_or(0, byte_index);
+        let upto_byte = range.end.map_or(b.len(), byte_index);
+        (from_byte, upto_byte.saturating_sub(from_byte))
+    })
+}
+
+#[cfg(not(feature = "std"))]
+fn skip_take_chars_cached(range: val::Range<num::PosUsize>, b: &Bytes) -> (usize, usize) {
+    skip_take_chars(range, b)
 }
 
 fn bytes_splice(b: &mut BytesMut, skip: usize, take: usize, replace: &[u8]) {

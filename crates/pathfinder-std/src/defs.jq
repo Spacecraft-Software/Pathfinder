@@ -85,32 +85,63 @@ def flatten: [recurse(arrays[]) | select(_isarray | not)];
 def flatten($d): if $d > 0 then map(if _isarray then flatten($d-1) else [.] end) | add end;
 
 # Regular expressions
-def _capture_of_match: map(select(.name) | { (.name): .string} ) | add + {};
-
-def    test(re; flags): _matches(re; flags) | any;
-def    scan($re; $flags): _matches($re; $flags)[] | .[0].string;
-def   match(re; flags): _matches(re; flags)[] | .[0] + { captures: .[1:] };
-def capture(re; flags): _matches(re; flags)[] | _capture_of_match;
+# Pathfinder: jq 1.8.1's definitions (`src/builtin.jq`), on `_match_impl`,
+# jq's `f_match` (PLAN P-072).
+def match(re; mode): _match_impl(re; mode; false)|.[];
+def match($val): ($val|type) as $vt | if $vt == "string" then match($val; null)
+   elif $vt == "array" and ($val | length) > 1 then match($val[0]; $val[1])
+   elif $vt == "array" and ($val | length) > 0 then match($val[0]; null)
+   else error( $vt + " not a string or array") end;
+def test(re; mode): _match_impl(re; mode; true);
+def test($val): ($val|type) as $vt | if $vt == "string" then test($val; null)
+   elif $vt == "array" and ($val | length) > 1 then test($val[0]; $val[1])
+   elif $vt == "array" and ($val | length) > 0 then test($val[0]; null)
+   else error( $vt + " not a string or array") end;
+def capture(re; mods): match(re; mods) | reduce ( .captures | .[] | select(.name != null) | { (.name) : .string } ) as $pair ({}; . + $pair);
+def capture($val): ($val|type) as $vt | if $vt == "string" then capture($val; null)
+   elif $vt == "array" and ($val | length) > 1 then capture($val[0]; $val[1])
+   elif $vt == "array" and ($val | length) > 0 then capture($val[0]; null)
+   else error( $vt + " not a string or array") end;
+def scan($re; $flags):
+  match($re; "g" + $flags)
+    | if (.captures|length > 0)
+      then [ .captures | .[] | .string ]
+      else .string
+      end;
+def scan($re): scan($re; null);
 
 def split($sep):
   if _isstring and ($sep | _isstring) then . / $sep
   else error("split input and separator must be strings") end;
-def split ($re; $flags): _split_($re; $flags + "g");
-def splits($re; $flags): split($re; $flags)[];
 
-def sub($re; f; $flags):
-  def handle: if _isarray then _capture_of_match | f end;
-  reduce _split_matches($re; $flags)[] as $x (""; . + ($x | handle));
+# splits/1 produces a stream; split/1 is retained for backward compatibility.
+def splits($re; $flags):
+  .[foreach (match($re; $flags+"g"), null) as {$offset, $length}
+      (null; {start: .next, end: $offset, next: ($offset+$length)})];
+def splits($re): splits($re; null);
 
-def gsub($re; f; flags): sub($re; f; "g" + flags);
+# split emits an array for backward compatibility
+def split($re; $flags): [ splits($re; $flags) ];
 
-def    test(re):    test(re; "");
-def    scan(re):    scan(re; "");
-def   match(re):   match(re; "");
-def capture(re): capture(re; "");
-def  splits(re):  splits(re; "");
-def  sub(re; f): sub(re; f;  "");
-def gsub(re; f): sub(re; f; "g");
+# If s contains capture variables, then create a capture object and pipe it to s, bearing
+# in mind that s could be a stream
+def sub($re; s; $flags):
+   . as $in
+   | (reduce match($re; $flags) as $edit
+        ({result: [], previous: 0};
+            $in[ .previous: ($edit | .offset) ] as $gap
+            # create the "capture" objects (one per item in s)
+            | [reduce ( $edit | .captures | .[] | select(.name != null) | { (.name) : .string } ) as $pair
+                 ({}; . + $pair) | s ] as $inserts
+            | reduce range(0; $inserts|length) as $ix (.; .result[$ix] += $gap + $inserts[$ix])
+            | .previous = ($edit | .offset + .length ) )
+          | .result[] + $in[.previous:] )
+      // $in;
+
+def sub($re; s): sub($re; s; "");
+
+def gsub($re; s; flags): sub($re; s; flags + "g");
+def gsub($re; s): sub($re; s; "g");
 
 # Date
 def   todate:   todateiso8601;

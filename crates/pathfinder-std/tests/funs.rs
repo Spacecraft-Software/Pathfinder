@@ -150,43 +150,44 @@ yields!(
     [10.0, 7.0, 12.0, 8.0, 11.0, 8.0, 13.0, 9.0]
 );
 
+// Pathfinder: jaq's `_split_`/`_matches` gave way to jq 1.8.1's
+// `_match_impl` and definitions (PLAN P-072); the same cases through the
+// filters jq defines, their values measured with jq 1.8.1.
 #[test]
-#[allow(clippy::zero_prefixed_literal)]
 fn regex() {
     let date = r#"(\\d{4})-(\\d{2})-(\\d{2})"#;
     let s = "2012-03-14, 2013-01-01 and 2014-07-05";
-    let f = |f, re, flags| format!("{f}(\"{re}\"; \"{flags}\")");
 
-    let out = json!(["", ", ", " and ", ""]);
-    give(json!(s), &f("_split_", date, "g"), out);
-
-    let c = |o: usize, s: &str| {
-        json!({
-          "offset": o,
-          "length": s.chars().count(),
-          "string": s
-        })
-    };
-    let d1 = json!([c(00, "2012-03-14"), c(00, "2012"), c(05, "03"), c(08, "14")]);
-    let d2 = json!([c(12, "2013-01-01"), c(12, "2013"), c(17, "01"), c(20, "01")]);
-    let d3 = json!([c(27, "2014-07-05"), c(27, "2014"), c(32, "07"), c(35, "05")]);
-
-    give(json!(s), &f("_matches", date, "g"), json!([d1, d2, d3]));
-
-    give(json!(""), &f("_matches", "", ""), json!([[c(0, "")]]));
-    give(json!(""), &f("_matches", "^$", ""), json!([[c(0, "")]]));
+    give(
+        json!(s),
+        &format!("split(\"{date}\"; \"g\")"),
+        json!(["", ", ", " and ", ""]),
+    );
+    give(
+        json!(s),
+        &format!(
+            "[match(\"{date}\"; \"g\") | [.offset, .length, .string, (.captures | map([.offset, .string]))]]"
+        ),
+        json!([
+            [0, 10, "2012-03-14", [[0, "2012"], [5, "03"], [8, "14"]]],
+            [12, 10, "2013-01-01", [[12, "2013"], [17, "01"], [20, "01"]]],
+            [27, 10, "2014-07-05", [[27, "2014"], [32, "07"], [35, "05"]]]
+        ]),
+    );
+    give(
+        json!(""),
+        r#"[match(""; ""), match("^$"; "")]"#,
+        json!([
+            {"offset": 0, "length": 0, "string": "", "captures": []},
+            {"offset": 0, "length": 0, "string": "", "captures": []}
+        ]),
+    );
     give(
         json!("  "),
-        &f("_matches", "", "g"),
-        json!([[c(0, "")], [c(1, "")], [c(2, "")]]),
+        r#"[match(""; "g") | .offset]"#,
+        json!([0, 1, 2]),
     );
-    give(json!("  "), &f("_matches", "", "gn"), json!([]));
-
-    let out = json!(["", d1, ", ", d2, " and ", d3, ""]);
-    give(json!(s), &f("_split_matches", date, "g"), out);
-
-    let out = json!(["", d1, ", 2013-01-01 and 2014-07-05"]);
-    give(json!(s), &f("_split_matches", date, ""), out);
+    give(json!("  "), r#"[match(""; "gn")]"#, json!([]));
 }
 
 yields!(round_int, "[0, 1][1 | round]", 1);

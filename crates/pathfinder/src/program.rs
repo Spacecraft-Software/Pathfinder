@@ -164,9 +164,10 @@ fn assemble_here(
     // The regex repairs look literal regexes up instead of scanning them on
     // every call; collect them only when one of those repairs is injected.
     let regex_ctx;
-    let ctx = if wanted
-        .iter()
-        .any(|w| matches!(w.as_str(), "match" | "capture" | "sub" | "gsub" | "scan"))
+    let ctx = if !ctx.native
+        && wanted
+            .iter()
+            .any(|w| matches!(w.as_str(), "match" | "capture" | "sub" | "gsub" | "scan"))
     {
         regex_ctx = prelude::Context {
             regex_literals: crate::regex::regex_args(body),

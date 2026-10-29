@@ -30,6 +30,7 @@ libfuzzer-sys = "0.4"
 # allocator would hide allocations from libFuzzer's `-rss_limit_mb` and
 # `-malloc_limit_mb` accounting.
 jaq_all = { package = "pathfinder-all", path = "../crates/pathfinder-all" }
+pathfinder-regex = { path = "../crates/pathfinder-regex" }
 
 [[bin]]
 name = "jqargs"
@@ -48,6 +49,13 @@ bench = false
 [[bin]]
 name = "engine"
 path = "fuzz_targets/engine.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "regex"
+path = "fuzz_targets/regex.rs"
 test = false
 doc = false
 bench = false

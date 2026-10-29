@@ -254,10 +254,12 @@ yields!(
     "XxYyXxYy"
 );
 // this diverges from jq, which yields ["XxYy", "!XxYy", "Xx!Yy", "!Xx!Yy"]
+// Pathfinder: jq 1.8.1's `sub` takes the replacements in step, not their
+// product (measured: `["XxYy","!Xx!Yy"]`).
 yields!(
     gsub_many,
     r#""XxYy" | [gsub("(?<upper>[A-Z])"; .upper, "!" + .upper)]"#,
-    ["XxYy", "Xx!Yy", "!XxYy", "!Xx!Yy"]
+    ["XxYy", "!Xx!Yy"]
 );
 
 yields!(

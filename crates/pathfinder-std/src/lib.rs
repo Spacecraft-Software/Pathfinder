@@ -936,47 +936,97 @@ where
 }
 
 #[cfg(feature = "regex")]
-fn re<'a, D: DataT>(s: bool, m: bool, mut cv: Cv<'a, D>) -> ValR<D::V<'a>>
+/// Pathfinder: jq 1.8.1's `_match_impl(re; mode; test)` (`f_match`): the
+/// array of matches, or with `test` whether there is one, built as jq
+/// builds them; its errors are jq's.
+fn match_impl<'a, D: DataT>(mut cv: Cv<'a, D>) -> ValR<D::V<'a>>
 where
     D::V<'a>: ValT,
 {
-    let flags = cv.0.pop_var();
+    let testmode = cv.0.pop_var();
+    let modifiers = cv.0.pop_var();
     let re = cv.0.pop_var();
-
-    use crate::regex::Part::{Matches, Mismatch};
-    let fail_re = |e| Error::str(format_args!("invalid regex: {e}"));
-
-    // Pathfinder: jq's messages for an input, a regex or flags of the wrong
-    // type, and for a flag it does not know (the whole flag string).
-    let not_str = |v: &D::V<'a>| Error::str(alloc::format!("{} is not a string", v.jq_quoted()));
+    let test = testmode == D::V::from(true);
     let input = cv.1.as_utf8_bytes().ok_or_else(|| {
         let q = cv.1.jq_quoted();
         Error::str(alloc::format!(
             "{q} cannot be matched, as it is not a string"
         ))
     })?;
-    let re_str = core::str::from_utf8(re.as_utf8_bytes().ok_or_else(|| not_str(&re))?)
-        .map_err(Error::str)?;
-    let flags_str = if flags.jq_type() == "null" {
-        ""
-    } else {
-        core::str::from_utf8(flags.as_utf8_bytes().ok_or_else(|| not_str(&flags))?)
-            .map_err(Error::str)?
+    let not_str = |v: &D::V<'a>| Error::str(alloc::format!("{} is not a string", v.jq_quoted()));
+    let re_bytes = re.as_utf8_bytes().ok_or_else(|| not_str(&re))?;
+    let flags_str = match modifiers.jq_type() {
+        "null" => "",
+        "string" => core::str::from_utf8(
+            modifiers
+                .as_utf8_bytes()
+                .ok_or_else(|| not_str(&modifiers))?,
+        )
+        .map_err(Error::str)?,
+        _ => return Err(not_str(&modifiers)),
     };
-    let flags = regex::Flags::new(flags_str).map_err(|_bad_flag| {
-        Error::str(alloc::format!("{flags_str} is not a valid modifier string"))
-    })?;
-    let re = flags.regex(re_str).map_err(fail_re)?;
-    let out = regex::regex(input, &re, flags, (s, m));
-    let sub = |s| cv.1.as_sub_str(s);
-    let out = out.into_iter().map(|out| match out {
-        Matches(ms) => ms
-            .into_iter()
-            .map(|m| D::V::from_map(m.fields(sub)))
-            .collect(),
-        Mismatch(s) => Ok(sub(s)),
-    });
-    out.collect()
+    let flags = regex::Flags::new(flags_str)
+        .map_err(|()| Error::str(alloc::format!("{flags_str} is not a valid modifier string")))?;
+    let failure = |e: pathfinder_regex::Error| {
+        Error::str(alloc::format!(
+            "Regex failure: {}",
+            alloc::string::String::from_utf8_lossy(&e.message())
+        ))
+    };
+    let compiled = pathfinder_regex::Regex::new(re_bytes, flags.options).map_err(failure)?;
+    let found = regex::matches(input, &compiled, &flags, test).map_err(failure)?;
+    if test {
+        return Ok(D::V::from(!found.is_empty()));
+    }
+    let key = |k: &str| D::V::from(k.to_string());
+    let null = || {
+        let empty: D::V<'a> = core::iter::empty().collect();
+        empty.index(&D::V::from(0usize))
+    };
+    // A string of the input, as jq makes one: bytes that are not UTF-8
+    // (a match starting inside a character) are replaced.
+    let sub = |b: &[u8]| match core::str::from_utf8(b) {
+        Ok(_) => cv.1.as_sub_str(b),
+        Err(_) => D::V::from(alloc::string::String::from_utf8_lossy(b).into_owned()),
+    };
+    let num = |n: isize| D::V::from(n);
+    let mut out = Vec::with_capacity(found.len());
+    for m in found {
+        let mut caps = Vec::with_capacity(m.captures.len());
+        for c in m.captures {
+            let string = match c.string {
+                Some(b) => sub(b),
+                None => null()?,
+            };
+            let name = match c.name {
+                Some(n) => D::V::from(alloc::string::String::from_utf8_lossy(n).into_owned()),
+                None => null()?,
+            };
+            let fields = if c.matched_text {
+                [
+                    (key("offset"), num(c.offset)),
+                    (key("length"), num(c.length as isize)),
+                    (key("string"), string),
+                    (key("name"), name),
+                ]
+            } else {
+                [
+                    (key("offset"), num(c.offset)),
+                    (key("string"), string),
+                    (key("length"), num(c.length as isize)),
+                    (key("name"), name),
+                ]
+            };
+            caps.push(D::V::from_map(fields)?);
+        }
+        out.push(D::V::from_map([
+            (key("offset"), num(m.offset as isize)),
+            (key("length"), num(m.length as isize)),
+            (key("string"), sub(m.string)),
+            (key("captures"), caps.into_iter().collect()),
+        ])?);
+    }
+    Ok(out.into_iter().collect())
 }
 
 #[cfg(feature = "regex")]
@@ -984,12 +1034,8 @@ fn regex<D: DataT>() -> Box<[Filter<RunPtr<D>>]>
 where
     for<'a> D::V<'a>: ValT,
 {
-    let vv = || [Bind::Var(()), Bind::Var(())].into();
-    Box::new([
-        ("_matches", vv(), |cv| bome(re(false, true, cv))),
-        ("_split_matches", vv(), |cv| bome(re(true, true, cv))),
-        ("_split_", vv(), |cv| bome(re(true, false, cv))),
-    ])
+    let vvv = || [Bind::Var(()), Bind::Var(()), Bind::Var(())].into();
+    Box::new([("_match_impl", vvv(), |cv| bome(match_impl(cv)))])
 }
 
 #[cfg(feature = "time")]

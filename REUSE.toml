@@ -56,10 +56,10 @@ path = ["packaging/jaq/*.patch"]
 SPDX-FileCopyrightText = ["Michael Färber <michael.faerber@gedenkt.at> and jaq contributors", "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
 SPDX-License-Identifier = "MIT AND (GPL-3.0-or-later OR MIT)"
 
-# Fuzz seeds for jq's command line: NUL-separated argv, which cannot carry a
-# header.
+# Fuzz seeds for jq's command line (NUL-separated argv) and for the regex
+# engine (pattern NUL text NUL flags), which cannot carry a header.
 [[annotations]]
-path = ["fuzz/seeds/jqargs/**"]
+path = ["fuzz/seeds/jqargs/**", "fuzz/seeds/regex/**"]
 SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
