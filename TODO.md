@@ -60,6 +60,21 @@ and keep it for the jaq engine until P-078.
 - [x] T-034 (P-069) Syntax errors are reported as jq reports them: `syntax error, unexpected …` with jq's position and exit 3
 - [ ] T-035 (P-070) `import`/`include` modules parsed by Pathfinder's parser too (optional)
 
+## M22 — Regular expressions
+
+jq 1.8.1's release binary runs its vendored Oniguruma 6.9.10 with
+`ONIG_SYNTAX_PERL_NG`, UTF-8 and `ONIG_OPTION_CAPTURE_GROUP` (`f_match` in
+`src/builtin.c`). The engine gets a matcher of its own that behaves as that
+one does, its Unicode tables generated from Oniguruma's data files.
+
+- [ ] T-038 (P-071) `tools/onig-tables.py` writes Oniguruma 6.9.10's Unicode tables (properties, POSIX brackets, case folding) as Rust from jq's tarball; never edited
+- [ ] T-039 (P-071) A parser for `ONIG_SYNTAX_PERL_NG` as jq compiles it: escapes, classes and POSIX brackets, `\p{…}`, groups (named, non-capturing, atomic, lookaround, option `(?imx-imx)`, comment), quantifiers greedy/lazy/possessive and `{n,m}` with Oniguruma's literal fallback, backreferences; errors are Oniguruma's `Regex failure: …` text
+- [ ] T-040 (P-071) A backtracking matcher over code points with Oniguruma's anchors (`^`/`$` at lines, `\A`, `\z`, `\Z`, `\G`), Unicode `\b`, case-insensitive matching with Oniguruma's folds, lookaround, backreferences, atomic groups and possessive quantifiers, `\K`, `\R`, `\X`
+- [ ] T-041 (P-072) jq's `f_match` in the engine as `_match_impl/3`: flags as Oniguruma options (`m` lets `.` match a newline, `l` finds the longest, `n` finds no empty match), offsets in code points, the step past an empty match; jq 1.8.1's definitions of `match`, `test`, `capture`, `scan`, `splits`, `split`, `sub`, `gsub`
+- [ ] T-042 (P-072) The shim's regex repairs off on the native engine; `regex-bites` removed from the engine crates
+- [ ] T-043 (P-071) jq's `onig.test` and `manonig.test` at 100% on the native engine, a probe corpus measured against jq 1.8.1 in the differential suite, and a benchmark against the engine it replaces
+- [ ] T-044 (P-071) Subexpression calls (`\g<n>`, `(?&name)`, `(?R)`), conditionals `(?(n)…|…)`, the absent operator `(?~…)` and callouts (optional)
+
 ## M23 — Numbers and the remaining gaps
 
 - [ ] T-037 (P-070) A program with a `module` directive takes the syntax rewrites: Pathfinder's parser rejects the directive, so `module {}; .5` reaches jaq's parser unrewritten and fails there, on both engines (measured: jq prints `0.5`)
