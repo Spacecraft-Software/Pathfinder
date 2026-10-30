@@ -129,7 +129,8 @@ pub fn matches<'a>(
     let mut start = 0;
     let mut out = Vec::new();
     let mut count = Counter::new(input);
-    while let Some(region) = re.search(input, start)? {
+    let mut searcher = re.searcher(input);
+    while let Some(region) = searcher.search(start)? {
         let (b0, e0) = region[0].expect("the whole match");
         if test {
             out.push(Match {

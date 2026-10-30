@@ -94,14 +94,16 @@ pub enum Required {
 }
 
 impl Required {
-    /// The last place in `text` it starts at, if any.
-    pub fn last_in(&self, text: &[u8]) -> Option<usize> {
+    /// The first place at or after `from` in `text` it starts at, if any.
+    pub fn first_in(&self, text: &[u8], from: usize) -> Option<usize> {
+        let t = &text[from..];
         match self {
-            Self::Exact(b) => text.windows(b.len()).rposition(|w| w == &**b),
-            Self::Bytes(set) => text
+            Self::Exact(b) => t.windows(b.len()).position(|w| w == &**b),
+            Self::Bytes(set) => t
                 .iter()
-                .rposition(|&c| c < 0x80 && set[usize::from(c >> 6)] & (1 << (c & 63)) != 0),
+                .position(|&c| c < 0x80 && set[usize::from(c >> 6)] & (1 << (c & 63)) != 0),
         }
+        .map(|p| p + from)
     }
 }
 

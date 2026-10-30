@@ -63,6 +63,26 @@ enum Entry {
     },
 }
 
+/// Where each required item (`Required`) next starts in one text, kept
+/// across the searches of a global match so that each part of the text is
+/// scanned once: a search at `s` looks for an item again only once `s`
+/// has passed the place found before. A longest search reads on past its
+/// own start, so an absence holds only from where it was found.
+#[derive(Debug, Default)]
+pub struct Hints {
+    next: Vec<Next>,
+}
+
+/// Where a required item next starts.
+#[derive(Clone, Copy, Debug)]
+enum Next {
+    /// Not looked for yet.
+    Unknown,
+    At(usize),
+    /// Absent from this place on.
+    Absent(usize),
+}
+
 /// Searches `text` from `start` (`onig_search` forward, range to the end).
 pub fn search(
     prog: &Program,
@@ -70,7 +90,14 @@ pub fn search(
     text: &[u8],
     start: usize,
     opts: SearchOptions,
+    hints: &mut Hints,
 ) -> Result<Option<Region>, Error> {
+    if start > text.len() {
+        return Ok(None);
+    }
+    if hints.next.len() != prog.required.len() {
+        hints.next = vec![Next::Unknown; prog.required.len()];
+    }
     let mut m = Matcher {
         prog,
         text,
@@ -80,20 +107,19 @@ pub fn search(
         best_len: None,
         best_region: None,
     };
-    // A match starting past the last place a required item starts cannot
-    // contain it (`Required`).
-    let last = prog
-        .required
-        .iter()
-        .map(|r| r.last_in(&text[start..]).map(|p| p + start))
-        .try_fold(usize::MAX, |acc, p| p.map(|p| acc.min(p)));
-    let Some(last) = last else {
-        return Ok(None);
-    };
     let mut s = start;
     loop {
-        if s > last {
-            break;
+        // A match starting past the last place a required item starts
+        // cannot contain it.
+        for (r, next) in prog.required.iter().zip(hints.next.iter_mut()) {
+            *next = match *next {
+                Next::At(p) if p >= s => Next::At(p),
+                Next::Absent(from) if from <= s => Next::Absent(from),
+                _ => r.first_in(text, s).map_or(Next::Absent(s), Next::At),
+            };
+            if matches!(next, Next::Absent(_)) {
+                return Ok(m.best_region);
+            }
         }
         if let Some(region) = m.match_at(s)?
             && !opts.longest

@@ -109,13 +109,27 @@ impl Regex {
     }
 
     /// The first match from `start` on (`onig_search` with the range to
-    /// the end): the match and each group as byte ranges of `text`.
+    /// the end): the match and each group as byte ranges of `text`. A
+    /// `start` past the end has no match.
     ///
     /// # Errors
     ///
     /// The match gave up (`retry-limit-in-match over`).
     pub fn search(&self, text: &[u8], start: usize) -> Result<Option<Region>, Error> {
-        exec::search(&self.program, self.groups, text, start, self.search)
+        self.searcher(text).search(start)
+    }
+
+    /// Searches of one text, from starts that go forward, as a global
+    /// match makes them: each part of the text is scanned for what a
+    /// match must contain only once, where a fresh [`Regex::search`] each
+    /// time would scan the rest of the text again.
+    #[must_use]
+    pub fn searcher<'a>(&'a self, text: &'a [u8]) -> Searcher<'a> {
+        Searcher {
+            re: self,
+            text,
+            hints: exec::Hints::default(),
+        }
     }
 
     /// The number of capture groups.
@@ -128,5 +142,32 @@ impl Regex {
     /// were first defined (`onig_foreach_name`).
     pub fn names(&self) -> impl Iterator<Item = (&[u8], &[usize])> {
         self.names.iter().map(|(n, g)| (n.as_slice(), g.as_slice()))
+    }
+}
+
+/// Searches of one text by one [`Regex`] ([`Regex::searcher`]).
+#[derive(Debug)]
+pub struct Searcher<'a> {
+    re: &'a Regex,
+    text: &'a [u8],
+    hints: exec::Hints,
+}
+
+impl Searcher<'_> {
+    /// [`Regex::search`] of this text from `start`.
+    ///
+    /// # Errors
+    ///
+    /// The match gave up (`retry-limit-in-match over`).
+    pub fn search(&mut self, start: usize) -> Result<Option<Region>, Error> {
+        let re = self.re;
+        exec::search(
+            &re.program,
+            re.groups,
+            self.text,
+            start,
+            re.search,
+            &mut self.hints,
+        )
     }
 }

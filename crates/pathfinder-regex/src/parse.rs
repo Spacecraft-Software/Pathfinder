@@ -21,8 +21,9 @@ use crate::unicode::{self, ctype};
 const MAX_REPEAT_NUM: u32 = 100_000;
 /// `ONIG_MAX_BACKREF_NUM`.
 const MAX_BACKREF_NUM: u32 = 1000;
-/// `DEFAULT_PARSE_DEPTH_LIMIT`.
-const PARSE_DEPTH_LIMIT: u32 = 4096;
+/// The parse depth limit jq sets (`onig_set_parse_depth_limit(1024)` in
+/// its `main`, against stack overflows), not Oniguruma's default of 4096.
+const PARSE_DEPTH_LIMIT: u32 = 1024;
 
 /// The options that shape parsing (`ONIG_OPTION_*`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2034,12 +2035,17 @@ impl Parser<'_> {
     ) -> Result<Node, Error> {
         // A string's quantifier takes its last character only.
         let mut head: Option<Node> = None;
+        // `prs_exp` counts the quantifiers on a copy of the depth that it
+        // never decrements, so a chain of them adds up (`a**…*`).
+        let mut depth = self.depth;
         while let Tok::Repeat(rep) = t.clone() {
             if is_invalid_quantifier_target(&node) {
                 return Err(Error::new(E::TargetOfRepeatOperatorInvalid));
             }
-            self.deeper()?;
-            self.depth -= 1;
+            depth += 1;
+            if depth > PARSE_DEPTH_LIMIT {
+                return Err(Error::new(E::ParseDepthLimitOver));
+            }
             let target = if group == 2 {
                 match node {
                     Node::Group(n) => *n,

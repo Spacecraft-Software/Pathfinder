@@ -543,32 +543,55 @@ fn skip_take_chars(range: val::Range<num::PosUsize>, b: &[u8]) -> (usize, usize)
 
 /// Pathfinder: `skip_take_chars` for a string sliced again and again, as
 /// jq's `sub` and `splits` slice their input once per match: the second
-/// slice of one string records where each character starts, so that every
-/// later one is found at once instead of by counting from the start. One
-/// string is remembered, held so that its bytes cannot be reused.
+/// slice of one string records where every `STRIDE`th character starts
+/// and how many there are, so that every later one is found by counting
+/// from the nearest record instead of from the start, for an eighth of a
+/// byte per byte of an ASCII string. One string is remembered, held so
+/// that its bytes cannot be reused.
 #[cfg(feature = "std")]
 fn skip_take_chars_cached(range: val::Range<num::PosUsize>, b: &Bytes) -> (usize, usize) {
     extern crate std;
-    type Starts = Option<(Bytes, Option<Vec<usize>>)>;
+    const STRIDE: usize = 64;
+    /// The string, then the start of every `STRIDE`th character and the
+    /// number of characters.
+    type Starts = Option<(Bytes, Option<(Vec<usize>, usize)>)>;
     std::thread_local! {
         static STARTS: core::cell::RefCell<Starts> = const { core::cell::RefCell::new(None) };
     }
     STARTS.with(|cache| {
         let mut cache = cache.borrow_mut();
-        let starts = match &mut *cache {
-            Some((k, starts)) if k.as_ptr() == b.as_ptr() && k.len() == b.len() => {
-                starts.get_or_insert_with(|| b.char_indices().map(|(start, ..)| start).collect())
-            }
+        let (starts, count) = match &mut *cache {
+            Some((k, starts)) if k.as_ptr() == b.as_ptr() && k.len() == b.len() => &*starts
+                .get_or_insert_with(|| {
+                    let mut count = 0;
+                    let starts = b
+                        .char_indices()
+                        .map(|(start, ..)| start)
+                        .inspect(|_| count += 1)
+                        .step_by(STRIDE)
+                        .collect();
+                    (starts, count)
+                }),
             _ => {
                 *cache = Some((b.clone(), None));
                 return skip_take_chars(range, b);
             }
         };
+        let start_of = |c: usize| {
+            if c >= *count {
+                return b.len();
+            }
+            let from = starts[c / STRIDE];
+            b[from..]
+                .char_indices()
+                .nth(c % STRIDE)
+                .map_or(b.len(), |(i, ..)| from + i)
+        };
         let byte_index = |num::PosUsize(pos, c)| {
             if pos {
-                starts.get(c).copied().unwrap_or(b.len())
+                start_of(c)
             } else {
-                starts.len().checked_sub(c).map_or(0, |i| starts[i])
+                count.checked_sub(c).map_or(0, start_of)
             }
         };
         let from_byte = range.start.map_or(0, byte_index);

@@ -2102,6 +2102,33 @@ static NATIVE_CASES: &[Case] = &[
     c(r#""ß""#, &["-c", r#"test("SS";"i")"#]),
     c(r#""ss""#, &["-c", r#"test("ß";"i")"#]),
     c(r#""aaa""#, &["-c", r#"[match("a";"gl")|.offset]"#]),
+    c(r#""aaab""#, &["-c", r#"[match("a";"gl")|.offset]"#]),
+    c(r#""abab""#, &["-c", r#"[match("(?=.*b)a";"gl")|.offset]"#]),
+    // jq lowers Oniguruma's parse depth limit to 1024: 511 nested groups
+    // compile, 512 do not, and a chain of quantifiers counts as deep.
+    c(
+        "null",
+        &[
+            "-c",
+            r#"[511, 512] | map(. as $n | ("(" * $n) + "a" + (")" * $n)) | map(. as $r | try ("a" | test($r)) catch .)"#,
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            r#"[1022, 1023] | map("a" + ("*" * .)) | map(. as $r | try ("a" | test($r)) catch .)"#,
+        ],
+    ),
+    // Matches clustered before a long tail without one: each search must
+    // not scan the tail again.
+    c(
+        "null",
+        &[
+            "-c",
+            r#"("a" * 20000) + ("b" * 20000) | [match("a"; "g")] | length, ([splits("a")] | length)"#,
+        ],
+    ),
     c(r#""x""#, &["-c", r#"test("\\p{^L}")"#]),
     c(r#""x""#, &["-c", r#"test("[^[:digit:]]")"#]),
     c(r#""a-b""#, &["-c", r#"[match("\\W";"g")|.string]"#]),
