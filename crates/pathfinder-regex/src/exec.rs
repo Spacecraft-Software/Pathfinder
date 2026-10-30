@@ -80,8 +80,21 @@ pub fn search(
         best_len: None,
         best_region: None,
     };
+    // A match starting past the last place a required item starts cannot
+    // contain it (`Required`).
+    let last = prog
+        .required
+        .iter()
+        .map(|r| r.last_in(&text[start..]).map(|p| p + start))
+        .try_fold(usize::MAX, |acc, p| p.map(|p| acc.min(p)));
+    let Some(last) = last else {
+        return Ok(None);
+    };
     let mut s = start;
     loop {
+        if s > last {
+            break;
+        }
         if let Some(region) = m.match_at(s)?
             && !opts.longest
         {

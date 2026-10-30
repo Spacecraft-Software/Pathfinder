@@ -536,6 +536,32 @@ tarball is jq's release `jq-1.8.1.tar.gz`, sha256
 The packaged jaq keeps `regex-bites` and the shim's prelude repairs until
 P-078 retires it; the native engine needs neither.
 
+### Benchmark
+
+Measured 2026-10-30 on the dev host, best of three runs, the three
+binaries side by side in one session: this branch's native engine, the
+native engine on `main` before M22 (`regex-bites` with the shim's prelude
+repairs), and jq 1.8.1. 100 000 short strings for the per-element
+filters, a 100 KB text for the global ones.
+
+| Workload | M22 | before | jq 1.8.1 |
+|---|---:|---:|---:|
+| `[.[] \| select(test("^[a-z]+[0-9]+$"))]` | 1839 ms | 1936 ms | 1616 ms |
+| `[.[] \| capture("(?<w>[a-z]+)(?<n>[0-9]*)")]` | 2858 ms | 3358 ms | 2111 ms |
+| `[.[] \| sub("[0-9]+"; "#")]` | 3555 ms | 3734 ms | 4200 ms |
+| `[scan("\\w+")]` | 78 ms | 240 ms (wrong: 25 283 words, jq 21 947) | 7722 ms |
+| `gsub("a"; "b")` | 203 ms | 1837 ms | 16932 ms |
+| `[splits(" +")]` | 200 ms | 33 ms | 17045 ms |
+
+jq is quadratic on the global filters: `f_match` counts every offset
+from the start of the string, and its `sub`/`splits` slice by code point
+once per match. Pathfinder computes the same values with a counter that
+goes on from the last offset and a string slice that remembers one
+string's character starts. `splits` stays slower than before: jq's
+definition is a `foreach` over the matches with an object per step, where
+jaq's was one native call; it is kept for jq's semantics (it is a path
+expression: `path(splits(","))` gives jq's paths).
+
 ## Licence of Pathfinder's changes
 
 The text taken from jaq keeps jaq's MIT licence and its copyright notice

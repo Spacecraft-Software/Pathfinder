@@ -12,7 +12,7 @@ options, `\\K`, `\\R`, `\\X`) under jq's flags, through `match`;
 patterns through every jq regex function. Each batch runs in one process
 per side; a difference prints the case and both answers. A pattern that
 makes jq itself loop (a `\\K` in a lookbehind can) times the batch out:
-drop that case and rerun. This found every quirk M22 reproduces.
+`--dump` writes the cases, to time them one by one. This found every quirk M22 reproduces.
 """
 
 import argparse
@@ -143,11 +143,16 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--cases", type=int, default=3000)
     ap.add_argument("--kind", choices=["syntax", "functions"], default="syntax")
+    ap.add_argument("--dump", help="write the cases here, one JSON per line, and stop")
     a = ap.parse_args()
     r = random.Random(a.seed)
     make = syntax_case if a.kind == "syntax" else functions_case
     cases = [make(r) for _ in range(a.cases)]
     text = "".join(json.dumps(c, ensure_ascii=False) + "\n" for c in cases)
+    if a.dump:
+        with open(a.dump, "w", encoding="utf-8") as f:
+            f.write(text)
+        return
     env = dict(os.environ, PATHFINDER_ENGINE="native")
     want, got = run([a.jq], text), run([a.shim], text, env)
     if len(want) != len(cases) or len(got) != len(cases):

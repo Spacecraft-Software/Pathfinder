@@ -2007,6 +2007,23 @@ static NATIVE_CASES: &[Case] = &[
     c("", &["-s", "input_filename", "f1.json", "f2.json"]),
     c("", &["-c", "[., input_filename]", "n1.json", "nope.json"]),
     c("", &["-R", "input_filename", "r1.txt", "r2.txt"]),
+    // Fixed repeats of a string are one string in Oniguruma (`tune_quant`),
+    // and a search needing a literal the text lacks is no match without
+    // matching, as jq answers `(a*)*b` (M22).
+    c(
+        r#""1é  \n\n""#,
+        &[
+            "-c",
+            r#"[match("(?<!(?: {2})+)";"g") | .offset], [match("(?<=\\n{2}{2}{1,2}?)";"g")]"#,
+        ],
+    ),
+    c(
+        r#""aaaaaaaaaaaaaaaaaaaaaaaaaaaaa!""#,
+        &[
+            "-c",
+            r#"[test("(a*)*b"), test("(a*)*[bc]"), test("(a*)*(b|c)"), test("(a*)*(?=b)")], (try test("(a*)*\\d") catch .)"#,
+        ],
+    ),
     // Regular expressions as jq 1.8.1's Oniguruma 6.9.10 matches them
     // (M22, `pathfinder-regex`): syntax, Unicode classes and folds,
     // lookaround, flags, errors, and jq's offsets and empty-match steps.
@@ -2091,7 +2108,7 @@ static NATIVE_CASES: &[Case] = &[
     c(r#""	""#, &["-c", r#"test("\\t")"#]),
     c(r#""a""#, &["-c", r#"test("a";null)"#]),
     c(r#""a""#, &["-c", r#"try test("a";"q") catch ."#]),
-    c(r#""a""#, &["-c", r#"try test(1) catch ."#]),
+    c(r#""a""#, &["-c", r"try test(1) catch ."]),
     c(r#""aa""#, &["-c", r#"[match("a";"g")] | length"#]),
     c(
         r#""ab""#,

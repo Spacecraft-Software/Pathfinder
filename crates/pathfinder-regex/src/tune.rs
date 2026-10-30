@@ -118,9 +118,29 @@ impl Tuner {
                 self.tune(body, in_lb)?;
                 self.caps.borrow_mut()[*num] = Some((**body).clone());
             }
+            Node::Quant {
+                body, lower, upper, ..
+            } => {
+                self.tune(body, in_lb)?;
+                // `tune_quant`'s "expand string": `a{3}` is `aaa`, up to
+                // `EXPAND_STRING_MAX_LENGTH` bytes. It matters in a
+                // lookbehind, whose reduction reads a string.
+                if let Node::Str {
+                    bytes,
+                    icase: false,
+                } = &**body
+                    && Some(*lower) == *upper
+                    && *lower > 1
+                    && bytes.len() * (*lower as usize) <= 100
+                {
+                    *n = Node::Str {
+                        bytes: bytes.repeat(*lower as usize),
+                        icase: false,
+                    };
+                }
+            }
             Node::Group(body)
             | Node::Atomic(body)
-            | Node::Quant { body, .. }
             | Node::Look {
                 behind: false,
                 body,

@@ -74,6 +74,101 @@ pub struct Program {
     pub ops: Vec<Op>,
     /// Each repeat counter's bounds; `None` for no upper bound.
     pub repeats: Vec<(u32, Option<u32>)>,
+    /// What every match must contain at or after its start (see
+    /// [`Required`]).
+    pub required: Vec<Required>,
+}
+
+/// Something every match contains at or after where it starts: an exact
+/// string, or one of a set of ASCII bytes. Oniguruma's search finds such a
+/// literal first (`set_optimize_info_from_tree`, `forward_search`) and
+/// answers "no match" without matching when the text lacks it, which is
+/// what keeps `(a*)*b` on a text with no `b` from reaching the retry
+/// limit. Only what Oniguruma can take is taken: case-sensitive strings,
+/// and classes or alternatives of single-byte characters (`[bc]`,
+/// `b|c`); `\d`, which has multibyte members, gives nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Required {
+    Exact(Box<[u8]>),
+    Bytes([u64; 2]),
+}
+
+impl Required {
+    /// The last place in `text` it starts at, if any.
+    pub fn last_in(&self, text: &[u8]) -> Option<usize> {
+        match self {
+            Self::Exact(b) => text.windows(b.len()).rposition(|w| w == &**b),
+            Self::Bytes(set) => text
+                .iter()
+                .rposition(|&c| c < 0x80 && set[usize::from(c >> 6)] & (1 << (c & 63)) != 0),
+        }
+    }
+}
+
+/// The required items of `n` (see [`Required`]): those of every item of
+/// a sequence, of a repeat's body when it repeats at least once, of a
+/// positive lookahead (it reads on from the match), and for alternatives
+/// the first item of each branch as a set of bytes.
+fn required(n: &Node, out: &mut Vec<Required>) {
+    match n {
+        Node::Str {
+            bytes,
+            icase: false,
+        } if !bytes.is_empty() => out.push(Required::Exact(bytes.clone().into_boxed_slice())),
+        Node::Class(cc) => {
+            if let Some(set) = ascii_set(cc) {
+                out.push(Required::Bytes(set));
+            }
+        }
+        Node::List(xs) => {
+            for x in xs {
+                required(x, out);
+            }
+        }
+        Node::Quant { body, lower, .. } if *lower > 0 => required(body, out),
+        Node::Capture { body, .. }
+        | Node::Group(body)
+        | Node::Atomic(body)
+        | Node::Look {
+            behind: false,
+            not: false,
+            body,
+        } => required(body, out),
+        Node::Alt(xs) => {
+            let mut set = [0u64; 2];
+            for x in xs {
+                let mut items = Vec::new();
+                required(x, &mut items);
+                let Some(first) = items.first() else {
+                    return;
+                };
+                match first {
+                    Required::Exact(b) => {
+                        let c = b[0];
+                        if c >= 0x80 {
+                            return;
+                        }
+                        set[usize::from(c >> 6)] |= 1 << (c & 63);
+                    }
+                    Required::Bytes(s) => {
+                        set[0] |= s[0];
+                        set[1] |= s[1];
+                    }
+                }
+            }
+            out.push(Required::Bytes(set));
+        }
+        _ => {}
+    }
+}
+
+/// A class's members when they are all ASCII bytes and it is not negated.
+fn ascii_set(cc: &Class) -> Option<[u64; 2]> {
+    if cc.not || !cc.ranges.is_empty() || cc.bits[2] != 0 || cc.bits[3] != 0 {
+        return None;
+    }
+    let set = [cc.bits[0], cc.bits[1]];
+    (set != [0, 0]).then_some(set)
 }
 
 /// Compiles a tuned tree (`compile_tree`, then `OP_END`).
@@ -91,9 +186,12 @@ pub fn compile(root: &Node) -> Program {
         c.ops.push(Op::UpdateKeep);
     }
     c.ops.push(Op::End);
+    let mut req = Vec::new();
+    required(root, &mut req);
     Program {
         ops: c.ops,
         repeats: c.repeats,
+        required: req,
     }
 }
 
