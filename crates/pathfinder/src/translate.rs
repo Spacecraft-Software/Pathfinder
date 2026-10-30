@@ -116,13 +116,7 @@ pub fn plan(
     };
 
     let ctx = prelude::Context {
-        input_filename: (args.files.len() == 1)
-            .then(|| args.files[0].to_string_lossy().into_owned()),
-        ambiguous_filename: args.files.len() > 1,
-        regex_literals: Vec::new(),
-        native: true,
         jaq_front_end: crate::front::selected().is_none(),
-        null_input: f.null_input,
         named: args.named.iter().map(|(name, _)| name.clone()).collect(),
     };
 

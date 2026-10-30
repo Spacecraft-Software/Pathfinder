@@ -21,7 +21,6 @@ mod native;
 mod post;
 mod prelude;
 mod program;
-mod regex;
 mod scan;
 mod syntax;
 mod translate;
