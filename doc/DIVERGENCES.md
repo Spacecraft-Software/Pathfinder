@@ -9,10 +9,15 @@ Where Pathfinder cannot make `jaq` behave like `jq`, and why.
 
 Since M19 Pathfinder has two engines (`PATHFINDER_ENGINE`): `native`, its
 fork of jaq's engine run in process, and `jaq`, a jaq binary. The native
-engine is built from the same patched sources as the packaged jaq, and both
-pass the same suites (815/820 of jq's own); where this document says "the
-packaged jaq", the native engine behaves the same, except where a section
-names the `exec` hand-off, which only the `jaq` engine has.
+engine is built from the same patched sources as the packaged jaq; where
+this document says "the packaged jaq", the native engine behaves the same,
+except where a section names the `exec` hand-off, which only the `jaq`
+engine has. Since M22 and M23 the native engine also has jq's regex engine
+(Oniguruma 6.9.10, `crates/pathfinder-regex`) and jq's time builtins as
+glibc 2.39 runs them (`pathfinder-std/src/ctime.rs`), and passes all of
+jq's suite (820/820); the regex and time repairs below are the `jaq`
+engine's, and the native engine's few differences there are listed under
+"The native engine's time builtins".
 
 Everything here was measured, not inferred: **jq 1.8.1** (the declared baseline,
 fetched with `nix build nixpkgs#jq`) against **jaq 3.0.0, 3.1.0 and 3.1.1**. The
@@ -373,6 +378,22 @@ stay jaq's.
 One deliberate exception: jq 1.8.1's `@urid` turns every non-ASCII character
 of its input into U+FFFD (`"é%41" | @urid` is `"��A"`), a bug jq 1.8.2 fixed
 (`"éA"`). Pathfinder follows 1.8.2 there rather than reproduce the bug.
+
+## The native engine's time builtins
+
+They are glibc 2.39's code in Rust (M23), measured against jq 1.8.1 with
+`tools/time-diff.py`: 0 of 100 000 random calls differ under `UTC`,
+`Asia/Kolkata`, `America/New_York` and `Europe/Berlin`. Two places do not
+follow jq, deliberately:
+
+| Case | jq 1.8.1 | Pathfinder |
+|---|---|---|
+| A local time past about year 5 881 600 (`1e15 \| localtime` in New York) | glibc's daylight saving rule overflows an `int` and stops applying | the zone's rule goes on applying |
+| `strflocaltime` of a number `localtime` cannot convert (`1e17`) | aborts on an assertion, exit 134 | `localtime`'s error, `error converting number of seconds since epoch to datetime` |
+
+The locale is C, as on a host without glibc's locale files, where jq's
+static binary finds no other: `%c` is `Thu Mar  5 23:53:41 2015` whatever
+`LANG` says.
 
 ## Behaviour Pathfinder adds on top of jaq
 

@@ -122,9 +122,10 @@ fn assemble_here(
         .collect();
 
     let header = &src[..info.header_end];
-    let compile_error = compile_error(src, info.header_end, &ctx.named);
+    let compile_error = compile_error(src, info.header_end, info.imports, &ctx.named);
     if compile_error.is_none()
-        && let Some(cleaned) = drop_unreachable_undefined(src, info.header_end, &ctx.named)
+        && let Some(cleaned) =
+            drop_unreachable_undefined(src, info.header_end, info.imports, &ctx.named)
     {
         // The text is no longer the user's, so a `-f` file must not be read.
         let mut assembly = assemble_here(&cleaned, ctx, wrap, loc_file);
@@ -228,7 +229,12 @@ fn assemble_here(
 /// Parsing costs something, so the body is only examined when it has a
 /// construct that can be rejected: an object key computed with `(…)`, which
 /// follows a `{` or a `,`.
-fn compile_error(src: &str, header_end: usize, named: &[String]) -> Option<CompileError> {
+fn compile_error(
+    src: &str,
+    header_end: usize,
+    imports: bool,
+    named: &[String],
+) -> Option<CompileError> {
     // The escape hatch covers the checks too: a false rejection must be
     // avoidable without editing the filter.
     if std::env::var_os(crate::syntax::rewrite::NO_REWRITE_ENV).is_some() {
@@ -252,7 +258,7 @@ fn compile_error(src: &str, header_end: usize, named: &[String]) -> Option<Compi
     };
     if e.is_none()
         && (check::has_unknown_name(&toks) || check::has_variable(&toks, named))
-        && !definitions_elsewhere(header_end)
+        && !definitions_elsewhere(imports)
     {
         let tree = crate::syntax::parse::parse(body).ok()?;
         let mut found = check::undefined_calls(&tree, named).into_iter();
@@ -274,14 +280,19 @@ fn compile_error(src: &str, header_end: usize, named: &[String]) -> Option<Compi
 /// `src` with calls to undefined names in code nothing reaches replaced by
 /// `empty`, when it has any (`check::unreachable_undefined`); `None` when
 /// it has none, or when definitions it does not show may be in scope.
-fn drop_unreachable_undefined(src: &str, header_end: usize, named: &[String]) -> Option<String> {
+fn drop_unreachable_undefined(
+    src: &str,
+    header_end: usize,
+    imports: bool,
+    named: &[String],
+) -> Option<String> {
     if std::env::var_os(crate::syntax::rewrite::NO_REWRITE_ENV).is_some() {
         return None;
     }
     let body = &src[header_end..];
     let toks = crate::syntax::lex::lex(body).ok()?;
     if !(check::has_unknown_name(&toks) || check::has_variable(&toks, named))
-        || definitions_elsewhere(header_end)
+        || definitions_elsewhere(imports)
     {
         return None;
     }
@@ -305,8 +316,8 @@ fn drop_unreachable_undefined(src: &str, header_end: usize, named: &[String]) ->
 /// `import` or `include` in its header, or a `~/.jq` file, which jq loads
 /// into every program. Then a call to an engine-only name may be the
 /// program's own, and is not refused.
-fn definitions_elsewhere(header_end: usize) -> bool {
-    header_end > 0
+fn definitions_elsewhere(imports: bool) -> bool {
+    imports
         || std::env::var_os("HOME")
             .is_some_and(|home| std::path::Path::new(&home).join(".jq").is_file())
 }

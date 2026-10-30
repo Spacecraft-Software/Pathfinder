@@ -182,6 +182,7 @@ are identical to it but for their manifests. A following commit runs
 | 0014 lazy input | `pathfinder-fmts`: `read/formats.rs`, `read/mod.rs`; `pathfinder-json`: `read.rs` |
 | 0015 file locations | none (CLI only) |
 | 0016 trailing comment | `pathfinder-core`: `load/lex.rs` (added after M18: an upstream bug found by fuzzing, T-019) |
+| 0017 input and halt | `pathfinder-std`: `input.rs`, `lib.rs`, `defs.jq`; `pathfinder-jaq`: `lib.rs` (M23: `input` raises `"break"` and reads lazily; `halt_error` checks its status first, converts it as C's `int`, and exits as jq's `main`) |
 
 ### CLI hunks, applied in T-010
 
@@ -232,7 +233,7 @@ that only a non-jq format needed was removed in T-004 and is listed as such.
 | `typed-arena` | 2.0.2 | core | Arena that owns the loaded module sources (`load/mod.rs`) | Kept |
 | `arbitrary` | 1.4.2 | core, optional | Generates parser input for fuzzing (`load/arbitrary.rs`); off unless the `arbitrary` feature is on, which only jaq's `fuzz/` crate enables | Kept for T-019 |
 | `bstr` | 1.13.1 | std, json, fmts | Byte strings: jq strings are not required to be valid UTF-8 internally | Kept |
-| `jiff` | 0.2.35 | std, `time` | Date and time builtins (`strftime`, `mktime`, `todate`, …) | Kept |
+| `jiff` | 0.2.35 | std, `time` | The system time zone's rules for `localtime`, `mktime` and `strflocaltime` (M23: the builtins themselves are glibc's, `ctime.rs`) | Kept |
 | `regex-bites` | 0.1.6 | std, `regex` | `test`, `match`, `capture`, `sub`, … | Replaced in M22 (T-042) by `crates/pathfinder-regex`, Pathfinder's port of the Oniguruma 6.9.10 jq 1.8.1 matches with; it has no dependencies |
 | `log` | 0.4.29 | std, `log` | Routes `debug` and `stderr` messages to the CLI's logger | Kept; revisit when M19 writes them in-process |
 | `libm` | 0.2.16 | std, `math` | The C math library functions jq exposes (`ilogb`, `scalbln`, `frexp`, …) | Kept |
@@ -562,6 +563,42 @@ definition is a `foreach` over the matches with an object per step, where
 jaq's was one native call; it is kept for jq's semantics (it is a path
 expression: `path(splits(","))` gives jq's paths).
 
+## M23: numbers, `input`, and jq's time builtins
+
+- **`input`** past the last input raises the error `"break"`, as jq's
+  `f_input` does (`pathfinder-std/src/input.rs`); jq's own `inputs` is a
+  `try repeat(input) catch if . == "break" then empty else error end`.
+- **Literals.** A decNumber literal written with a bare point (`1.`,
+  `1.e3`) prints as jq's (`1`, `1E+3`), negating a zero literal gives `0`,
+  and `length` of a literal keeps its text (`pathfinder-json/src/num.rs`).
+  The input reader takes `1.`, `.5`, `-.5` and `1.e3`, as jq's does
+  (`read.rs`).
+- **Time.** jq's `gmtime`, `localtime`, `mktime`, `strftime`,
+  `strflocaltime` and `strptime` are its C functions over the C library,
+  and its release binary links glibc 2.39 statically (Ubuntu 24.04, the
+  binary's `GCC: (Ubuntu 13.3.0-6ubuntu2~24.04)` note). jaq's `time.rs`,
+  which formatted and parsed with `jiff`, is replaced by
+  `pathfinder-std/src/time.rs` (jq's functions: messages, sentinels, the
+  fraction of a second, the NUL that ends a C string) over `ctime.rs`, a
+  transcription of glibc 2.39's `__strftime_internal`,
+  `__strptime_internal` and `__mktime_internal` in the C locale.
+  `fromdateiso8601`, `todateiso8601`, `fromdate` and `todate` are jq's
+  definitions in `defs.jq`. Only the zone's rules come from `jiff`
+  (`TimeZone::system`, which reads `TZ` and `/etc/localtime` as glibc
+  does); past its year 9999 they repeat every 400 years, as a zone file's
+  closing POSIX rule does.
+
+  Measured with `tools/time-diff.py` under `UTC`, `Asia/Kolkata`,
+  `America/New_York` and `Europe/Berlin`: 0 of 100 000 random calls
+  differ from jq 1.8.1. The fuzzer keeps out the two places this does not
+  follow jq: past about year 5 881 600 glibc's daylight saving rule
+  overflows an `int` (the day count in `tzset.c`'s `compute_change`)
+  where this keeps applying the rule, and `strflocaltime` of a number
+  `localtime` cannot convert makes jq abort on an assertion
+  (`jv_array_get`) where this raises `localtime`'s error. Where glibc's
+  loops read past `__mon_yday`, this reads what jq's binary reads there
+  (measured: 255 before the common year's row).
+
 ## Licence of Pathfinder's changes
 
 The text taken from jaq keeps jaq's MIT licence and its copyright notice
@@ -579,3 +616,9 @@ Oniguruma's data, under Oniguruma's `BSD-2-Clause` and K.Kosako's notice;
 the files that transcribe Oniguruma's code are
 `BSD-2-Clause AND (GPL-3.0-or-later OR MIT)`, keeping that notice; the
 rest are Pathfinder's, `GPL-3.0-or-later OR MIT`.
+
+`pathfinder-std/src/ctime.rs` transcribes glibc 2.39's time functions and
+keeps their `LGPL-2.1-or-later` and the Free Software Foundation's notice;
+`REUSE.toml` records it as
+`LGPL-2.1-or-later AND MIT AND (GPL-3.0-or-later OR MIT)`, and the crate's
+`license` field is `MIT AND LGPL-2.1-or-later`.

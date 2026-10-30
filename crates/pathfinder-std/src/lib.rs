@@ -46,6 +46,8 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
+#[cfg(feature = "time")]
+mod ctime;
 pub mod input;
 #[cfg(feature = "math")]
 mod math;
@@ -690,11 +692,38 @@ where
                     .map(|s| ValT::from_utf8_bytes(s.replace(b"'", b"'\\''"))),
             )
         }),
+        // Pathfinder: jq's `main` takes the status as C's `int ret =
+        // jv_number_value(…)`: truncated, and the x86-64 conversion's
+        // `INT_MIN` where it has no value (NaN, out of range).
         ("_halt", v(1), |mut cv| {
-            let exit_code = cv.0.pop_var().try_as_i32().map_err(Exn::from);
+            let exit_code = cv.0.pop_var().try_as_f64().map(c_int).map_err(Exn::from);
             box_once(exit_code.and_then(|exit_code| Err(Exn::halt(exit_code))))
         }),
+        // Pathfinder: `halt_error`'s type check, made before its message is
+        // written (`f_halt_error`).
+        ("_halt_check", v(1), |mut cv| {
+            let code = cv.0.pop_var();
+            bome(if code.as_f64().is_some() {
+                Ok(cv.1)
+            } else {
+                Err(Error::str(alloc::format!(
+                    "{} halt_error/1: number required",
+                    cv.1.jq_quoted()
+                )))
+            })
+        }),
     ])
+}
+
+/// C's conversion of a double to an `int`, as x86-64's `cvttsd2si` does
+/// it: truncated, and `INT_MIN` where the result has no value.
+#[expect(clippy::cast_possible_truncation, reason = "range-checked first")]
+fn c_int(f: f64) -> i32 {
+    if f.is_nan() || !(-2_147_483_649.0 < f && f < 2_147_483_648.0) {
+        i32::MIN
+    } else {
+        f as i32
+    }
 }
 
 #[cfg(feature = "std")]
@@ -1043,58 +1072,21 @@ fn time<D: DataT>() -> Box<[Filter<RunPtr<D>>]>
 where
     for<'a> D::V<'a>: ValT,
 {
-    use jiff::tz::TimeZone;
+    // Pathfinder: jq 1.8.1's C functions on glibc (`time.rs`); `todate`,
+    // `fromdate` and the ISO 8601 forms are jq's definitions (`defs.jq`).
     Box::new([
-        // Pathfinder: jq 1.8.1 writes `fromdateiso8601` with `strptime`, so
-        // it fails with that function's messages.
-        ("fromdateiso8601", v(0), |cv| {
-            let both = "strptime/1 requires string inputs and arguments";
-            let s =
-                cv.1.utf8_or(both)
-                    .and_then(|s| core::str::from_utf8(s).map_err(Error::str));
-            bome(s.and_then(|s| {
-                time::from_iso8601(s).map_err(|_no_match| {
-                    let v = &cv.1;
-                    Error::str(alloc::format!(
-                        "date {v} does not match format \"%Y-%m-%dT%H:%M:%SZ\""
-                    ))
-                })
-            }))
-        }),
-        ("todateiso8601", v(0), |cv| {
-            bome(time::to_iso8601(&cv.1).map(D::V::from))
-        }),
         ("strftime", v(1), |cv| {
-            unary(cv, |v, fmt| {
-                time::strftime(&v, fmt.try_as_str()?, TimeZone::UTC)
-            })
+            unary(cv, |v, fmt| time::strftime(v, &fmt, false))
         }),
         ("strflocaltime", v(1), |cv| {
-            unary(cv, |v, fmt| {
-                time::strftime(&v, fmt.try_as_str()?, TimeZone::system())
-            })
+            unary(cv, |v, fmt| time::strftime(v, &fmt, true))
         }),
-        ("gmtime", v(0), |cv| {
-            bome(time::gmtime(&cv.1, TimeZone::UTC))
-        }),
-        ("localtime", v(0), |cv| {
-            bome(time::gmtime(&cv.1, TimeZone::system()))
-        }),
-        // Pathfinder: jq's messages.
+        ("gmtime", v(0), |cv| bome(time::gmtime(&cv.1))),
+        ("localtime", v(0), |cv| bome(time::localtime(&cv.1))),
         ("strptime", v(1), |cv| {
-            unary(cv, |v, fmt| {
-                let both = "strptime/1 requires string inputs and arguments";
-                let (s, f) = (v.utf8_or(both)?, fmt.utf8_or(both)?);
-                let (s, f) = (
-                    core::str::from_utf8(s).map_err(Error::str)?,
-                    core::str::from_utf8(f).map_err(Error::str)?,
-                );
-                time::strptime(s, f).map_err(|_no_match| {
-                    Error::str(alloc::format!("date {v} does not match format {fmt}"))
-                })
-            })
+            unary(cv, |v, fmt| time::strptime(&v, &fmt))
         }),
-        ("mktime", v(0), |cv| bome(time::mktime(&cv.1))),
+        ("mktime", v(0), |cv| bome(time::mktime(cv.1))),
     ])
 }
 

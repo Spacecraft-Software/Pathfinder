@@ -144,7 +144,12 @@ impl Num {
                 Sign::Plus | Sign::NoSign => Self::BigInt(i.clone()),
                 Sign::Minus => Self::BigInt(BigInt::from(i.magnitude().clone()).into()),
             },
-            Self::Dec(n) => Self::from_dec_str(n).length(),
+            // Pathfinder: jq's `length` of a number is `jv_number_abs`,
+            // which keeps a literal (`-1.10 | length` is `1.10`, M23).
+            Self::Dec(n) => Self::Dec(
+                n.strip_prefix('-')
+                    .map_or_else(|| n.clone(), |p| Rc::new(p.into())),
+            ),
             Self::Float(f) => Self::Float(f.abs()),
         }
     }
@@ -365,6 +370,9 @@ impl core::ops::Neg for Num {
             Self::Float(x) => Self::Float(-x),
             Self::Dec(n) => match n.strip_prefix('-') {
                 Some(pos) => Self::Dec(pos.to_string().into()),
+                // Pathfinder: decNumber's minus of a zero is a positive
+                // zero (`-0.0` is `0.0`, M23).
+                None if dec_is_zero(&n) => Self::Dec(n),
                 None => Self::Dec(alloc::format!("-{n}").into()),
             },
         }
@@ -548,13 +556,23 @@ fn jq_float(x: f64) -> String {
     out
 }
 
+/// Whether the literal `n` is a zero (`0.0`, `0E+10`).
+fn dec_is_zero(n: &str) -> bool {
+    let mantissa = n.split(['e', 'E']).next().unwrap_or(n);
+    mantissa
+        .bytes()
+        .all(|b| matches!(b, b'0' | b'.' | b'+' | b'-'))
+}
+
 /// Whether decNumber would print the literal `n` exactly as written: plain
 /// notation (no exponent) whose integer part is non-zero and has no leading
 /// zero, or `0.` followed by fewer than six zeros before the first digit.
 fn dec_is_canonical(n: &str) -> bool {
     let n = n.strip_prefix('-').unwrap_or(n);
     let b = n.as_bytes();
-    if b.iter().any(|c| matches!(c, b'e' | b'E' | b'+')) || b.is_empty() {
+    // Pathfinder: a trailing `.` is dropped (`1.` is `1`, M23).
+    if b.iter().any(|c| matches!(c, b'e' | b'E' | b'+')) || b.is_empty() || b.last() == Some(&b'.')
+    {
         return false;
     }
     match b {

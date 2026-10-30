@@ -333,7 +333,21 @@ print. To keep the `jq` name untouched:
   slicing once per match stays linear. Measure a regex claim with
   `tools/regex-diff.py`, which found the quirks above: random patterns
   over every construct and flag, run through jq 1.8.1 and the shim,
-  compared line by line.
+  compared line by line. jq's own limit applies: its `main` lowers
+  Oniguruma's parse depth limit to 1024, so 512 nested groups are
+  `parse depth limit over`.
+- **On the native engine, the time builtins are glibc's** (M23,
+  `pathfinder-std/src/ctime.rs`): jq's `gmtime`, `mktime`, `strftime`,
+  `strptime` and their local forms call the C library, and its release
+  binary links glibc 2.39, so `ctime.rs` transcribes that release's
+  `__strftime_internal`, `__strptime_internal` and `__mktime_internal` in
+  the C locale, their order of checks and their quirks kept (`%+` is not a
+  flag, `#` is ignored in a subformat, `-` still pads a name, an
+  abbreviated day moves `%a`'s read position, a `%O` with a number decides
+  the locale). `time.rs` is jq's C glue over it; `todate`/`fromdate` are
+  jq's definitions. Only the zone's rules come from `jiff`. Measure a
+  time claim with `tools/time-diff.py` under several `TZ`; a change here
+  is checked against glibc's source, not against a man page.
 - **On the jaq engine, `src/regex.rs` and the prelude's `_pf_scanre` must
   name groups identically.** The Rust side precomputes literal regexes, the jq side scans
   computed ones; the two are transcriptions of one tokenising regex. Change
@@ -466,8 +480,9 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
 | `crates/pathfinder/src/syntax/jq_errors.rs`, `jq_tables.rs` | jq's syntax errors: its lexer ported, and bison's driver over jq 1.8.1's generated tables (`tools/jq-tables.py`). |
 | `crates/pathfinder/src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
 | `crates/pathfinder/src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
-| `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`, path expressions, `l // r` as a path, `%`, parse errors, lazy input reading, file names in error locations, a comment at the end of the program), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); Bravais builds whatever its own nixpkgs has, by making this flake follow it, so every jaq it may carry needs a cut that applies without fuzz. `0008`, `0013` and `0015` have a 3.1.0 cut (3.1.0's `real_main` differs on the lines they replace); `0008`, `0010` and `0015` have a 3.1.2 cut (3.1.2 passes `input_filename` to `run` and rounds with its own helpers); `0016` is skipped from 3.1.2, which fixed the same bug the same way. `cut` in `default.nix` picks by version. When nixpkgs moves jaq, replay the patch commits onto the new release in jaq's source tree, apply the old cuts with `patch -p1` and cut anew only those that fail or fuzz. MIT for jaq's text, Pathfinder's changes GPL-3.0-or-later OR MIT; never sent upstream. |
+| `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`, path expressions, `l // r` as a path, `%`, parse errors, lazy input reading, file names in error locations, a comment at the end of the program, `input` past the end and `halt_error`'s status), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); Bravais builds whatever its own nixpkgs has, by making this flake follow it, so every jaq it may carry needs a cut that applies without fuzz. `0008`, `0013`, `0015` and `0017` have a 3.1.0 cut (3.1.0's `real_main` differs on the lines they replace); `0008`, `0010` and `0015` have a 3.1.2 cut (3.1.2 passes `input_filename` to `run` and rounds with its own helpers); `0016` is skipped from 3.1.2, which fixed the same bug the same way. `cut` in `default.nix` picks by version. When nixpkgs moves jaq, replay the patch commits onto the new release in jaq's source tree, apply the old cuts with `patch -p1` and cut anew only those that fail or fuzz. MIT for jaq's text, Pathfinder's changes GPL-3.0-or-later OR MIT; never sent upstream. |
 | `crates/pathfinder-core`, `-std`, `-json`, `-fmts` | jaq 3.1.1's engine crates, imported with the patch set applied (`crates/UPSTREAM.md`). Library names stay `jaq_core`, … so the sources stay diffable against upstream. |
+| `crates/pathfinder-std/src/ctime.rs` | glibc 2.39's `strftime`, `strptime`, `mktime`/`timegm` and `gmtime`/`localtime` in Rust, as jq's release binary runs them (M23); `LGPL-2.1-or-later` for glibc's text. |
 | `crates/pathfinder-regex` | jq 1.8.1's Oniguruma 6.9.10 in Rust (M22): `parse.rs` (`regparse.c`), `tune.rs` and `compile.rs` (`regcomp.c`), `exec.rs` (`regexec.c`), `error.rs` (`regerror.c`), `tables.rs` (its Unicode data, generated). No dependencies; Oniguruma's BSD-2-Clause and notice on what is taken from it. |
 | `crates/pathfinder-all` | jaq 3.1.1's `jaq-all` (lib `jaq_all`): compiling, running, reading and writing on the engine crates. Its `defs.jq` holds definitions that need every engine crate (`format`). |
 | `crates/pathfinder-jaq` | jaq 3.1.1's CLI, with the CLI hunks of the patch set, as the library `jaq` the native engine runs (`jaq::run`) and as the binary `pathfinder-jaq`, run as `PATHFINDER_JAQ` to check the crates against the packaged jaq. `publish = false`; never installed. |
@@ -476,6 +491,7 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
 | `crates/pathfinder/tests/native.rs` | The native surface: mode cascade, JSON shapes, exit codes, and that the `jq` name is unchanged under an agent environment. |
 | `tools/jq-tables.py` | Writes `jq_tables.rs` from jq 1.8.1's `src/` (parser tables, C builtins). |
 | `tools/regex-diff.py` | Random regexes through jq 1.8.1 and the native engine, compared case by case (M22). |
+| `tools/time-diff.py` | Random time calls through jq 1.8.1 and the native engine under several zones, compared case by case (M23). |
 | `tools/onig-tables.py` | Writes `pathfinder-regex`'s `tables.rs` from the Oniguruma in jq 1.8.1's tarball (properties, folds, grapheme breaks, ISO-8859-1 types). |
 | `fuzz/` | `cargo fuzz` targets for jq's argv, the front end, and evaluation through the engine crates; see Fuzzing. Its own Cargo root. |
 | `SKILL.md` | Agent-facing description of the shim. Frontmatter first, so its licence is in `REUSE.toml`; keep `description` ≤ 1000 rendered characters. |
@@ -522,6 +538,8 @@ Pathfinder's changes to them, and the files Pathfinder adds among them, are
 under MIT. They carry **no inline headers, by design**: `REUSE.toml` covers
 them, so each file stays byte-diffable against upstream. Do not add headers
 to them. The shim crate, `crates/pathfinder`, is `GPL-3.0-or-later` only.
+`crates/pathfinder-std/src/ctime.rs` transcribes glibc and is
+`LGPL-2.1-or-later AND MIT AND (GPL-3.0-or-later OR MIT)` in `REUSE.toml`.
 `crates/pathfinder-regex` carries inline headers: its generated tables are
 Oniguruma's `BSD-2-Clause` (K.Kosako's notice), the files transcribing
 Oniguruma's code `BSD-2-Clause AND (GPL-3.0-or-later OR MIT)`, the rest

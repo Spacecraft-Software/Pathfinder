@@ -1020,6 +1020,149 @@ static PATCHED_STDERR_CASES: &[Case] = &[
 /// file it has open, where the jaq engine's prelude can only define a
 /// constant `input_filename`.
 static NATIVE_CASES: &[Case] = &[
+    // --- jq's `input` past the last input raises "break" (M23) ---
+    c("1", &["-c", "., (try input catch .)"]),
+    c("1 2", &["-c", "[., input, (try input catch .)]"]),
+    // `input` reads when its output is asked for: the initialiser first.
+    c("1 2", &["-nc", "reduce (try input) as $x (input; [., $x])"]),
+    c("1 2 3", &["-nc", "[input, input], [limit(1; input)]"]),
+    // `halt_error`: the status as C's `int`, a negative one 0 (absolute
+    // under `-e`), and the type checked before the message is written.
+    c("null", &["-n", r#""m" | halt_error(-1)"#]),
+    c("null", &["-en", r#""m" | halt_error(-1)"#]),
+    c("null", &["-n", r#""m\n" | halt_error(1.9)"#]),
+    c("null", &["-n", r#""m" | halt_error(300.0)"#]),
+    c("null", &["-n", r#""m" | halt_error(1e10)"#]),
+    c("null", &["-n", "halt_error((0.0 | length))"]),
+    c("null", &["-n", r#""m" | halt_error("x")"#]),
+    c(
+        "null",
+        &["-nc", r#"try halt_error({"aaaaaaaaaaaa":1}) catch ."#],
+    ),
+    // A leading `+` in the input is not kept.
+    c("+1.000 +.5 +1e2 +0 +12", &["-c", "[., -., tojson, length]"]),
+    c("", &["-nc", "try input catch ."]),
+    c("", &["-n", "input"]),
+    c("1", &["-c", "first(inputs), [inputs]"]),
+    // --- decNumber literals: a bare point, and zero negated (M23) ---
+    c(
+        "null",
+        &[
+            "-c",
+            "[1., -0, -(0), (0 | -.), 1.e3, 1.5e-1] | ., map(tostring), (.[0] | length)",
+        ],
+    ),
+    c("1. .5 -.5 1.e3 -1.E+2", &["-c", "."]),
+    c(
+        "null",
+        &["-c", "def f: 1.; [f, -.5, .5e1], ([1., 2.] | add)"],
+    ),
+    // --- a `module` directive is part of the header (M23) ---
+    c("null", &["-c", "module {a:1}; undefined_fn"]),
+    c("null", &["-c", "module {a:1}; 1"]),
+    c("null", &["-c", "module {# ; a comment\na:1}; 1"]),
+    // --- time builtins: jq's C functions on glibc (M23) ---
+    // `timegm` normalises fields out of range and truncates fractions.
+    c("[2015,14,40,25,61,61.9,0,0]", &["-c", "mktime"]),
+    c("[2015]", &["-c", "mktime, todate"]),
+    c("[1969,11,31,23,59,59,0,0]", &["-c", "try mktime catch ."]),
+    c(
+        "[2015,1,\"x\"]",
+        &["-c", "try mktime catch ., try todate catch ."],
+    ),
+    c(r#""2015""#, &["-c", "try mktime catch ."]),
+    // Fractional and negative seconds, years past 9999 and before 1.
+    c(
+        "[1425599621.987, -1.5, 253402300800, -62135596801]",
+        &["-c", "map(gmtime)"],
+    ),
+    c("[253402300800, -62135596800, 1e15]", &["-c", "map(todate)"]),
+    c("1e300", &["-c", "try gmtime catch ."]),
+    c(
+        r#""1""#,
+        &["-c", "try gmtime catch ., try localtime catch ."],
+    ),
+    // glibc's conversions, flags and widths, and what it copies.
+    c(
+        "1425599621",
+        &[
+            "-c",
+            r#"strftime("%a %A %b %B %c %C %d %D %e %F %g %G %h %H %I %j %k %l %m %M %n %p %P %r %R %S %t %T %u %U %V %w %W %x %X %y %Y %z %Z %%")"#,
+        ],
+    ),
+    c(
+        "1425599621",
+        &[
+            "-c",
+            r#"strftime("%-d|%_m|%010Y|%^a|%#b|%#p|%^P|%#Z|%-8B|%8R|%_z|%+e|%Ey|%Od|%Oe|%Ea|%^E%|%6f|%")"#,
+        ],
+    ),
+    c(
+        "[1, 1694, -1, 36]",
+        &[
+            "-c",
+            r#"map(. * 86400 * 365 | strftime("%G-W%V-%u %g %U %W %C %y %j"))"#,
+        ],
+    ),
+    c(
+        "0",
+        &["-c", r#"strftime(""), try strftime("%c" * 10) catch ."#],
+    ),
+    c(
+        "0",
+        &[
+            "-c",
+            r#"try strftime(1) catch ., try ({} | strftime("")) catch ."#,
+        ],
+    ),
+    // `%s` reads the fields as local time; `strflocaltime` as well.
+    c(
+        "1425599621",
+        &[
+            "-c",
+            r#"strftime("%s %z %Z"), strflocaltime("%s"), (localtime | mktime)"#,
+        ],
+    ),
+    c(
+        "[2024,6,1,12,0,0,0,0]",
+        &["-c", r#"strflocaltime("%H %s"), strftime("%H %s")"#],
+    ),
+    // `strptime`: glibc's derived fields, jq's sentinels and the rest.
+    c(
+        r#"["10:15", "Thursday, March 05", "2015-03-05T23:51:47Z", "1/2/03", "12 PM", "SunMon"]"#,
+        &[
+            "-c",
+            r#"[.[0] | strptime("%H:%M")], [.[1] | strptime("%A, %B %d")], [.[2] | strptime("%Y-%m-%dT%H:%M:%SZ")], [.[3] | strptime("%D")], [.[4] | strptime("%I %p")], [.[5] | strptime("%a")]"#,
+        ],
+    ),
+    c(
+        r#"["2015 64", "15 2", "x00\tFri", "2000x00 Mon", "DecZ366", "2015-03-05  x", "2015-03-05x"]"#,
+        &[
+            "-c",
+            r#"(.[0] | strptime("%Y %j")), (.[1] | strptime("%y %C")), (.[2] | strptime("x%W\t%a")), (.[3] | strptime("%Yx%W %a")), (.[4] | strptime("%bZ%j")), (.[5] | strptime("%F")), (.[5] | try strptime("%Fx") catch .), (.[6] | try strptime("%F") catch .)"#,
+        ],
+    ),
+    c(
+        r#"["5", " 19", "+05:30", "1425599621", "2015"]"#,
+        &[
+            "-c",
+            r#"(.[0] | try strptime("%Ou") catch .), (.[1] | try strptime(" %OC") catch .), (.[2] | strptime("%z")), (.[3] | strptime("%s") | length), (.[4] | strptime("%EY")), (.[4] | try strptime("%Od%EY") catch .)"#,
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            r#"try strptime("%Y") catch ., try ("1" | strptime(1)) catch ."#,
+        ],
+    ),
+    c(
+        r#""2015-03-05T23:51:47Z""#,
+        &[
+            "-c",
+            "fromdate, fromdateiso8601, (fromdate | todate), (try (\"2015-03-05T23:51:47.5Z\" | fromdate) catch .)",
+        ],
+    ),
     // Read by Pathfinder's parser (M21): a second `?` is `try` over the
     // whole term; a lone low surrogate escape is U+FFFD.
     c("1", &["-c", "[.a.b??]"]),

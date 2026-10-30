@@ -72,11 +72,11 @@ the same change.
 
 ## M23 — Numbers and the remaining gaps
 
-- [ ] P-073 Decimal literals keep their text until computed on (`1E+1000`, big integers) as jq's decNumber does
-- [ ] P-074 `try input` and `break`, and the other evaluator quirks in jq's suite
+- [x] P-073 Decimal literals keep their text until computed on (`1E+1000`, big integers) as jq's decNumber does
+- [x] P-074 `try input` and `break`, and the other evaluator quirks in jq's suite; jq's time builtins as glibc runs them
 - [ ] P-075 `--stream` and `--stream-errors` (optional)
 - [ ] P-076 `input_line_number` and `$__loc__` (optional)
-- [ ] P-077 jq 1.8.1's suite at 818/820 or better (PRD R-003)
+- [x] P-077 jq 1.8.1's suite at 818/820 or better (PRD R-003): 820/820 on the native engine
 
 ## M24 — Release
 

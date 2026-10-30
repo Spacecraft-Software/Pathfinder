@@ -288,7 +288,7 @@ fn lex_from(src: &str, mut pos: usize, interp: usize) -> Result<(Vec<Token>, usi
 
 /// Skip a `#` comment. A backslash escapes the next backslash or newline, so a
 /// comment line ending in `\` continues onto the next line.
-fn skip_comment(b: &[u8], mut pos: usize) -> usize {
+pub(crate) fn skip_comment(b: &[u8], mut pos: usize) -> usize {
     pos += 1;
     while let Some(&c) = b.get(pos) {
         match c {

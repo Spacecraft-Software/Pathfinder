@@ -339,9 +339,48 @@ fn parse_string<L: LexAlloc>(lexer: &mut L, bytes: bool) -> Result<Vec<u8>, hifi
 }
 
 fn parse_num<L: LexAlloc>(lexer: &mut L) -> Result<Num, hifijson::Error> {
-    let num = hifijson::num::Num::signed_digits();
-    let (num, parts) = lexer.num_string_with(num).unvalidated();
-    let num = num.as_ref();
+    // Pathfinder: a number as decNumber reads jq's literal, which JSON's
+    // grammar does not cover: `1.`, `.5`, `-.5`, `1.e3` (M23). A sign, then
+    // digits and a point with a digit on either side or both, then an
+    // optional exponent.
+    let mut num = String::new();
+    let mut is_int = true;
+    if let Some(c @ (b'+' | b'-')) = lexer.peek_next() {
+        lexer.take_next();
+        num.push(char::from(c));
+    }
+    let digits = |lexer: &mut L, num: &mut String| {
+        let mut n = 0;
+        while let Some(c) = lexer.peek_next().filter(u8::is_ascii_digit) {
+            lexer.take_next();
+            num.push(char::from(c));
+            n += 1;
+        }
+        n
+    };
+    let mut seen = digits(lexer, &mut num);
+    if lexer.peek_next() == Some(b'.') {
+        lexer.take_next();
+        num.push('.');
+        is_int = false;
+        seen += digits(lexer, &mut num);
+    }
+    if seen > 0 && matches!(lexer.peek_next(), Some(b'e' | b'E')) {
+        lexer.take_next();
+        num.push('e');
+        is_int = false;
+        if let Some(c @ (b'+' | b'-')) = lexer.peek_next() {
+            lexer.take_next();
+            num.push(char::from(c));
+        }
+        if digits(lexer, &mut num) == 0 {
+            Err(hifijson::num::Error::ExpectedDigit)?;
+        }
+    }
+    if seen == 0 && num.contains('.') {
+        Err(hifijson::num::Error::ExpectedDigit)?;
+    }
+    let num = num.as_str();
     Ok(match num {
         "+" => Num::Float(
             special_word(&word(lexer), lexer).ok_or(hifijson::num::Error::ExpectedDigit)?,
@@ -349,11 +388,14 @@ fn parse_num<L: LexAlloc>(lexer: &mut L) -> Result<Num, hifijson::Error> {
         "-" => Num::Float(
             -special_word(&word(lexer), lexer).ok_or(hifijson::num::Error::ExpectedDigit)?,
         ),
-        _ if num.ends_with(|c: char| c.is_ascii_digit()) => {
+        _ if seen > 0 => {
+            // A leading `+` is not kept: decNumber's text has none, and
+            // negation writes a sign before the text (`-+.5`).
+            let num = num.strip_prefix('+').unwrap_or(num);
             // Pathfinder: jq keeps `-0` as written; an integer would lose the sign.
             if num == "-0" {
                 Num::Dec(num.to_string().into())
-            } else if parts.is_int() {
+            } else if is_int {
                 Num::from_str_radix(num, 10).unwrap()
             } else {
                 Num::Dec(num.to_string().into())
@@ -399,7 +441,7 @@ fn parse<L: LexAlloc>(next: u8, lexer: &mut L, depth: usize) -> Result<Val, hifi
             w if w == b"null" => Val::Null,
             w => Val::Num(Num::Float(special_word(&w, lexer).ok_or(Expect::Value)?)),
         },
-        b'0'..=b'9' | b'+' | b'-' => Val::Num(parse_num(lexer)?),
+        b'0'..=b'9' | b'+' | b'-' | b'.' => Val::Num(parse_num(lexer)?),
         b'"' => Val::utf8_str(parse_string(lexer.discarded(), false)?),
         b'[' => Val::Arr({
             let mut arr = Vec::new();

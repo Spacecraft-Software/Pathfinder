@@ -83,3 +83,13 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 path = ["crates/pathfinder-core/**", "crates/pathfinder-std/**", "crates/pathfinder-json/**", "crates/pathfinder-fmts/**", "crates/pathfinder-all/**", "crates/pathfinder-jaq/**"]
 SPDX-FileCopyrightText = ["Michael Färber <michael.faerber@gedenkt.at> and jaq contributors", "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
 SPDX-License-Identifier = "MIT AND (GPL-3.0-or-later OR MIT)"
+
+# jq 1.8.1's time builtins on glibc (M23): `ctime.rs` transcribes glibc
+# 2.39's `strftime`, `strptime` and `mktime` (time/strftime_l.c,
+# time/strptime_l.c, time/mktime.c), which are LGPL-2.1-or-later, and jq's
+# `set_tm_wday`/`set_tm_yday`, which are MIT; Pathfinder's own text in it is
+# GPL-3.0-or-later or MIT. Listed after the engine's glob, which it overrides.
+[[annotations]]
+path = ["crates/pathfinder-std/src/ctime.rs"]
+SPDX-FileCopyrightText = ["1993-2024 Free Software Foundation, Inc.", "2012 Stephen Dolan and jq contributors", "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
+SPDX-License-Identifier = "LGPL-2.1-or-later AND MIT AND (GPL-3.0-or-later OR MIT)"

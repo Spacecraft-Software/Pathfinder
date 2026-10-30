@@ -3,7 +3,7 @@ name = "pathfinder-std"
 version = "3.0.1"
 authors = ["Michael Färber <michael.faerber@gedenkt.at>"]
 edition = "2021"
-license = "MIT"
+license = "MIT AND LGPL-2.1-or-later"
 readme = "../../README.md"
 description = "Standard library for jaq"
 repository = "https://github.com/01mf02/jaq"
@@ -25,7 +25,7 @@ regex = ["pathfinder-regex", "std"]
 std = ["jaq-core/std"]
 format = ["aho-corasick", "base64", "urlencoding"]
 math = ["libm"]
-time = ["jiff"]
+time = ["jiff", "std"]
 
 [dependencies]
 jaq-core = { workspace = true }

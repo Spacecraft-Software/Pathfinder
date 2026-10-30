@@ -187,8 +187,9 @@ pub fn rewrite(src: &str, on: Rewrites) -> Option<Rewrite> {
 fn worth_parsing(src: &str) -> bool {
     fn any(src: &str, toks: &[super::lex::Token]) -> bool {
         toks.iter().any(|t| match &t.tok {
-            // A number written with a leading point, `.5`, which jaq cannot read.
-            Tok::Number => src[t.span.start..].starts_with('.'),
+            // A number written with a bare point, `.5`, `1.` or `1.e3`,
+            // which jaq cannot read.
+            Tok::Number => bare_point(&src[t.span.start..t.span.end]),
             // Assignment; `reduce`/`foreach` sources; `?//` alternatives and
             // `{$b: pattern}` (a binding before `:`).
             // `[`: an index or slice that may need jq's number rules; `-`: a
@@ -346,10 +347,16 @@ impl Cx<'_> {
                 (format!("(({r}) as {t} | ({l}) {op} {t})"), true)
             }
             // `.5`: jaq reads only `0.5`.
-            Kind::Number if self.on.syntax && self.src[node.span.start..].starts_with('.') => (
-                format!("0{}", &self.src[node.span.start..node.span.end]),
-                true,
-            ),
+            // jaq's lexer reads neither `.5` nor `1.` (or `1.e2`); jq's
+            // decNumber gives the same number without the bare point.
+            Kind::Number
+                if self.on.syntax && bare_point(&self.src[node.span.start..node.span.end]) =>
+            {
+                (
+                    without_bare_point(&self.src[node.span.start..node.span.end]),
+                    true,
+                )
+            }
             Kind::Bind {
                 source,
                 patterns,
@@ -1617,6 +1624,37 @@ fn is_assignment(op: &str) -> bool {
 /// is not a single postfix term.
 const fn is_compound(source: &Node) -> bool {
     matches!(source.kind, Kind::Binary { .. } | Kind::Neg(_))
+}
+
+/// Whether a number literal has a point with no digit before or after it.
+fn bare_point(n: &str) -> bool {
+    let b = n.as_bytes();
+    b.iter().enumerate().any(|(i, &c)| {
+        c == b'.'
+            && (i == 0
+                || !b[i - 1].is_ascii_digit()
+                || !b.get(i + 1).is_some_and(u8::is_ascii_digit))
+    })
+}
+
+/// The literal as jaq reads it: `.5` is `0.5`, `1.` is `1`, `1.e2` is `1e2`.
+fn without_bare_point(n: &str) -> String {
+    let mut out = String::with_capacity(n.len() + 1);
+    let b = n.as_bytes();
+    for (i, &c) in b.iter().enumerate() {
+        if c == b'.' {
+            let before = i > 0 && b[i - 1].is_ascii_digit();
+            let after = b.get(i + 1).is_some_and(u8::is_ascii_digit);
+            if !before {
+                out.push('0');
+            }
+            if !after {
+                continue;
+            }
+        }
+        out.push(char::from(c));
+    }
+    out
 }
 
 #[cfg(test)]

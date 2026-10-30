@@ -90,6 +90,21 @@ from Oniguruma keeps its BSD-2-Clause licence and K.Kosako's copyright notice
 (Standard §4.2); Pathfinder's own text in those files is offered under
 GPL-3.0-or-later or MIT.
 
+## The GNU C Library — Free Software Foundation
+
+<https://www.gnu.org/software/libc/> · LGPL-2.1-or-later
+
+jq's time builtins are thin wrappers over the C library, and its release
+binary links glibc 2.39 statically, so what `strftime`, `strptime`,
+`mktime` and `gmtime` answer in jq is what glibc's code does.
+`crates/pathfinder-std/src/ctime.rs` transcribes that release's
+`time/strftime_l.c`, `time/strptime_l.c` and `time/mktime.c` into Rust,
+keeping their function names, their order of checks and their quirks, so
+that a date behaves in Pathfinder as it does in jq. What is taken from glibc
+keeps its LGPL-2.1-or-later licence and the Free Software Foundation's
+copyright notice (Standard §4.2); jq's own helpers in the file stay MIT, and
+Pathfinder's text is offered under GPL-3.0-or-later or MIT.
+
 ---
 
 *--- Forged in Spacecraft Software ---*

@@ -4,7 +4,7 @@ def debug(msgs): ((msgs | _debug_empty) as $x | .), .;
 
 def halt: _halt(0);
 # Pathfinder: jq 1.8.1 writes a string raw, nothing for null, else JSON and a newline.
-def halt_error($exit_code): (if . == null then empty elif . >= "" and . < [] then . else tojson + "\n" end | _stderr_empty), _halt($exit_code);
+def halt_error($exit_code): _halt_check($exit_code) | (if . == null then empty elif . >= "" and . < [] then . else tojson + "\n" end | _stderr_empty), _halt($exit_code);
 def halt_error: halt_error(5);
 
 # Not defined in jq!
@@ -144,8 +144,11 @@ def gsub($re; s; flags): sub($re; s; flags + "g");
 def gsub($re; s): sub($re; s; "g");
 
 # Date
-def   todate:   todateiso8601;
+# Pathfinder: jq 1.8.1's definitions, on its C time functions.
+def fromdateiso8601: strptime("%Y-%m-%dT%H:%M:%SZ")|mktime;
+def todateiso8601: strftime("%Y-%m-%dT%H:%M:%SZ");
 def fromdate: fromdateiso8601;
+def todate: todateiso8601;
 
 # Formatting
 # Pathfinder: `@sh` is native, with jq's message for an array or object.
