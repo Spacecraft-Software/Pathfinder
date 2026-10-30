@@ -16,7 +16,6 @@ env:
   # `trimstr`), so comparing against it produces failures that say nothing about
   # this shim.
   JQ_BASELINE: "1.8.1"
-  JAQ_VERSION: "3.1.0"
 
 jobs:
   check:
@@ -29,23 +28,17 @@ jobs:
 
       - name: Test the engine crates
         # jaq's own tests, carried with the import (crates/UPSTREAM.md); they
-        # need neither jq nor jaq. mimalloc's C build can make the linker
+        # need no jq. mimalloc's C build can make the linker
         # print a note (rustc's `linker_messages`), which is not a finding.
         env:
           RUSTFLAGS: "-D warnings -A linker_messages"
         run: cargo test --workspace --exclude pathfinder-jq
 
-  # The shim's suites on every engine (PRD R-014), each held to its own
-  # conformance ratchet: `native` (the engine crates in process,
-  # FLOOR-native), `jaq-patched` (`pathfinder-jaq`, the CLI on the same
-  # crates, standing in for the packaged patched jaq, FLOOR-patched) and
-  # `jaq-stock` (the pinned upstream jaq, FLOOR).
+  # The shim's suites: unit, differential against the baseline jq,
+  # conformance (jq's own suite, held to the FLOOR ratchet), and the native
+  # surface.
   suites:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        engine: [native, jaq-patched, jaq-stock]
     env:
       # The shim links mimalloc, whose C build can make the linker print a
       # note (rustc's `linker_messages`), which is not a finding.
@@ -63,33 +56,12 @@ jobs:
           chmod +x /tmp/jq
           test "$(/tmp/jq --version)" = "jq-${JQ_BASELINE}"
 
-      - name: Select the engine
-        run: |
-          set -euo pipefail
-          case "${{ matrix.engine }}" in
-            native)
-              echo "PATHFINDER_ENGINE=native" >> "$GITHUB_ENV" ;;
-            jaq-patched)
-              cargo build --release -p pathfinder-jaq
-              echo "PATHFINDER_ENGINE=jaq" >> "$GITHUB_ENV"
-              echo "PATHFINDER_JAQ=$PWD/target/release/pathfinder-jaq" >> "$GITHUB_ENV" ;;
-            jaq-stock)
-              # Pinned for the same reason as jq: the differential results
-              # describe a specific engine, and an unpinned upgrade would
-              # silently change what the suite is asserting.
-              cargo install jaq --locked --version "${JAQ_VERSION}"
-              echo "PATHFINDER_ENGINE=jaq" >> "$GITHUB_ENV"
-              echo "PATHFINDER_JAQ=$HOME/.cargo/bin/jaq" >> "$GITHUB_ENV" ;;
-          esac
-
       - name: Test against the baseline jq
         env:
           PATHFINDER_REAL_JQ: /tmp/jq
           # Turn "no usable jq" from a silent skip into a hard failure: a green
           # tick that skipped the compatibility contract is worse than a red one.
           PATHFINDER_REQUIRE_JQ: "1"
-          # Same for jaq: the conformance suite must run, never skip.
-          PATHFINDER_REQUIRE_JAQ: "1"
         run: cargo test -- --nocapture
 
   reuse:

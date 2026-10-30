@@ -11,29 +11,21 @@ keywords = ["json", "query", "jq"]
 categories = ["command-line-utilities"]
 # Pathfinder: 1.82, not jaq's 1.70, as `pathfinder-json` needs.
 rust-version = "1.82"
-# Pathfinder: a library for the `pathfinder` binary and a test binary; never
-# installed or published.
+# Pathfinder: a library for the `pathfinder` binary; never installed or
+# published. Its binary target went with the jaq engine (P-078).
 publish = false
 
 # Pathfinder (M19): jaq's `jaq` CLI crate. Its library, `jaq`, is the driver
-# the `pathfinder` binary evaluates with in process (`PATHFINDER_ENGINE=native`):
+# the `pathfinder` binary evaluates with in process:
 # run options, input readers, output writer and exit status. `jaq-all` is a
 # package of its own, `pathfinder-all`, so that this one can be a library.
 [lib]
 name = "jaq"
 path = "src/lib.rs"
 
-# Pathfinder: named so that it collides with no installed `jaq`. The same
-# driver as a jaq-compatible binary, run as `PATHFINDER_JAQ` to check that the
-# in-tree crates and the packaged jaq agree (AGENTS.md).
-[[bin]]
-name = "pathfinder-jaq"
-path = "src/main.rs"
-
 # Pathfinder (TODO T-004): `jaq-all`'s `formats` feature went with the
 # non-jq formats.
 [features]
-default = ["mimalloc"]
 
 [dependencies]
 # Pathfinder: the engine crates are reached through `jaq-all`, as the CLI's
@@ -44,7 +36,6 @@ jaq-all  = { workspace = true }
 # `tempfile` (`--in-place`) are gone.
 env_logger = { version = "0.10.0", default-features = false }
 log = { version = "0.4.17" }
-mimalloc = { version = "0.1.29", default-features = false, optional = true }
 
 # Pathfinder (TODO T-006): the workspace lint set, `unsafe_code = "forbid"`
 # included.

@@ -3,107 +3,18 @@
 {
   lib,
   rustPlatform,
-  jaq,
   # Install the `jq` symlink alongside the binary. Off by default so the package
   # can be added to a profile without silently taking over the `jq` name; the
   # flake exposes both variants.
   withJqShim ? false,
-  # Apply Pathfinder's patch set (packaging/jaq/) to the pinned jaq, so it
-  # prints and reads numbers, repeats strings, indexes objects, and reports
-  # an uncaught error as jq 1.8.1 does. The
-  # patches are carried here and never sent upstream (Standard sections 4.2,
-  # 6.4). Pathfinder works on a stock jaq too; this only raises fidelity.
-  # Cut against jaq 3.1.1; they also apply to 3.1.0, which Bravais builds
-  # (its nixpkgs is followed), and pass the check phase there.
-  withPatchedJaq ? true,
-  # The engine a `jq` call runs on when PATHFINDER_ENGINE is unset: "jaq", the
-  # pinned jaq binary, or "native", the engine crates in process. "jaq" until
-  # the native engine replaces it (PLAN P-081); PATHFINDER_ENGINE overrides
-  # it at run time either way.
-  defaultEngine ? "jaq",
 }:
 
-assert lib.assertOneOf "defaultEngine" defaultEngine [
-  "jaq"
-  "native"
-];
-
-
-let
-  # The cut of patch `name` for the jaq being built: the 3.1.2 cut from 3.1.2
-  # on, the 3.1.0 cut (if `has310`) before 3.1.1, else the 3.1.1 one.
-  cut =
-    name: has310:
-    if lib.versionAtLeast jaq.version "3.1.2" then
-      ./jaq + "/${name}-3.1.2.patch"
-    else if has310 && lib.versionOlder jaq.version "3.1.1" then
-      ./jaq + "/${name}-3.1.0.patch"
-    else
-      ./jaq + "/${name}.patch";
-  engine =
-    if withPatchedJaq then
-      jaq.overrideAttrs (old: {
-        pname = "jaq-pathfinder";
-        patches = (old.patches or [ ]) ++ [
-          ./jaq/0001-version-marker.patch
-          ./jaq/0002-number-output.patch
-          ./jaq/0003-arithmetic-precision.patch
-          ./jaq/0004-input-literals.patch
-          ./jaq/0005-string-repeat.patch
-          ./jaq/0006-object-keys.patch
-          ./jaq/0007-debug-format.patch
-          # 3.1.0 spells the lines this one replaces differently, and 3.1.2
-          # passes `input_filename` to `run` (`cut`).
-          (cut "0008-uncaught-errors" true)
-          ./jaq/0009-halt-error.patch
-          (cut "0010-path-errors" false)
-          ./jaq/0011-path-alternative.patch
-          ./jaq/0012-remainder.patch
-          # 3.1.0's `real_main` reads stdin differently.
-          (
-            if lib.versionOlder jaq.version "3.1.1" then
-              ./jaq/0013-parse-errors-3.1.0.patch
-            else
-              ./jaq/0013-parse-errors.patch
-          )
-          ./jaq/0014-lazy-input.patch
-          (cut "0015-file-locations" true)
-        ]
-        # jaq 3.1.2 fixed this itself, the same way.
-        ++ lib.optional (lib.versionOlder jaq.version "3.1.2") ./jaq/0016-trailing-comment.patch
-        # 3.1.0's `main_io` calls `real_main` with fewer arguments.
-        ++ [
-          (
-            if lib.versionOlder jaq.version "3.1.1" then
-              ./jaq/0017-input-halt-3.1.0.patch
-            else
-              ./jaq/0017-input-halt.patch
-          )
-        ];
-        # jaq's own tests assert jaq's number format (`1.0`, `NaN`), which the
-        # patches change on purpose. Pathfinder's check phase runs jq's suite
-        # against this engine instead (crates/pathfinder/tests/jq-suite/FLOOR-patched).
-        doCheck = false;
-      })
-    else
-      jaq;
-in
 rustPlatform.buildRustPackage rec {
   pname = "pathfinder";
   version = "0.1.0";
 
   src = lib.cleanSource ../.;
   cargoLock.lockFile = ../Cargo.lock;
-
-  # Pin jaq by store path rather than trusting the user's PATH: the shim is
-  # useless without it, and a PATH miss would surface as a confusing failure
-  # inside something that looks like jq. The path is compiled in (see
-  # `PINNED_JAQ` in crates/pathfinder/src/main.rs) instead of set by `wrapProgram`, because a
-  # wrapper script would fork a shell before every `jq` call. PATHFINDER_JAQ
-  # still overrides it at run time.
-  env.PATHFINDER_DEFAULT_JAQ = "${engine}/bin/jaq";
-  # Compiled in for the same reason (`BUILT_IN` in crates/pathfinder/src/engine.rs).
-  env.PATHFINDER_DEFAULT_ENGINE = defaultEngine;
 
   # The differential suite needs a real jq 1.8.1, which is not a build input
   # here. It skips cleanly when none is found; CI is where it actually runs.
@@ -114,7 +25,7 @@ rustPlatform.buildRustPackage rec {
   '';
 
   meta = with lib; {
-    description = "jq 1.8.1-compatible jq on a fork of jaq's engine";
+    description = "jq 1.8.1-compatible jq, with its own engine";
     homepage = "https://Pathfinder.SpacecraftSoftware.org/";
     license = licenses.gpl3Plus;
     maintainers = [ ];
