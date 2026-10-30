@@ -42,7 +42,14 @@ where
 {
     Box::new([
         ("inputs", v(0), |cv| Box::new(inputs(cv))),
-        ("input", v(0), |cv| Box::new(inputs(cv).next().into_iter())),
+        // Pathfinder: past the last input, jq's `input` raises the error
+        // `"break"` (`f_input`), which its `inputs` catches to end.
+        ("input", v(0), |cv| {
+            let next = inputs(cv).next();
+            Box::new(core::iter::once(
+                next.unwrap_or_else(|| Err(Exn::from(Error::str("break")))),
+            ))
+        }),
     ])
 }
 

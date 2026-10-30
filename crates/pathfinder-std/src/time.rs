@@ -1,125 +1,162 @@
-use crate::{Error, ValR, ValT, ValTx};
-use alloc::string::{String, ToString};
-use jiff::{civil::DateTime, fmt::strtime, tz, Timestamp};
+//! Pathfinder: jq 1.8.1's time builtins (`f_gmtime`, `f_localtime`,
+//! `f_mktime`, `f_strftime`, `f_strflocaltime`, `f_strptime` in
+//! `src/builtin.c`), on the C library calls they make ([`crate::ctime`]).
+//! jq's `todate`, `fromdate` and their ISO 8601 forms are its own
+//! definitions on these (`defs.jq`).
 
-/// Convert a UNIX epoch timestamp with optional fractions.
-fn epoch_to_timestamp<V: ValT>(v: &V) -> Result<Timestamp, Error<V>> {
-    let val = match v.as_isize() {
-        Some(i) => i as i64 * 1000000,
-        None => (v.try_as_f64()? * 1000000.0) as i64,
-    };
-    Timestamp::from_microsecond(val).map_err(Error::str)
+use crate::ctime::{self, Tm};
+use crate::{Error, ValR, ValT};
+use alloc::string::String;
+use alloc::vec::Vec;
+
+/// A C string's bytes: up to the first NUL, where jq's `jv_string_value`
+/// is read to by the C library.
+fn c_str(b: &[u8]) -> &[u8] {
+    b.iter().position(|&c| c == 0).map_or(b, |n| &b[..n])
 }
 
-/// Convert a date-time pair to a UNIX epoch timestamp.
-fn timestamp_to_epoch<V: ValT>(ts: Timestamp, frac: bool) -> ValR<V> {
-    if frac {
-        Ok((ts.as_microsecond() as f64 / 1e6).into())
+/// `time_t secs = fsecs`: truncated, and where C's conversion has no
+/// value, the one x86-64 gives (`cvttsd2si`).
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "C's conversion, range-checked first"
+)]
+fn time_t(f: f64) -> i64 {
+    // 2^63, the first double past `i64::MAX`.
+    const LIMIT: f64 = 9_223_372_036_854_775_808.0;
+    if f.is_nan() || !(-LIMIT..LIMIT).contains(&f) {
+        i64::MIN
     } else {
-        let seconds = ts.as_second();
-        isize::try_from(seconds)
-            .map(V::from)
-            .or_else(|_| V::from_num(&seconds.to_string()))
+        f as i64
     }
 }
 
-fn array_to_datetime<V: ValT>(v: &[V]) -> Option<Result<DateTime, jiff::Error>> {
-    let [year, month, day, hour, min, sec]: &[V; 6] = v.get(..6)?.try_into().ok()?;
-    let sec = sec.as_f64()?;
-    let i8 = |v: &V| -> Option<i8> { v.as_isize()?.try_into().ok() };
-    Some(DateTime::new(
-        year.as_isize()?.try_into().ok()?,
-        i8(month)? + 1,
-        i8(day)?,
-        i8(hour)?,
-        i8(min)?,
-        // the `as i8` cast saturates, returning a number in the range [-128, 128]
-        sec.floor() as i8,
-        (sec.fract() * 1e9) as i32,
-    ))
-}
-
-/// Convert a `DateTime` to a "broken down time" array
-fn datetime_to_array<V: ValT>(dt: DateTime) -> [V; 8] {
+/// `tm2jv`, with jq's fraction of a second added to the seconds.
+fn tm2jv<V: ValT>(tm: &Tm, frac: f64) -> V {
+    let f = f64::from;
     [
-        V::from(dt.year() as isize),
-        V::from(dt.month() as isize - 1),
-        V::from(dt.day() as isize),
-        V::from(dt.hour() as isize),
-        V::from(dt.minute() as isize),
-        if dt.subsec_nanosecond() > 0 {
-            V::from(dt.second() as f64 + dt.subsec_nanosecond() as f64 / 1e9)
-        } else {
-            V::from(dt.second() as isize)
-        },
-        V::from(dt.weekday().to_sunday_zero_offset() as isize),
-        V::from(dt.day_of_year() as isize - 1),
+        f(tm.year) + 1900.0,
+        f(tm.mon),
+        f(tm.mday),
+        f(tm.hour),
+        f(tm.min),
+        f(tm.sec) + frac,
+        f(tm.wday),
+        f(tm.yday),
     ]
+    .into_iter()
+    .map(V::from)
+    .collect()
 }
 
-/// Parse an ISO 8601 timestamp string to a number holding the equivalent UNIX timestamp
-/// (seconds elapsed since 1970/01/01).
-///
-/// Actually, this parses RFC 3339; see
-/// <https://ijmacd.github.io/rfc3339-iso8601/> for differences.
-/// jq also only parses a very restricted subset of ISO 8601.
-pub fn from_iso8601<V: ValT>(s: &str) -> ValR<V> {
-    timestamp_to_epoch(s.parse().map_err(Error::str)?, s.contains('.'))
-}
-
-/// Format a number as an ISO 8601 timestamp string.
-pub fn to_iso8601<V: ValT>(v: &V) -> Result<String, Error<V>> {
-    let ts = if let Some(i) = v.as_isize() {
-        Timestamp::from_second(i as i64)
+/// `jv2tm`: `None` for an element that is not a number. The fields are
+/// normalised as `timegm` (or, for `local`, `mktime`) normalises them.
+fn jv2tm<V: ValT>(a: &[V], local: bool) -> Option<Tm> {
+    let nums: Vec<Option<f64>> = a.iter().take(8).map(ValT::as_f64).collect();
+    let mut tm = ctime::from_array(&nums)?;
+    if local {
+        tm.isdst = -1;
+        ctime::mktime(&mut tm);
     } else {
-        Timestamp::from_microsecond((v.try_as_f64()? * 1e6) as i64)
-    };
-    Ok(ts.map_err(Error::str)?.to_string())
-}
-
-/// Format a date (either number or array) in a given timezone.
-///
-/// When the input is a "broken down time" array,
-/// then it is assumed to be in the given timezone.
-/// When the input is an integer, i.e. a Unix epoch,
-/// then it is *converted* to the given timezone.
-pub fn strftime<V: ValT>(v: &V, fmt: &str, tz: tz::TimeZone) -> ValR<V> {
-    let fail = || Error::str(format_args!("cannot convert {v} to time"));
-    let zoned = match v.clone().into_vec() {
-        Ok(v) => array_to_datetime(&v)
-            .ok_or_else(fail)?
-            .and_then(|dt| dt.to_zoned(tz))
-            .map_err(Error::str)?,
-        Err(_) => epoch_to_timestamp(v)?.to_zoned(tz),
-    };
-    strtime::format(fmt, &zoned)
-        .map(V::from)
-        .map_err(Error::str)
-}
-
-/// Convert an epoch timestamp to a "broken down time" array.
-pub fn gmtime<V: ValT>(v: &V, tz: tz::TimeZone) -> ValR<V> {
-    let dt = epoch_to_timestamp(v)?.to_zoned(tz).into();
-    datetime_to_array(dt).into_iter().map(Ok).collect()
-}
-
-/// Parse a string into a "broken down time" array.
-pub fn strptime<V: ValT>(s: &str, fmt: &str) -> ValR<V> {
-    let mut bdt = strtime::BrokenDownTime::parse(fmt, s).map_err(Error::str)?;
-    if (bdt.offset(), bdt.iana_time_zone()) == (None, None) {
-        bdt.set_offset(Some(tz::Offset::UTC));
+        ctime::timegm(&mut tm);
     }
-    let dt = bdt.to_zoned().map_err(Error::str)?.into();
-    datetime_to_array(dt).into_iter().map(Ok).collect()
+    Some(tm)
 }
 
-/// Parse an array into a UNIX epoch timestamp.
-pub fn mktime<V: ValT>(v: &V) -> ValR<V> {
-    let fail = || Error::str(format_args!("cannot convert {v} to time"));
-    let ts = array_to_datetime(&v.clone().into_vec()?)
-        .ok_or_else(fail)?
-        .and_then(|dt| dt.to_zoned(tz::TimeZone::UTC))
-        .map_err(Error::str)?
-        .timestamp();
-    timestamp_to_epoch(ts, ts.subsec_nanosecond() > 0)
+fn broken_down<V: ValT>(v: &V, convert: fn(i64) -> Option<Tm>, message: &'static str) -> ValR<V> {
+    let fsecs = v.as_f64().ok_or_else(|| Error::str(message))?;
+    let tm = convert(time_t(fsecs))
+        .ok_or_else(|| Error::str("error converting number of seconds since epoch to datetime"))?;
+    Ok(tm2jv(&tm, fsecs - fsecs.floor()))
+}
+
+/// `gmtime`.
+pub fn gmtime<V: ValT>(v: &V) -> ValR<V> {
+    broken_down(v, ctime::gmtime, "gmtime() requires numeric inputs")
+}
+
+/// `localtime`.
+pub fn localtime<V: ValT>(v: &V) -> ValR<V> {
+    broken_down(v, ctime::localtime, "localtime() requires numeric inputs")
+}
+
+/// `mktime`: `timegm` of the broken-down time.
+pub fn mktime<V: ValT>(v: V) -> ValR<V> {
+    let a: Vec<V> = v
+        .into_seq()
+        .map_err(|_not_array| Error::str("mktime requires array inputs"))?;
+    let mut tm =
+        jv2tm(&a, false).ok_or_else(|| Error::str("mktime requires parsed datetime inputs"))?;
+    match ctime::timegm(&mut tm) {
+        -1 => Err(Error::str("invalid gmtime representation")),
+        #[expect(clippy::cast_precision_loss, reason = "jq's number is a double")]
+        t => Ok(V::from(t as f64)),
+    }
+}
+
+/// `strftime` (`local` false) and `strflocaltime` (`local` true).
+pub fn strftime<V: ValT>(v: V, fmt: &V, local: bool) -> ValR<V> {
+    let name = if local { "strflocaltime" } else { "strftime" };
+    let inputs = || Error::str(alloc::format!("{name}/1 requires parsed datetime inputs"));
+    let v = if v.as_f64().is_some() {
+        if local {
+            localtime(&v)?
+        } else {
+            gmtime(&v)?
+        }
+    } else {
+        v
+    };
+    let a: Vec<V> = v.into_seq().map_err(|_not_array| inputs())?;
+    let fmt = fmt
+        .as_utf8_bytes()
+        .ok_or_else(|| Error::str(alloc::format!("{name}/1 requires a string format")))?;
+    let tm = jv2tm(&a, local).ok_or_else(inputs)?;
+    let fmt = c_str(fmt);
+    match ctime::strftime(fmt, &tm, fmt.len() + 100) {
+        Some(out) if !out.is_empty() || fmt.is_empty() => {
+            Ok(V::from(String::from_utf8_lossy(&out).into_owned()))
+        }
+        _ => Err(Error::str(alloc::format!(
+            "{name}/1: unknown system failure"
+        ))),
+    }
+}
+
+/// `strptime`: glibc's, with jq's sentinels for the fields it leaves.
+pub fn strptime<V: ValT>(v: &V, fmt: &V) -> ValR<V> {
+    let both = "strptime/1 requires string inputs and arguments";
+    let (input, fmt) = match (v.as_utf8_bytes(), fmt.as_utf8_bytes()) {
+        (Some(i), Some(f)) => (c_str(i), c_str(f)),
+        _ => return Err(Error::str(both)),
+    };
+    let mut tm = Tm {
+        wday: 8,
+        yday: 367,
+        ..Tm::default()
+    };
+    let end = ctime::strptime(input, fmt, &mut tm)
+        .filter(|&end| end == input.len() || ctime::is_space(input[end]));
+    let Some(end) = end else {
+        return Err(Error::str(alloc::format!(
+            "date \"{}\" does not match format \"{}\"",
+            String::from_utf8_lossy(input),
+            String::from_utf8_lossy(fmt)
+        )));
+    };
+    let fields = tm.mday != 0 && (0..=11).contains(&tm.mon);
+    if tm.wday == 8 && fields {
+        ctime::set_tm_wday(&mut tm);
+    }
+    if tm.yday == 367 && fields {
+        ctime::set_tm_yday(&mut tm);
+    }
+    let r: V = tm2jv(&tm, 0.0);
+    if end == input.len() {
+        return Ok(r);
+    }
+    let mut r: Vec<V> = r.into_seq().unwrap_or_default();
+    let rest = String::from_utf8_lossy(&input[end..]).into_owned();
+    r.push(V::from(rest));
+    Ok(r.into_iter().collect())
 }

@@ -144,8 +144,11 @@ def gsub($re; s; flags): sub($re; s; flags + "g");
 def gsub($re; s): sub($re; s; "g");
 
 # Date
-def   todate:   todateiso8601;
+# Pathfinder: jq 1.8.1's definitions, on its C time functions.
+def fromdateiso8601: strptime("%Y-%m-%dT%H:%M:%SZ")|mktime;
+def todateiso8601: strftime("%Y-%m-%dT%H:%M:%SZ");
 def fromdate: fromdateiso8601;
+def todate: todateiso8601;
 
 # Formatting
 # Pathfinder: `@sh` is native, with jq's message for an array or object.

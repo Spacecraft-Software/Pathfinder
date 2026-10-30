@@ -1184,6 +1184,13 @@ pub static NATIVE: &[&str] = &[
     "scan",
     "sub",
     "gsub",
+    // The engine's time builtins are jq's C functions on glibc, and
+    // `todate`/`todateiso8601` are jq's definitions on them (M23).
+    "mktime",
+    "strftime",
+    "strflocaltime",
+    "todate",
+    "todateiso8601",
 ];
 
 fn find<'a>(name: &str, table: &'a [Def]) -> Option<&'a Def> {
@@ -1369,12 +1376,6 @@ mod tests {
         // A table of some 230 names, emitted only when a filter names it;
         // in the engine's definitions it would be compiled on every run.
         "builtins",
-        // The engine's time builtins are not C's; M23 replaces them.
-        "mktime",
-        "strftime",
-        "strflocaltime",
-        "todate",
-        "todateiso8601",
     ];
 
     #[test]
@@ -1406,8 +1407,11 @@ mod tests {
             .map(|d| d.name)
             .filter(|n| out.contains(&format!("def {n}")) || out.contains(&format!("as ${n}")))
             .collect();
-        assert!(used.contains(&"_pf_modify") && used.contains(&"_pf_pad_tm"));
+        assert!(used.contains(&"_pf_modify"));
         for gone in [
+            // The time repairs' helper: the engine's time builtins are
+            // jq's (M23).
+            "_pf_pad_tm",
             "_pf_base64d",
             "_pf_urid",
             "_pf_err",

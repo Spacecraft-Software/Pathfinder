@@ -77,8 +77,11 @@ one does, its Unicode tables generated from Oniguruma's data files.
 
 ## M23 — Numbers and the remaining gaps
 
-- [ ] T-037 (P-070) A program with a `module` directive takes the syntax rewrites: Pathfinder's parser rejects the directive, so `module {}; .5` reaches jaq's parser unrewritten and fails there, on both engines (measured: jq prints `0.5`)
-- [ ] T-036 (P-073) A literal prints as jq's decNumber prints it: `1.` is `1`, `1.0` stays `1.0` (measured: `[.5, 1., 1.e2, 00012]` is `[0.5,1,1E+2,12]` in jq, `1.` here)
+- [x] T-037 (P-070) A program with a `module` directive takes the syntax rewrites: Pathfinder's parser rejects the directive, so `module {}; .5` reaches jaq's parser unrewritten and fails there, on both engines (measured: jq prints `0.5`)
+- [x] T-036 (P-073) A literal prints as jq's decNumber prints it: `1.` is `1`, `1.0` stays `1.0` (measured: `[.5, 1., 1.e2, 00012]` is `[0.5,1,1E+2,12]` in jq, `1.` here); the input reader takes `1.`, `.5`, `-.5`, `1.e3` as jq's does, and a negated zero literal is `0`
+- [x] T-045 (P-074) `input` past the last input raises `"break"`, as jq's `f_input` does, so `try input catch .` is `"break"` and an uncaught one exits 5
+- [x] T-046 (P-074) jq's time builtins on the native engine are its C functions on glibc 2.39, the C library its release binary links (`pathfinder-std/src/ctime.rs`): `timegm`/`mktime` normalising fields as `__mktime_internal` does, `gmtime`/`localtime` with years past 9999, `strftime` and `strptime` transcribed from glibc with their flags, widths, `E`/`O` modifiers and copied conversions, jq's sentinels and messages; `todate`/`fromdate` are jq's definitions; the shim's time repairs are off on the native engine
+- [x] T-047 (P-074) `tools/time-diff.py` runs random time calls through jq 1.8.1 and the shim under four zones; 0 differences in 100 000 cases, outside the two documented ones (glibc's daylight saving overflow past year 5 881 600, jq's abort in `strflocaltime`)
 
 ## Standing
 

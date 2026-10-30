@@ -46,6 +46,8 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
+#[cfg(feature = "time")]
+mod ctime;
 pub mod input;
 #[cfg(feature = "math")]
 mod math;
@@ -1043,58 +1045,21 @@ fn time<D: DataT>() -> Box<[Filter<RunPtr<D>>]>
 where
     for<'a> D::V<'a>: ValT,
 {
-    use jiff::tz::TimeZone;
+    // Pathfinder: jq 1.8.1's C functions on glibc (`time.rs`); `todate`,
+    // `fromdate` and the ISO 8601 forms are jq's definitions (`defs.jq`).
     Box::new([
-        // Pathfinder: jq 1.8.1 writes `fromdateiso8601` with `strptime`, so
-        // it fails with that function's messages.
-        ("fromdateiso8601", v(0), |cv| {
-            let both = "strptime/1 requires string inputs and arguments";
-            let s =
-                cv.1.utf8_or(both)
-                    .and_then(|s| core::str::from_utf8(s).map_err(Error::str));
-            bome(s.and_then(|s| {
-                time::from_iso8601(s).map_err(|_no_match| {
-                    let v = &cv.1;
-                    Error::str(alloc::format!(
-                        "date {v} does not match format \"%Y-%m-%dT%H:%M:%SZ\""
-                    ))
-                })
-            }))
-        }),
-        ("todateiso8601", v(0), |cv| {
-            bome(time::to_iso8601(&cv.1).map(D::V::from))
-        }),
         ("strftime", v(1), |cv| {
-            unary(cv, |v, fmt| {
-                time::strftime(&v, fmt.try_as_str()?, TimeZone::UTC)
-            })
+            unary(cv, |v, fmt| time::strftime(v, &fmt, false))
         }),
         ("strflocaltime", v(1), |cv| {
-            unary(cv, |v, fmt| {
-                time::strftime(&v, fmt.try_as_str()?, TimeZone::system())
-            })
+            unary(cv, |v, fmt| time::strftime(v, &fmt, true))
         }),
-        ("gmtime", v(0), |cv| {
-            bome(time::gmtime(&cv.1, TimeZone::UTC))
-        }),
-        ("localtime", v(0), |cv| {
-            bome(time::gmtime(&cv.1, TimeZone::system()))
-        }),
-        // Pathfinder: jq's messages.
+        ("gmtime", v(0), |cv| bome(time::gmtime(&cv.1))),
+        ("localtime", v(0), |cv| bome(time::localtime(&cv.1))),
         ("strptime", v(1), |cv| {
-            unary(cv, |v, fmt| {
-                let both = "strptime/1 requires string inputs and arguments";
-                let (s, f) = (v.utf8_or(both)?, fmt.utf8_or(both)?);
-                let (s, f) = (
-                    core::str::from_utf8(s).map_err(Error::str)?,
-                    core::str::from_utf8(f).map_err(Error::str)?,
-                );
-                time::strptime(s, f).map_err(|_no_match| {
-                    Error::str(alloc::format!("date {v} does not match format {fmt}"))
-                })
-            })
+            unary(cv, |v, fmt| time::strptime(&v, &fmt))
         }),
-        ("mktime", v(0), |cv| bome(time::mktime(&cv.1))),
+        ("mktime", v(0), |cv| bome(time::mktime(cv.1))),
     ])
 }
 

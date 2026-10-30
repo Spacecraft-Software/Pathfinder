@@ -44,11 +44,15 @@ pub struct Scan {
     pub formats: Vec<String>,
     /// Byte offsets of every `$__loc__` occurrence, with its 1-based line.
     pub loc_sites: Vec<(usize, usize)>,
-    /// Byte offset at which the leading `import`/`include` header ends.
+    /// Byte offset at which the leading header ends: a `module` directive
+    /// and the `import`/`include` directives after it.
     ///
     /// Zero when the program has no header. Everything before this offset must
     /// stay at the very top of the program jaq receives.
     pub header_end: usize,
+    /// True when the header imports or includes a module, whose definitions
+    /// the program may use.
+    pub imports: bool,
     /// True when the program's final token is a `#` comment with no trailing
     /// newline, so wrapping it in parentheses would swallow the closing paren.
     pub ends_in_comment: bool,
@@ -237,19 +241,22 @@ pub fn scan(src: &str) -> Scan {
 
     out.ends_in_comment = last_was_comment;
     out.is_effectively_empty = !saw_code;
-    out.header_end = header_end(src);
+    (out.header_end, out.imports) = header_end(src);
     out
 }
 
-/// Find where the leading run of `import`/`include` directives ends.
+/// Find where the leading `module` directive and run of `import`/`include`
+/// directives end.
 ///
 /// jq (and jaq) require module directives to precede everything else, so
 /// anything Pathfinder prepends has to go *after* them, not before. Returns the
-/// byte offset just past the final directive's `;`, or 0 when there is no header.
-fn header_end(src: &str) -> usize {
+/// byte offset just past the final directive's `;`, or 0 when there is no
+/// header, and whether an `import` or `include` is among the directives.
+fn header_end(src: &str) -> (usize, bool) {
     let b = src.as_bytes();
     let mut i = 0usize;
     let mut end = 0usize;
+    let mut imports = false;
 
     loop {
         // Skip whitespace and comments between directives.
@@ -265,19 +272,23 @@ fn header_end(src: &str) -> usize {
             }
         }
         let rest = &src[i..];
+        // jq's grammar: `module` once, first (M23, T-037), then imports.
         let keyword = if rest.starts_with("import") {
             "import"
         } else if rest.starts_with("include") {
             "include"
+        } else if end == 0 && rest.starts_with("module") {
+            "module"
         } else {
-            return end;
+            return (end, imports);
         };
         // Require a real token boundary so an `includes` function call is not
         // mistaken for an `include` directive.
         match b.get(i + keyword.len()) {
             Some(&next) if !is_ident_char(next) => {}
-            _ => return end,
+            _ => return (end, imports),
         }
+        imports |= keyword != "module";
         // Scan to the terminating `;`, skipping string literals so a `;` inside
         // a module path does not end the directive early.
         let mut j = i + keyword.len();
@@ -295,7 +306,7 @@ fn header_end(src: &str) -> usize {
             j += 1;
         }
         if j > b.len() {
-            return end;
+            return (end, imports);
         }
         end = j;
         i = j;
