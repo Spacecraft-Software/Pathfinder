@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later OR MIT
+
+[package]
+name = "pathfinder-regex"
+version = "0.1.0"
+authors = ["Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
+edition = "2024"
+license = "BSD-2-Clause AND (GPL-3.0-or-later OR MIT)"
+readme = "../../README.md"
+description = "Regular expressions that match as jq 1.8.1's Oniguruma does"
+repository = "https://github.com/Spacecraft-Software/Pathfinder"
+keywords = ["regex", "oniguruma", "jq"]
+categories = ["text-processing"]
+rust-version = "1.88"
+publish = false
+
+# No dependencies: the Unicode tables are Oniguruma's own (`src/tables.rs`,
+# written by `tools/onig-tables.py`).
+[dependencies]
+
+[lints]
+workspace = true

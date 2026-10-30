@@ -335,6 +335,7 @@ version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
  "pathfinder-all",
+ "pathfinder-regex",
 ]
 
 [[package]]
@@ -354,6 +355,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pathfinder-regex"
+version = "0.1.0"
+
+[[package]]
 name = "pathfinder-std"
 version = "3.0.1"
 dependencies = [
@@ -364,7 +369,7 @@ dependencies = [
  "libm",
  "log",
  "pathfinder-core",
- "regex-bites",
+ "pathfinder-regex",
  "urlencoding",
 ]
 
@@ -412,12 +417,6 @@ name = "regex-automata"
 version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
-
-[[package]]
-name = "regex-bites"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6a15a2fa0bfda9361941c45550896ae87b15cc6c8c939ea350079670332e211"
 
 [[package]]
 name = "self_cell"

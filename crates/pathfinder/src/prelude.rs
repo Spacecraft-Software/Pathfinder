@@ -1176,6 +1176,14 @@ pub static NATIVE: &[&str] = &[
     "with_entries",
     // jq 1.8.1's `format` (a C builtin), in `pathfinder-json`'s `defs.jq`.
     "format",
+    // The engine matches with an Oniguruma 6.9.10 port, through jq 1.8.1's
+    // `f_match` and definitions (`pathfinder-regex`, M22).
+    "match",
+    "test",
+    "capture",
+    "scan",
+    "sub",
+    "gsub",
 ];
 
 fn find<'a>(name: &str, table: &'a [Def]) -> Option<&'a Def> {
@@ -1361,13 +1369,6 @@ mod tests {
         // A table of some 230 names, emitted only when a filter names it;
         // in the engine's definitions it would be compiled on every run.
         "builtins",
-        // The engine's regex is not Oniguruma; M22 replaces it.
-        "match",
-        "test",
-        "capture",
-        "scan",
-        "sub",
-        "gsub",
         // The engine's time builtins are not C's; M23 replaces them.
         "mktime",
         "strftime",

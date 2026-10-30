@@ -6,7 +6,8 @@ SPDX-License-Identifier: CC-BY-SA-4.0
 # CREDITS
 
 Pathfinder exists to stand in for two programs it did not write, and it is
-built directly on their observable behaviour. Standard §15.3 asks for this
+built directly on their observable behaviour, and on the regular expression
+library one of them runs. Standard §15.3 asks for this
 acknowledgement to be explicit rather than left to SPDX metadata.
 
 ## jq — Stephen Dolan and contributors
@@ -72,6 +73,22 @@ the licence text is the one in `LICENSES/MIT.txt`. Pathfinder's changes to
 them are offered under GPL-3.0-or-later or MIT (`crates/UPSTREAM.md`), so
 each file stays usable under MIT as a whole. Fixes from later jaq
 releases are ported by hand; nothing goes back upstream (§6.4).
+
+## Oniguruma — K.Kosako
+
+<https://github.com/kkos/oniguruma> · BSD-2-Clause
+
+jq 1.8.1 matches regular expressions with the Oniguruma 6.9.10 its release
+tarball vendors, and `crates/pathfinder-regex` is that library in Rust for
+the one configuration jq compiles with (`ONIG_SYNTAX_PERL_NG`, UTF-8). Its
+parser, tuning, compiler and matcher are transcribed from `regparse.c`,
+`regcomp.c` and `regexec.c`, keeping their function names and control flow,
+and its messages are `regerror.c`'s, so that a pattern behaves in Pathfinder
+exactly as it does in jq, quirks included. Its Unicode tables are
+Oniguruma's own data, carried over by `tools/onig-tables.py`. What is taken
+from Oniguruma keeps its BSD-2-Clause licence and K.Kosako's copyright notice
+(Standard §4.2); Pathfinder's own text in those files is offered under
+GPL-3.0-or-later or MIT.
 
 ---
 
