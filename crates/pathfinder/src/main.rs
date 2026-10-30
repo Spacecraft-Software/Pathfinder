@@ -5,20 +5,8 @@
 //!
 //! Installed as `pathfinder` with a `jq` symlink beside it. Under either name it
 //! accepts jq's command line, rewrites the filter where the engine would run it
-//! differently from jq, and evaluates it.
-//!
-//! Two engines can do the evaluating (`engine`):
-//!
-//! - **`native`** — the engine crates linked into this binary, run in process.
-//! - **`jaq`** — a jaq binary, by one of two hand-offs:
-//!   - **`exec`** — the process image is replaced by jaq's: nothing is copied
-//!     and no second process exists. The path for every invocation that needs
-//!     no output transform.
-//!   - **spawn and pipe** — for `-a`, `--seq` and several input files, where
-//!     jq's behaviour cannot be expressed in jaq's argv and the bytes have to
-//!     be reshaped on the way in or out.
-//!
-//! The jaq path is kept until it is redundant (PLAN M24).
+//! differently from jq, and evaluates it on the engine crates linked into this
+//! binary, in process (`engine`).
 
 mod compat;
 mod describe;
@@ -41,8 +29,6 @@ mod translate;
 use std::env;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal as _};
-use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
-use std::process::{Command, Stdio};
 
 /// The engine allocates per value; mimalloc halves the cycles of an
 /// allocation-heavy filter against the system allocator (`Cargo.toml`).
@@ -52,10 +38,6 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// jq's own `--help` output, reproduced so the shim answers exactly as jq does.
 const JQ_HELP: &str = include_str!("embed/jq-help.txt");
-
-/// Environment variable naming the jaq binary, for testing and for packaging
-/// that wants to pin a store path rather than trust `PATH`.
-const JAQ_ENV: &str = "PATHFINDER_JAQ";
 
 #[expect(
     clippy::similar_names,
@@ -102,15 +84,8 @@ fn main() {
     }
     if args.flags.version {
         if native {
-            let engine = selected_engine(prog, report.as_ref());
-            let (path, source) = jaq_binary();
-            let engine = native::Engine {
-                name: engine.0.name(),
-                selected_by: engine.1,
-                jaq: (engine.0 == engine::Engine::Jaq)
-                    .then_some((path.as_os_str(), source.label())),
-            };
-            native::version(&engine, mode::detect(lifted.json));
+            check_engine(prog, report.as_ref());
+            native::version(mode::detect(lifted.json));
         } else {
             println!("{}", native::JQ_BASELINE_VERSION);
         }
@@ -143,13 +118,13 @@ fn main() {
     if args.flags.debug_dump_disasm || args.flags.debug_trace {
         diag::warn(
             prog,
-            "jq's debug tracing has no jaq equivalent; the flag is ignored",
+            "jq's debug tracing has no equivalent in Pathfinder; the flag is ignored",
         );
     }
 
-    let (engine, _) = selected_engine(prog, report.as_ref());
+    check_engine(prog, report.as_ref());
 
-    let plan = match translate::plan(&args, &read_filter_file, engine) {
+    let plan = match translate::plan(&args, &read_filter_file) {
         Ok(p) => p,
         Err(translate::Refusal::Unsupported(u)) => {
             if let Some(r) = &report {
@@ -167,19 +142,11 @@ fn main() {
     };
 
     if matches!(lifted.verb, Some(native::Verb::Explain)) {
-        native::explain(&plan, engine, mode::detect(lifted.json));
+        native::explain(&plan, mode::detect(lifted.json));
         return;
     }
 
-    if engine == engine::Engine::Native {
-        std::process::exit(engine::run(&plan));
-    }
-
-    // `exec` never returns: it replaces this process or exits.
-    if plan.post.is_identity() && !plan.strip_input_rs && plan.concat_inputs.is_none() {
-        exec(prog, &plan.argv);
-    }
-    std::process::exit(pipe(prog, &plan));
+    std::process::exit(engine::run(&plan));
 }
 
 /// Run a native verb that takes no jq call, and end the process; any other
@@ -205,185 +172,20 @@ fn run_standalone_verb(lifted: &native::Lifted) {
     }
 }
 
-/// The engine to run, or the end of the process if `PATHFINDER_ENGINE` names
-/// none. That is the caller's environment, not jq's command line, so it is
-/// reported in Pathfinder's name, with jq's usage status.
-fn selected_engine(
-    prog: &str,
-    report: Option<&native::JsonReport>,
-) -> (engine::Engine, &'static str) {
-    engine::selected().unwrap_or_else(|e| {
+/// End the process if `PATHFINDER_ENGINE` asks for an engine other than
+/// the one there is. That is the caller's environment, not jq's command
+/// line, so it is reported in Pathfinder's name, with jq's usage status.
+fn check_engine(prog: &str, report: Option<&native::JsonReport>) {
+    if let Err(e) = engine::check() {
         if let Some(r) = report {
             r.fail(&native::Failure::invalid_argument(&e));
         }
         eprintln!("{prog}: error: {e}");
         std::process::exit(diag::EXIT_USAGE);
-    })
-}
-
-/// Write jaq's stdin, with RS stripped if `--seq` asked for it.
-fn feed(sink: &mut impl io::Write, strip: bool) -> io::Result<()> {
-    let mut stdin = io::stdin().lock();
-    if strip {
-        post::strip_rs(&mut stdin, sink)
-    } else {
-        io::copy(&mut stdin, sink).map(|_| ())
     }
-}
-
-/// Whether `jaq` is Pathfinder's patched jaq, which reports an unreadable
-/// input file itself. Asked only when there is one, so it costs nothing on
-/// any other call.
-fn engine_is_patched(jaq: &OsString) -> bool {
-    Command::new(jaq)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("+pathfinder"))
 }
 
 /// Read a `-f` filter file.
 fn read_filter_file(path: &OsString) -> io::Result<String> {
     std::fs::read_to_string(path)
-}
-
-/// The jaq a packager pinned at build time, if any.
-///
-/// Set by `packaging/default.nix` to a store path. It is compiled in rather
-/// than supplied by a wrapper script because a wrapper would put a shell
-/// process in front of every `jq` call, losing the single-`execve` fast path
-/// this binary exists to keep.
-const PINNED_JAQ: Option<&str> = option_env!("PATHFINDER_DEFAULT_JAQ");
-
-/// Which step of the lookup in [`jaq_binary`] supplied the engine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JaqSource {
-    /// The [`JAQ_ENV`] runtime override.
-    Env,
-    /// The build-time pin, [`PINNED_JAQ`].
-    Pinned,
-    /// Whatever `jaq` resolves to on `PATH`.
-    Path,
-}
-
-impl JaqSource {
-    /// The name `pathfinder --version` reports.
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Env => JAQ_ENV,
-            Self::Pinned => "pinned",
-            Self::Path => "PATH",
-        }
-    }
-}
-
-/// Locate the jaq binary: the runtime override, then the build-time pin, then
-/// whatever `jaq` resolves to on `PATH`.
-fn jaq_binary() -> (OsString, JaqSource) {
-    if let Some(jaq) = env::var_os(JAQ_ENV) {
-        return (jaq, JaqSource::Env);
-    }
-    match PINNED_JAQ {
-        Some(jaq) => (OsString::from(jaq), JaqSource::Pinned),
-        None => (OsString::from("jaq"), JaqSource::Path),
-    }
-}
-
-/// Replace this process with jaq. Only returns on failure.
-fn exec(prog: &str, argv: &[OsString]) -> ! {
-    let (jaq, _) = jaq_binary();
-    let err = Command::new(&jaq).args(argv).exec();
-    // `exec` returns only when the replacement failed.
-    eprintln!("{prog}: could not execute {}: {err}", jaq.to_string_lossy());
-    eprintln!("{prog}: pathfinder is a shim over jaq; set {JAQ_ENV} if jaq is not on PATH.");
-    std::process::exit(127);
-}
-
-/// Run jaq as a child, reshaping its output, and return the code to exit with.
-///
-/// stderr is inherited rather than captured, so jaq's diagnostics, `debug`
-/// output and colour decisions reach the terminal untouched.
-fn pipe(prog: &str, plan: &translate::Plan) -> i32 {
-    let (jaq, _) = jaq_binary();
-    let mut command = Command::new(&jaq);
-    command
-        .args(&plan.argv)
-        .stderr(Stdio::inherit())
-        .stdout(Stdio::piped());
-    // Several files are opened before jaq starts, so that they can be
-    // described to it (see `inputs`).
-    let strip = plan.strip_input_rs;
-    let inputs = plan
-        .concat_inputs
-        .as_deref()
-        .map(|files| inputs::open(files, strip));
-    let mut unreported = false;
-    if let Some(inputs) = &inputs {
-        command.env(inputs::INPUTS_ENV, inputs::describe(inputs));
-        // A stock jaq does not know of unreadable files: say so here, if not
-        // where jq would, and exit as jq would.
-        if inputs.iter().any(|i| i.failure().is_some()) && !engine_is_patched(&jaq) {
-            unreported = true;
-            for m in inputs.iter().filter_map(inputs::Input::failure) {
-                eprintln!("jq: error: {m}");
-            }
-        }
-    }
-    let feed_stdin = plan.strip_input_rs || inputs.is_some();
-    if feed_stdin {
-        command.stdin(Stdio::piped());
-    } else {
-        command.stdin(Stdio::inherit());
-    }
-
-    let mut child = match command.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("{prog}: could not execute {}: {e}", jaq.to_string_lossy());
-            return 127;
-        }
-    };
-
-    // Feed jaq's stdin ourselves when the input needs reshaping. A thread keeps
-    // it streaming rather than reading everything before jaq starts.
-    let feeder = child.stdin.take().map(|mut sink| {
-        std::thread::spawn(move || {
-            let _ = match inputs {
-                Some(inputs) => inputs::feed(&mut sink, inputs, strip),
-                None => feed(&mut sink, strip),
-            };
-        })
-    });
-
-    let mut code = 0;
-    if let Some(out) = child.stdout.take() {
-        let stdout = io::stdout();
-        let mut lock = stdout.lock();
-        if let Err(e) = post::transform(out, &mut lock, plan.post) {
-            // A closed downstream reader is normal for a filter in a pipeline.
-            if e.kind() == io::ErrorKind::BrokenPipe {
-                return 141;
-            }
-            eprintln!("{prog}: error writing output: {e}");
-            code = 2;
-        }
-    }
-    if let Some(handle) = feeder {
-        let _ = handle.join();
-    }
-
-    let code = match child.wait() {
-        Ok(status) => status.code().unwrap_or_else(|| {
-            // Killed by a signal: report it the way a shell would.
-            status.signal().map_or(1, |s| 128 + s)
-        }),
-        Err(e) => {
-            eprintln!("{prog}: could not wait for {}: {e}", jaq.to_string_lossy());
-            1
-        }
-    }
-    .max(code);
-    // jq exits with 2 when an input file could not be read, unless killed.
-    if unreported && code < 128 { 2 } else { code }
 }

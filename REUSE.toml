@@ -63,12 +63,6 @@ path = ["fuzz/seeds/jqargs/**", "fuzz/seeds/regex/**"]
 SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
-# The pass-count ratchet for the patched engine.
-[[annotations]]
-path = ["crates/pathfinder/tests/jq-suite/FLOOR-patched", "crates/pathfinder/tests/jq-suite/FLOOR-native"]
-SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
-SPDX-License-Identifier = "GPL-3.0-or-later"
-
 # The engine: jaq 3.1.1's jaq-core, jaq-std, jaq-json, jaq-fmts, jaq-all (as
 # pathfinder-all) and jaq's CLI (as pathfinder-jaq), imported as a hard fork
 # (crates/UPSTREAM.md) with packaging/jaq/ applied. jaq is MIT and its files

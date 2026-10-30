@@ -757,9 +757,9 @@ static CASES: &[Case] = &[
     ),
 ];
 
-/// Cases only the packaged, patched jaq (`packaging/jaq/`) answers as jq does:
-/// number output, double-precision integers, input literals, string
-/// repetition. They run when the engine's `--version` says `+pathfinder`.
+/// Cases a stock jaq answered otherwise, which the engine crates' patch set
+/// repaired: number output, double-precision integers, input literals, string
+/// repetition.
 static PATCHED_CASES: &[Case] = &[
     c(
         "null",
@@ -827,7 +827,7 @@ static PATCHED_CASES: &[Case] = &[
     c("null", &["{a #"]),
 ];
 
-/// Patched-engine cases compared on stderr too: an uncaught error is reported
+/// Cases compared on stderr too: an uncaught error is reported
 /// as jq reports it, with its location, and the next input still runs; the
 /// exit status is the last input's. Also `debug` and `halt_error` output.
 static PATCHED_STDERR_CASES: &[Case] = &[
@@ -1015,11 +1015,14 @@ static PATCHED_STDERR_CASES: &[Case] = &[
     c("", &["-c", ".", "l1.json", "dir", "l2.json"]),
 ];
 
-/// Cases needing input files, which are created in a temp dir at run time.
-/// Cases only the native engine answers as jq does: its reader knows which
-/// file it has open, where the jaq engine's prelude can only define a
-/// constant `input_filename`.
+/// Cases the jaq engine could not answer as jq does, added since M19 when
+/// only the native engine ran them: its reader, its own regex and time
+/// code, and jq's errors from its core.
 static NATIVE_CASES: &[Case] = &[
+    // Once divergences of a stock jaq, pinned as such until the jaq engine
+    // went (P-078): `"a" * 0` and an object indexed with a number.
+    c("null", &["-nc", r#""a"*0"#]),
+    c(r#"{"a":1}"#, &["-c", "try .[3] catch ."]),
     // --- jq's `input` past the last input raises "break" (M23) ---
     c("1", &["-c", "., (try input catch .)"]),
     c("1 2", &["-c", "[., input, (try input catch .)]"]),
@@ -2401,6 +2404,7 @@ static NATIVE_CASES: &[Case] = &[
     ),
 ];
 
+/// Cases needing input files, which are created in a temp dir at run time.
 static FILE_CASES: &[Case] = &[
     c("", &["-c", ".", "f1.json"]),
     c("", &["-c", ".", "f1.json", "f2.json"]),
@@ -2493,34 +2497,6 @@ fn real_jq() -> Option<PathBuf> {
     None
 }
 
-/// The engine the shim runs, as it reports it: `native` (in process),
-/// `patched` (Pathfinder's patched jaq, `packaging/jaq/`) or `stock` (any
-/// other jaq). Asked of `pathfinder --version --json`, so it follows
-/// `PATHFINDER_ENGINE`, the build's default and the jaq lookup exactly.
-fn engine() -> &'static str {
-    let out = Command::new(env!("CARGO_BIN_EXE_pathfinder"))
-        .args(["--version", "--json"])
-        .output()
-        .expect("pathfinder runs");
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("a JSON report");
-    let engine = &v["data"]["engine"];
-    if engine["name"] == "native" {
-        return "native";
-    }
-    let jaq = engine["path"].as_str().unwrap_or("jaq");
-    let patched = Command::new(jaq)
-        .arg("--version")
-        .output()
-        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("+pathfinder"));
-    if patched { "patched" } else { "stock" }
-}
-
-/// Whether the engine has Pathfinder's patch set: the patched jaq, or the
-/// native engine, which is built from the same patched sources.
-fn engine_is_patched() -> bool {
-    engine() != "stock"
-}
-
 /// Find a jq binary, without checking which version it is.
 fn locate_jq() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("PATHFINDER_REAL_JQ") {
@@ -2595,18 +2571,14 @@ fn run_with(
     (out.status.code(), out.stdout, out.stderr)
 }
 
-/// On the patched engine, an uncaught error, `debug` and `halt_error` write
-/// what jq writes to stderr, and the exit status is jq's.
+/// An uncaught error, `debug` and `halt_error` write what jq writes to
+/// stderr, and the exit status is jq's.
 #[test]
-fn patched_engine_reports_errors_as_jq() {
+fn errors_are_reported_as_jq_reports_them() {
     let Some(jq) = real_jq() else {
         skip_or_fail("no usable jq available");
         return;
     };
-    if !engine_is_patched() {
-        eprintln!("skipped: the engine is a stock jaq, which reports errors its own way");
-        return;
-    }
     let dir = std::env::temp_dir().join(format!("pathfinder-err-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     write_fixtures(&dir);
@@ -2655,16 +2627,7 @@ fn shim_matches_real_jq() {
     write_fixtures(&dir);
     let shim = shim(&dir);
 
-    let patched: &[Case] = if engine_is_patched() {
-        PATCHED_CASES
-    } else {
-        &[]
-    };
-    let native: &[Case] = if engine() == "native" {
-        NATIVE_CASES
-    } else {
-        &[]
-    };
+    let (patched, native) = (PATCHED_CASES, NATIVE_CASES);
     let mut failures: Vec<String> = Vec::new();
     for case in CASES.iter().chain(FILE_CASES).chain(patched).chain(native) {
         let expected = run(&jq, &dir, case);
@@ -2691,42 +2654,4 @@ fn shim_matches_real_jq() {
         failures.join("\n")
     );
     eprintln!("{total} differential cases matched jq exactly");
-}
-
-/// Divergences that are known, documented, and deliberately not repaired.
-///
-/// Asserting on them keeps `doc/DIVERGENCES.md` honest: if jaq ever fixes one,
-/// this test fails and the documentation gets updated rather than quietly
-/// rotting.
-#[test]
-fn documented_divergences_still_diverge() {
-    let Some(jq) = real_jq() else {
-        skip_or_fail("no usable jq available");
-        return;
-    };
-    let dir = std::env::temp_dir().join(format!("pathfinder-div-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let shim = shim(&dir);
-
-    // `"a" * 0` is `""` in jq 1.8.1 and `null` in a stock jaq. `*` of two
-    // literals is left alone by the rewriter; Pathfinder's patched jaq
-    // (`packaging/jaq/0005-string-repeat.patch`) repairs it, so there the
-    // case must agree with jq instead. Documented in doc/DIVERGENCES.md.
-    let case = c("null", &["-nc", r#""a"*0"#]);
-    let expected = run(&jq, &dir, &case);
-    let actual = run(&shim, &dir, &case);
-    assert_eq!(String::from_utf8_lossy(&expected.1).trim(), r#""""#);
-    let repaired = if engine_is_patched() { r#""""# } else { "null" };
-    assert_eq!(String::from_utf8_lossy(&actual.1).trim(), repaired);
-
-    // An object indexed with a number is jq's error, and `null` in a stock
-    // jaq (`packaging/jaq/0006-object-keys.patch` repairs it).
-    let case = c(r#"{"a":1}"#, &["-c", "try .[3] catch ."]);
-    let expected = run(&jq, &dir, &case);
-    let actual = run(&shim, &dir, &case);
-    let _ = std::fs::remove_dir_all(&dir);
-    let error = r#""Cannot index object with number""#;
-    assert_eq!(String::from_utf8_lossy(&expected.1).trim(), error);
-    let repaired = if engine_is_patched() { error } else { "null" };
-    assert_eq!(String::from_utf8_lossy(&actual.1).trim(), repaired);
 }

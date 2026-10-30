@@ -1,19 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The engine a filter runs on, and running it in process.
+//! Running a plan on the engine, in process.
 //!
-//! Two engines answer a `jq` call while the fork is under way (PRD R-014):
-//!
-//! - **`native`** — Pathfinder's engine crates, linked into this binary and
-//!   run in process ([`run`]). Nothing is spawned.
-//! - **`jaq`** — a jaq binary, `exec`ed or spawned (`main.rs`). The packaged
-//!   jaq carries the same patch set as the engine crates, so the two agree;
-//!   CI runs both suites on both until M24 retires this one.
-//!
-//! `PATHFINDER_ENGINE` chooses; unset, the build's default applies, which a
-//! packager sets with `PATHFINDER_DEFAULT_ENGINE` at build time and which is
-//! otherwise `native`.
+//! The engine is Pathfinder's crates, linked into this binary: nothing is
+//! spawned. Until 0.2.0 a jaq binary could stand in for it
+//! (`PATHFINDER_ENGINE=jaq`); that engine is gone (PLAN P-078), and the
+//! variable is still read so that a script that still asks for it fails
+//! instead of silently running something else.
 
 use std::io::{self, IsTerminal as _, Read, Write};
 
@@ -21,66 +15,32 @@ use crate::inputs;
 use crate::post::{self, Framer};
 use crate::translate::Plan;
 
-/// The runtime override.
+/// The variable that once chose the engine.
 pub const ENGINE_ENV: &str = "PATHFINDER_ENGINE";
 
-/// The engine a packager chose at build time, if any.
-const BUILT_IN: Option<&str> = option_env!("PATHFINDER_DEFAULT_ENGINE");
+/// The engine's name, as `--version` and `--explain` report it.
+pub const NAME: &str = "native";
 
-/// Which engine runs the filter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Engine {
-    /// The engine crates, in process.
-    Native,
-    /// A jaq binary, found by `main.rs`'s `jaq_binary`.
-    Jaq,
-}
-
-impl Engine {
-    /// The name `PATHFINDER_ENGINE` takes and `--version` reports.
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Native => "native",
-            Self::Jaq => "jaq",
-        }
-    }
-
-    fn parse(name: &str) -> Option<Self> {
-        match name {
-            "native" => Some(Self::Native),
-            "jaq" => Some(Self::Jaq),
-            _ => None,
-        }
-    }
-}
-
-/// The engine selected, and what selected it: [`ENGINE_ENV`], the build's
-/// default (`built-in`), or Pathfinder's (`default`).
+/// Check [`ENGINE_ENV`]: unset, empty or `native` is the one engine.
 ///
 /// # Errors
 ///
-/// A value of [`ENGINE_ENV`] (or of the build's default) that names no
-/// engine, as the message to report.
-pub fn selected() -> Result<(Engine, &'static str), String> {
-    let (value, source) = match std::env::var(ENGINE_ENV) {
-        Ok(v) if !v.is_empty() => (v, ENGINE_ENV),
-        _ => match BUILT_IN {
-            Some(v) => (v.to_owned(), "built-in"),
-            None => return Ok((Engine::Native, "default")),
-        },
-    };
-    Engine::parse(&value)
-        .map(|e| (e, source))
-        .ok_or_else(|| format!("{source} is {value:?}; it must be \"native\" or \"jaq\""))
+/// Any other value, as the message to report.
+pub fn check() -> Result<(), String> {
+    match std::env::var(ENGINE_ENV) {
+        Ok(v) if !v.is_empty() && v != NAME => Err(format!(
+            "{ENGINE_ENV} is {v:?}; Pathfinder has one engine, \"native\", since 0.2.0 \
+             (the jaq engine was removed): unset {ENGINE_ENV}"
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Run the plan on the native engine and return the exit status.
 ///
-/// What the jaq path does around the binary is done here around the driver:
-/// several input files are read as one stream, described by
-/// [`jaq::Segment`]s instead of `PATHFINDER_INPUTS`; `--seq` input loses its
-/// separators on the way in; `-a` and `--seq` output is framed on the way out
-/// by the same [`Framer`] that reshapes a jaq binary's stdout.
+/// Several input files are read as one stream, described by
+/// [`jaq::Segment`]s; `--seq` input loses its separators on the way in; `-a`
+/// and `--seq` output is framed on the way out by [`Framer`].
 pub fn run(plan: &Plan) -> i32 {
     jaq::init_logging();
     let strip = plan.strip_input_rs;

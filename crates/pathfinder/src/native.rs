@@ -15,7 +15,7 @@
 //! an install conflict — goes to stderr as one `{"error":{…}}` line. Under the
 //! name `jq` none of this is reachable.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -77,34 +77,17 @@ pub fn help_trailer() -> String {
 /// Show what Pathfinder would run, without running it.
 ///
 /// This is the debugging entry point: when a filter behaves unexpectedly, the
-/// first question is always "what did jaq actually receive", and guessing at it
-/// from the source is how subtle rewriting bugs survive.
-pub fn explain(plan: &Plan, engine: crate::engine::Engine, mode: Mode) {
+/// first question is always "what did the engine actually receive", and
+/// guessing at it from the source is how subtle rewriting bugs survive.
+pub fn explain(plan: &Plan, mode: Mode) {
     match mode {
-        Mode::Json => println!(
-            "{}",
-            explain_json(plan, engine, &Meta::now("pathfinder --explain"))
-        ),
-        Mode::Human => explain_human(plan, engine),
-    }
-}
-
-/// How the plan would run: in process, or by `exec` or a pipe to jaq.
-fn execution(plan: &Plan, engine: crate::engine::Engine) -> &'static str {
-    match engine {
-        crate::engine::Engine::Native => "in-process",
-        crate::engine::Engine::Jaq if needs_pipe(plan) => "pipe",
-        crate::engine::Engine::Jaq => "exec",
+        Mode::Json => println!("{}", explain_json(plan, &Meta::now("pathfinder --explain"))),
+        Mode::Human => explain_human(plan),
     }
 }
 
 /// The plan as the JSON envelope's `data`.
-fn explain_json(plan: &Plan, engine: crate::engine::Engine, meta: &Meta) -> String {
-    let argv: Vec<String> = plan
-        .argv
-        .iter()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
+fn explain_json(plan: &Plan, meta: &Meta) -> String {
     let program = match &plan.assembly {
         Some(a) => Object::new()
             .bool("rewritten", true)
@@ -122,10 +105,9 @@ fn explain_json(plan: &Plan, engine: crate::engine::Engine, meta: &Meta) -> Stri
         );
     }
     let data = Object::new()
-        .str("engine", engine.name())
-        .strs("jaq_argv", &argv)
+        .str("engine", crate::engine::NAME)
         .obj("program", program)
-        .str("execution", execution(plan, engine))
+        .str("execution", "in-process")
         .obj(
             "stdout",
             Object::new()
@@ -137,12 +119,8 @@ fn explain_json(plan: &Plan, engine: crate::engine::Engine, meta: &Meta) -> Stri
 }
 
 /// The plan as today's human-readable text.
-fn explain_human(plan: &Plan, engine: crate::engine::Engine) {
-    println!("engine: {}", engine.name());
-    println!("\njaq argv (the jaq engine's command line):");
-    for a in &plan.argv {
-        println!("  {}", a.to_string_lossy());
-    }
+fn explain_human(plan: &Plan) {
+    println!("engine: {}, in process", crate::engine::NAME);
 
     match &plan.assembly {
         Some(a) => {
@@ -161,14 +139,6 @@ fn explain_human(plan: &Plan, engine: crate::engine::Engine) {
         None => println!("\nprogram: passed through unchanged"),
     }
 
-    println!(
-        "\nexecution: {}",
-        match execution(plan, engine) {
-            "in-process" => "in process (no other process)",
-            "pipe" => "spawn + pipe",
-            _ => "exec (no extra process)",
-        }
-    );
     if plan.post.ascii {
         println!("  stdout: escape non-ASCII (-a)");
     }
@@ -180,26 +150,10 @@ fn explain_human(plan: &Plan, engine: crate::engine::Engine) {
     }
     if let Some(files) = &plan.concat_inputs {
         println!(
-            "  stdin:  concatenate {} input files, because jaq would otherwise run the \
-             program once per file",
+            "  stdin:  read {} input files as one stream, as jq does",
             files.len()
         );
     }
-
-    if let Some(a) = &plan.assembly
-        && a.syntax_rewritten
-    {
-        println!(
-            "\nnote: Pathfinder rewrote parts of this filter that jaq would run \
-             differently from jq (assignment, deletion, indices, slices, @base64d and \
-             others). Set PATHFINDER_NO_REWRITE=1 to compare with jaq's own behaviour."
-        );
-    }
-}
-
-/// Whether the plan gives up the `exec` fast path.
-fn needs_pipe(plan: &Plan) -> bool {
-    !plan.post.is_identity() || plan.strip_input_rs || plan.concat_inputs.is_some()
 }
 
 /// Result of installing the `jq` shim symlink.
@@ -410,12 +364,12 @@ impl Failure {
         )
     }
 
-    /// A jq feature jaq cannot provide. Exit 2, as in human mode.
+    /// A jq feature the engine cannot provide. Exit 2, as in human mode.
     pub fn unsupported(u: &Unsupported) -> Self {
         Self::reported(
             "UNSUPPORTED",
             diag::EXIT_USAGE,
-            format!("{} is not supported by jaq: {}", u.feature, u.detail),
+            format!("{} is not supported by Pathfinder: {}", u.feature, u.detail),
             None,
         )
     }
@@ -498,79 +452,31 @@ fn shell_quote(path: &Path) -> String {
     }
 }
 
-/// The engine a filter would run on.
-#[derive(Debug)]
-pub struct Engine<'a> {
-    /// `native` or `jaq`.
-    pub name: &'static str,
-    /// What chose it: `PATHFINDER_ENGINE`, `built-in` or `default`.
-    pub selected_by: &'static str,
-    /// For the `jaq` engine, the binary as the lookup resolved it (`jaq` for
-    /// a `PATH` lookup) and which step supplied it: `PATHFINDER_JAQ`,
-    /// `pinned` or `PATH`.
-    pub jaq: Option<(&'a OsStr, &'static str)>,
-}
-
-/// The path to report: a bare `jaq` is resolved against `PATH` for display
-/// (without spawning it), so the reader sees which file would run.
-fn display_path(path: &OsStr) -> String {
-    let bare = Path::new(path).components().count() == 1;
-    if bare && let Some(dirs) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&dirs) {
-            let candidate = dir.join(path);
-            if candidate.is_file() {
-                return candidate.to_string_lossy().into_owned();
-            }
-        }
-    }
-    path.to_string_lossy().into_owned()
-}
-
 /// `pathfinder --version`: Pathfinder's own version, the jq it reproduces, and
-/// the engine it would hand off to.
-pub fn version(engine: &Engine<'_>, mode: Mode) {
+/// its engine.
+pub fn version(mode: Mode) {
     match mode {
-        Mode::Human => print!("{}", version_human(engine)),
-        Mode::Json => println!(
-            "{}",
-            version_json(engine, &Meta::now("pathfinder --version"))
-        ),
+        Mode::Human => print!("{}", version_human()),
+        Mode::Json => println!("{}", version_json(&Meta::now("pathfinder --version"))),
     }
 }
 
-fn version_human(engine: &Engine<'_>) -> String {
-    let line = match engine.jaq {
-        None => format!(
-            "engine: {}, in process ({})",
-            engine.name, engine.selected_by
-        ),
-        Some((path, source)) => format!(
-            "engine: {} ({}), {} ({source})",
-            engine.name,
-            engine.selected_by,
-            display_path(path)
-        ),
-    };
+fn version_human() -> String {
     format!(
         "pathfinder {} ({JQ_BASELINE_VERSION} compatible)\n\
-         {line}\n\
+         engine: {}, in process\n\
          Maintained by {MAINTAINER}\n\
          {WEBSITE}\n",
         env!("CARGO_PKG_VERSION"),
+        crate::engine::NAME,
     )
 }
 
-fn version_json(engine: &Engine<'_>, meta: &Meta) -> String {
-    let mut about = Object::new()
-        .str("name", engine.name)
-        .str("selected_by", engine.selected_by);
-    if let Some((path, source)) = engine.jaq {
-        about = about.str("path", &display_path(path)).str("source", source);
-    }
+fn version_json(meta: &Meta) -> String {
     let data = Object::new()
         .str("version", env!("CARGO_PKG_VERSION"))
         .str("jq_baseline", JQ_BASELINE_VERSION)
-        .obj("engine", about);
+        .obj("engine", Object::new().str("name", crate::engine::NAME));
     envelope(meta, data)
 }
 
@@ -828,11 +734,10 @@ pub fn take_verb(argv: &mut Vec<OsString>) -> Lifted {
 #[cfg(test)]
 mod tests {
     use super::{
-        Engine, Lifted, Meta, Verb, civil_from_days, explain_json, format_utc, invoking_agent,
-        shell_quote, take_verb, version_human, version_json,
+        Lifted, Meta, Verb, civil_from_days, explain_json, format_utc, invoking_agent, shell_quote,
+        take_verb, version_human, version_json,
     };
     use crate::translate::Plan;
-    use std::ffi::OsStr;
     use std::ffi::OsString;
     use std::path::Path;
     use std::path::PathBuf;
@@ -1007,31 +912,13 @@ mod tests {
         }
     }
 
-    fn engine() -> Engine<'static> {
-        Engine {
-            name: "jaq",
-            selected_by: "PATHFINDER_ENGINE",
-            jaq: Some((OsStr::new("/opt/jaq/bin/jaq"), "PATHFINDER_JAQ")),
-        }
-    }
-
-    #[test]
-    fn version_human_names_the_native_engine() {
-        let native = Engine {
-            name: "native",
-            selected_by: "default",
-            jaq: None,
-        };
-        assert!(version_human(&native).contains("\nengine: native, in process (default)\n"));
-    }
-
     #[test]
     fn version_human_names_the_engine_and_the_maintainer() {
         assert_eq!(
-            version_human(&engine()),
+            version_human(),
             format!(
                 "pathfinder {} (jq-1.8.1 compatible)\n\
-                 engine: jaq (PATHFINDER_ENGINE), /opt/jaq/bin/jaq (PATHFINDER_JAQ)\n\
+                 engine: native, in process\n\
                  Maintained by Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>\n\
                  https://Pathfinder.SpacecraftSoftware.org/\n",
                 env!("CARGO_PKG_VERSION")
@@ -1041,23 +928,19 @@ mod tests {
 
     #[test]
     fn version_json_is_one_enveloped_document() {
-        let text = version_json(&engine(), &meta());
+        let text = version_json(&meta());
         assert!(!text.contains('\n'));
         let v: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
         assert_eq!(v["metadata"]["tool"], "pathfinder");
         assert_eq!(v["metadata"]["timestamp"], "2026-10-11T00:00:00Z");
         assert!(v["metadata"].get("invoking_agent").is_none());
         assert_eq!(v["data"]["jq_baseline"], "jq-1.8.1");
-        assert_eq!(v["data"]["engine"]["name"], "jaq");
-        assert_eq!(v["data"]["engine"]["selected_by"], "PATHFINDER_ENGINE");
-        assert_eq!(v["data"]["engine"]["path"], "/opt/jaq/bin/jaq");
-        assert_eq!(v["data"]["engine"]["source"], "PATHFINDER_JAQ");
+        assert_eq!(v["data"]["engine"], serde_json::json!({"name": "native"}));
     }
 
     #[test]
     fn explain_json_omits_what_is_absent() {
         let plan = Plan {
-            argv: vec![OsString::from("-c"), OsString::from(".")],
             cli: jaq::Cli::default(),
             post: crate::post::Post {
                 ascii: false,
@@ -1069,15 +952,13 @@ mod tests {
             assembly: None,
         };
         let v: serde_json::Value =
-            serde_json::from_str(&explain_json(&plan, crate::engine::Engine::Jaq, &meta()))
-                .expect("valid JSON");
+            serde_json::from_str(&explain_json(&plan, &meta())).expect("valid JSON");
         assert_eq!(
             v["data"],
             serde_json::json!({
-                "engine": "jaq",
-                "jaq_argv": ["-c", "."],
+                "engine": "native",
                 "program": {"rewritten": false},
-                "execution": "exec",
+                "execution": "in-process",
                 "stdout": {"ascii": false, "seq": false},
                 "stdin": {"strip_rs": false},
             })
