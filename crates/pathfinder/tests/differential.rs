@@ -1023,6 +1023,24 @@ static NATIVE_CASES: &[Case] = &[
     // --- jq's `input` past the last input raises "break" (M23) ---
     c("1", &["-c", "., (try input catch .)"]),
     c("1 2", &["-c", "[., input, (try input catch .)]"]),
+    // `input` reads when its output is asked for: the initialiser first.
+    c("1 2", &["-nc", "reduce (try input) as $x (input; [., $x])"]),
+    c("1 2 3", &["-nc", "[input, input], [limit(1; input)]"]),
+    // `halt_error`: the status as C's `int`, a negative one 0 (absolute
+    // under `-e`), and the type checked before the message is written.
+    c("null", &["-n", r#""m" | halt_error(-1)"#]),
+    c("null", &["-en", r#""m" | halt_error(-1)"#]),
+    c("null", &["-n", r#""m\n" | halt_error(1.9)"#]),
+    c("null", &["-n", r#""m" | halt_error(300.0)"#]),
+    c("null", &["-n", r#""m" | halt_error(1e10)"#]),
+    c("null", &["-n", "halt_error((0.0 | length))"]),
+    c("null", &["-n", r#""m" | halt_error("x")"#]),
+    c(
+        "null",
+        &["-nc", r#"try halt_error({"aaaaaaaaaaaa":1}) catch ."#],
+    ),
+    // A leading `+` in the input is not kept.
+    c("+1.000 +.5 +1e2 +0 +12", &["-c", "[., -., tojson, length]"]),
     c("", &["-nc", "try input catch ."]),
     c("", &["-n", "input"]),
     c("1", &["-c", "first(inputs), [inputs]"]),
@@ -1042,6 +1060,7 @@ static NATIVE_CASES: &[Case] = &[
     // --- a `module` directive is part of the header (M23) ---
     c("null", &["-c", "module {a:1}; undefined_fn"]),
     c("null", &["-c", "module {a:1}; 1"]),
+    c("null", &["-c", "module {# ; a comment\na:1}; 1"]),
     // --- time builtins: jq's C functions on glibc (M23) ---
     // `timegm` normalises fields out of range and truncates fractions.
     c("[2015,14,40,25,61,61.9,0,0]", &["-c", "mktime"]),

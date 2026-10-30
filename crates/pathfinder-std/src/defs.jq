@@ -4,7 +4,7 @@ def debug(msgs): ((msgs | _debug_empty) as $x | .), .;
 
 def halt: _halt(0);
 # Pathfinder: jq 1.8.1 writes a string raw, nothing for null, else JSON and a newline.
-def halt_error($exit_code): (if . == null then empty elif . >= "" and . < [] then . else tojson + "\n" end | _stderr_empty), _halt($exit_code);
+def halt_error($exit_code): _halt_check($exit_code) | (if . == null then empty elif . >= "" and . < [] then . else tojson + "\n" end | _stderr_empty), _halt($exit_code);
 def halt_error: halt_error(5);
 
 # Not defined in jq!

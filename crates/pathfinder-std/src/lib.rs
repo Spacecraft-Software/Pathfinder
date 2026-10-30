@@ -692,11 +692,38 @@ where
                     .map(|s| ValT::from_utf8_bytes(s.replace(b"'", b"'\\''"))),
             )
         }),
+        // Pathfinder: jq's `main` takes the status as C's `int ret =
+        // jv_number_value(…)`: truncated, and the x86-64 conversion's
+        // `INT_MIN` where it has no value (NaN, out of range).
         ("_halt", v(1), |mut cv| {
-            let exit_code = cv.0.pop_var().try_as_i32().map_err(Exn::from);
+            let exit_code = cv.0.pop_var().try_as_f64().map(c_int).map_err(Exn::from);
             box_once(exit_code.and_then(|exit_code| Err(Exn::halt(exit_code))))
         }),
+        // Pathfinder: `halt_error`'s type check, made before its message is
+        // written (`f_halt_error`).
+        ("_halt_check", v(1), |mut cv| {
+            let code = cv.0.pop_var();
+            bome(if code.as_f64().is_some() {
+                Ok(cv.1)
+            } else {
+                Err(Error::str(alloc::format!(
+                    "{} halt_error/1: number required",
+                    cv.1.jq_quoted()
+                )))
+            })
+        }),
     ])
+}
+
+/// C's conversion of a double to an `int`, as x86-64's `cvttsd2si` does
+/// it: truncated, and `INT_MIN` where the result has no value.
+#[expect(clippy::cast_possible_truncation, reason = "range-checked first")]
+fn c_int(f: f64) -> i32 {
+    if f.is_nan() || !(-2_147_483_649.0 < f && f < 2_147_483_648.0) {
+        i32::MIN
+    } else {
+        f as i32
+    }
 }
 
 #[cfg(feature = "std")]

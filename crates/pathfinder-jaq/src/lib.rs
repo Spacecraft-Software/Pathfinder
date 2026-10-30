@@ -130,6 +130,17 @@ fn main_io(
 /// so that the caller can flush `out` first.
 pub fn run(cli: &Cli, input: impl Read, segments: Vec<Segment>, out: &mut dyn Write) -> u8 {
     real_main(cli, input, segments, out).unwrap_or_else(|e| {
+        // Pathfinder: `halt`'s status as jq's `main` returns it: a negative
+        // one is 0, or under `-e` its absolute value (`jq_exit`,
+        // `jq_exit_with_status`); the system keeps the low byte.
+        if let Error::Halt(code) = e {
+            let status = if cli.exit_status {
+                code.wrapping_abs()
+            } else {
+                code.max(0)
+            };
+            return status.to_le_bytes()[0];
+        }
         // A failure to write the report is not reported in turn.
         let _ = write!(io::stderr(), "{}", ErrorColor::new(&e, cli.color_errors()));
         e.code()

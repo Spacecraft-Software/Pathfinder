@@ -26,6 +26,7 @@
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::num::Wrapping;
 
 /// `struct tm`, with glibc's `tm_gmtoff` and `tm_zone`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -456,8 +457,8 @@ fn tzname(isdst: i32) -> String {
 
 /// `iso_week_days`.
 fn iso_week_days(yday: i32, wday: i32) -> i32 {
-    // `big_enough_multiple_of_7`: (366 / 7 + 2) * 7.
-    yday - (yday - wday + 4 + 378) % 7 + 4 - 1
+    let (w, yday, wday) = (Wrapping, Wrapping(yday), Wrapping(wday));
+    (yday - (yday - wday + w(4) + w(378)) % w(7) + w(4) - w(1)).0
 }
 
 fn leap(year: i32) -> i32 {
@@ -634,7 +635,10 @@ fn strftime_into(out: &mut Out, fmt: &[u8], tm: &Tm) -> Result<(), Full> {
                 }
             }
             b'c' if modifier != b'O' => Some(Do::Sub("%a %b %e %H:%M:%S %Y")),
-            b'C' => Some(Do::Number(1, year / 100 - i32::from(year % 100 < 0))),
+            b'C' => Some(Do::Number(
+                1,
+                (year / 100).wrapping_sub(i32::from(year % 100 < 0)),
+            )),
             b'x' if modifier != b'O' => Some(Do::Sub("%m/%d/%y")),
             b'D' if modifier == 0 => Some(Do::Sub("%m/%d/%y")),
             b'd' if modifier != b'E' => Some(Do::Number(2, tm.mday)),
@@ -675,16 +679,22 @@ fn strftime_into(out: &mut Out, fmt: &[u8], tm: &Tm) -> Result<(), Full> {
             }
             b'X' if modifier != b'O' => Some(Do::Sub("%H:%M:%S")),
             b'T' => Some(Do::Sub("%H:%M:%S")),
-            b'u' => Some(Do::Number(1, (tm.wday - 1 + 7) % 7 + 1)),
-            b'U' if modifier != b'E' => Some(Do::Number(2, (tm.yday - tm.wday + 7) / 7)),
+            b'u' => Some(Do::Number(
+                1,
+                (tm.wday.wrapping_sub(1).wrapping_add(7) % 7).wrapping_add(1),
+            )),
+            b'U' if modifier != b'E' => Some(Do::Number(
+                2,
+                tm.yday.wrapping_sub(tm.wday).wrapping_add(7) / 7,
+            )),
             b'V' | b'g' | b'G' if modifier != b'E' => {
                 let mut year = year;
                 let mut days = iso_week_days(tm.yday, tm.wday);
                 if days < 0 {
                     year = year.wrapping_sub(1);
-                    days = iso_week_days(tm.yday + (365 + leap(year)), tm.wday);
+                    days = iso_week_days(tm.yday.wrapping_add(365 + leap(year)), tm.wday);
                 } else {
-                    let d = iso_week_days(tm.yday - (365 + leap(year)), tm.wday);
+                    let d = iso_week_days(tm.yday.wrapping_sub(365 + leap(year)), tm.wday);
                     if d >= 0 {
                         year = year.wrapping_add(1);
                         days = d;
@@ -697,7 +707,11 @@ fn strftime_into(out: &mut Out, fmt: &[u8], tm: &Tm) -> Result<(), Full> {
                 })
             }
             b'W' if modifier != b'E' => {
-                Some(Do::Number(2, (tm.yday - (tm.wday - 1 + 7) % 7 + 7) / 7))
+                let monday = tm.wday.wrapping_sub(1).wrapping_add(7) % 7;
+                Some(Do::Number(
+                    2,
+                    tm.yday.wrapping_sub(monday).wrapping_add(7) / 7,
+                ))
             }
             b'w' if modifier != b'E' => Some(Do::Number(1, tm.wday)),
             b'Y' if modifier != b'O' => Some(Do::Number(1, year)),
@@ -912,23 +926,27 @@ pub fn strptime(input: &[u8], fmt: &[u8], tm: &mut Tm) -> Option<usize> {
     Some(rp)
 }
 
-/// `day_of_the_week`, C's truncating division kept.
+/// `day_of_the_week`, C's truncating division kept, and its `int`
+/// arithmetic wrapping as compiled (a year from `%s` can be near
+/// `INT_MAX`).
 fn day_of_the_week(tm: &mut Tm) {
-    let corr_year = 1900 + tm.year - i32::from(tm.mon < 2);
-    let q = corr_year / 4;
-    let wday = -473 + 365 * (tm.year - 70) + q - q / 25
-        + i32::from(q % 25 < 0)
-        + q / 25 / 4
-        + mon_yday(0, tm.mon)
-        + tm.mday
-        - 1;
-    tm.wday = (wday % 7 + 7) % 7;
+    let w = Wrapping;
+    let year = w(tm.year);
+    let corr_year = w(1900) + year - w(i32::from(tm.mon < 2));
+    let q = corr_year / w(4);
+    let wday = w(-473) + w(365) * (year - w(70)) + q - q / w(25)
+        + w(i32::from((q % w(25)).0 < 0))
+        + q / w(25) / w(4)
+        + w(mon_yday(0, tm.mon))
+        + w(tm.mday)
+        - w(1);
+    tm.wday = ((wday % w(7) + w(7)) % w(7)).0;
 }
 
 /// `day_of_the_year`.
 fn day_of_the_year(tm: &mut Tm) {
     let l = usize::from(is_leap(i64::from(tm.year) + 1900));
-    tm.yday = mon_yday(l, tm.mon) + tm.mday - 1;
+    tm.yday = mon_yday(l, tm.mon).wrapping_add(tm.mday).wrapping_sub(1);
 }
 
 /// `get_number`: spaces, then up to `n` digits while they stay within `to`.
@@ -1326,41 +1344,43 @@ fn parse(input: &[u8], mut rp: usize, fmt: &[u8], tm: &mut Tm, s: &mut Parse) ->
     Some(rp)
 }
 
-/// jq's `set_tm_wday` (Gauss's algorithm), for what `strptime` left unset.
+/// jq's `set_tm_wday` (Gauss's algorithm), for what `strptime` left unset;
+/// its `int` arithmetic wrapping as compiled.
+#[expect(clippy::cast_possible_truncation, reason = "C's `(int)floor(…)`")]
 pub fn set_tm_wday(tm: &mut Tm) {
-    let century = (1900 + tm.year) / 100;
-    let mut year = (1900 + tm.year) % 100;
+    let w = Wrapping;
+    let full = w(1900) + w(tm.year);
+    let century = full / w(100);
+    let mut year = full % w(100);
     if tm.mon < 2 {
-        year -= 1;
+        year -= w(1);
     }
-    let mut mon = tm.mon - 1;
-    if mon < 1 {
-        mon += 12;
+    let mut mon = w(tm.mon) - w(1);
+    if mon.0 < 1 {
+        mon += w(12);
     }
-    let mut wday = (tm.mday
-        + (2.6 * f64::from(mon) - 0.2).floor() as i32
+    let mut wday = (w(tm.mday)
+        + w((2.6 * f64::from(mon.0) - 0.2).floor() as i32)
         + year
-        + (f64::from(year) / 4.0).floor() as i32
-        + (f64::from(century) / 4.0).floor() as i32
-        - 2 * century)
-        % 7;
-    if wday < 0 {
-        wday += 7;
+        + w((f64::from(year.0) / 4.0).floor() as i32)
+        + w((f64::from(century.0) / 4.0).floor() as i32)
+        - w(2) * century)
+        % w(7);
+    if wday.0 < 0 {
+        wday += w(7);
     }
-    tm.wday = wday;
+    tm.wday = wday.0;
 }
 
 /// jq's `set_tm_yday`.
 pub fn set_tm_yday(tm: &mut Tm) {
     const D: [i32; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-    let mut mon = tm.mon;
-    let year = 1900 + tm.year;
+    let year = tm.year.wrapping_add(1900);
     let leap = i32::from(tm.mon > 1 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0));
-    if mon < 0 {
-        mon = -mon;
-    }
-    if mon > 11 {
-        mon %= 12;
-    }
-    tm.yday = D[usize::try_from(mon).unwrap_or(0)] + leap + tm.mday - 1;
+    // jq bounds the index: `-mon`, then `% 12`.
+    let mon = usize::try_from(tm.mon.wrapping_abs() % 12).unwrap_or(0);
+    tm.yday = D[mon]
+        .wrapping_add(leap)
+        .wrapping_add(tm.mday)
+        .wrapping_sub(1);
 }

@@ -187,8 +187,9 @@ pub fn rewrite(src: &str, on: Rewrites) -> Option<Rewrite> {
 fn worth_parsing(src: &str) -> bool {
     fn any(src: &str, toks: &[super::lex::Token]) -> bool {
         toks.iter().any(|t| match &t.tok {
-            // A number written with a leading point, `.5`, which jaq cannot read.
-            Tok::Number => src[t.span.start..].starts_with('.'),
+            // A number written with a bare point, `.5`, `1.` or `1.e3`,
+            // which jaq cannot read.
+            Tok::Number => bare_point(&src[t.span.start..t.span.end]),
             // Assignment; `reduce`/`foreach` sources; `?//` alternatives and
             // `{$b: pattern}` (a binding before `:`).
             // `[`: an index or slice that may need jq's number rules; `-`: a

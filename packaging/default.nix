@@ -70,7 +70,16 @@ let
           (cut "0015-file-locations" true)
         ]
         # jaq 3.1.2 fixed this itself, the same way.
-        ++ lib.optional (lib.versionOlder jaq.version "3.1.2") ./jaq/0016-trailing-comment.patch;
+        ++ lib.optional (lib.versionOlder jaq.version "3.1.2") ./jaq/0016-trailing-comment.patch
+        # 3.1.0's `main_io` calls `real_main` with fewer arguments.
+        ++ [
+          (
+            if lib.versionOlder jaq.version "3.1.1" then
+              ./jaq/0017-input-halt-3.1.0.patch
+            else
+              ./jaq/0017-input-halt.patch
+          )
+        ];
         # jaq's own tests assert jaq's number format (`1.0`, `NaN`), which the
         # patches change on purpose. Pathfinder's check phase runs jq's suite
         # against this engine instead (crates/pathfinder/tests/jq-suite/FLOOR-patched).

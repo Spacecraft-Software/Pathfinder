@@ -20,6 +20,8 @@
 //! context inside a string, and can nest arbitrarily (`"\("\(.x)")"`). The
 //! scanner tracks that with a stack rather than a flag.
 
+use crate::syntax::lex::skip_comment;
+
 /// Where a name was found, which decides whether it can be a function call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Prev {
@@ -264,9 +266,7 @@ fn header_end(src: &str) -> (usize, bool) {
             if b[i].is_ascii_whitespace() {
                 i += 1;
             } else if b[i] == b'#' {
-                while i < b.len() && b[i] != b'\n' {
-                    i += 1;
-                }
+                i = skip_comment(b, i);
             } else {
                 break;
             }
@@ -289,14 +289,19 @@ fn header_end(src: &str) -> (usize, bool) {
             _ => return (end, imports),
         }
         imports |= keyword != "module";
-        // Scan to the terminating `;`, skipping string literals so a `;` inside
-        // a module path does not end the directive early.
+        // Scan to the terminating `;`, skipping string literals and comments
+        // so a `;` inside a module path or a comment in module metadata does
+        // not end the directive early.
         let mut j = i + keyword.len();
         let mut in_string = false;
         while j < b.len() {
             match b[j] {
                 b'\\' if in_string => j += 1,
                 b'"' => in_string = !in_string,
+                b'#' if !in_string => {
+                    j = skip_comment(b, j);
+                    continue;
+                }
                 b';' if !in_string => {
                     j += 1;
                     break;

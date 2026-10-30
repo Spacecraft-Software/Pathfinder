@@ -182,6 +182,7 @@ are identical to it but for their manifests. A following commit runs
 | 0014 lazy input | `pathfinder-fmts`: `read/formats.rs`, `read/mod.rs`; `pathfinder-json`: `read.rs` |
 | 0015 file locations | none (CLI only) |
 | 0016 trailing comment | `pathfinder-core`: `load/lex.rs` (added after M18: an upstream bug found by fuzzing, T-019) |
+| 0017 input and halt | `pathfinder-std`: `input.rs`, `lib.rs`, `defs.jq`; `pathfinder-jaq`: `lib.rs` (M23: `input` raises `"break"` and reads lazily; `halt_error` checks its status first, converts it as C's `int`, and exits as jq's `main`) |
 
 ### CLI hunks, applied in T-010
 

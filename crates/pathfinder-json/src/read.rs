@@ -389,6 +389,9 @@ fn parse_num<L: LexAlloc>(lexer: &mut L) -> Result<Num, hifijson::Error> {
             -special_word(&word(lexer), lexer).ok_or(hifijson::num::Error::ExpectedDigit)?,
         ),
         _ if seen > 0 => {
+            // A leading `+` is not kept: decNumber's text has none, and
+            // negation writes a sign before the text (`-+.5`).
+            let num = num.strip_prefix('+').unwrap_or(num);
             // Pathfinder: jq keeps `-0` as written; an integer would lose the sign.
             if num == "-0" {
                 Num::Dec(num.to_string().into())
