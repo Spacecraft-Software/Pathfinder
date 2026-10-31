@@ -19,8 +19,8 @@ install, the same surface as `pathfinder`) and `jq` (jq's surface only;
 
 Until 0.2.0 a jaq binary could stand in for the engine
 (`PATHFINDER_ENGINE=jaq`); that engine, its patch set and its rewrites are
-gone (PLAN P-078). `PATHFINDER_ENGINE` is still read: unset or `native`
-runs, anything else exits 2, so a script that asks for jaq fails loudly.
+gone (PLAN P-078). `PATHFINDER_ENGINE` is still read: unset, empty or
+`native` runs, anything else exits 2, so a script that asks for jaq fails loudly.
 
 The repository is a Cargo workspace. The shim is `crates/pathfinder`; paths
 like `src/…` and `tests/…` in this file are relative to it. The root

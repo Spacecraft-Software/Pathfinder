@@ -158,7 +158,7 @@ Two environment variables:
 
 @table @env
 @item PATHFINDER_ENGINE
-Unset, or @code{native}. Any other value exits 2: the @code{jaq} engine of
+Unset, empty, or @code{native}. Any other value exits 2: the @code{jaq} engine of
 earlier versions was removed in 0.2.0.
 
 @item PATHFINDER_NO_REWRITE
@@ -178,11 +178,14 @@ jq words it; jq's compile-time rejections (an undefined name, a constant
 non-string object key) are checked the same way, in jq's order.
 
 @cindex rewrites
-The program is then left byte-identical unless it needs something. Two
-things are rewritten: an update of several paths, such as @code{.[1,2] |=
-empty}, which jq evaluates through its own @code{_modify} so that the
-deletions happen together at the end, and an unknown @code{@@format}, which jq
-rejects at run time. A @code{def} of your own wins over anything injected.
+The program is then left byte-identical unless it needs something. An
+update of several paths, such as @code{.[1,2] |= empty}, is rewritten to go
+through jq's own @code{_modify}, so that the deletions happen together at the
+end; an unknown @code{@@format} becomes jq's run-time error; and a
+@code{?//} destructuring alternative is written out as the alternatives it
+tries. A program with an @code{import} or @code{include} header is read by
+the engine's own parser, and also takes the rewrites that write jq's syntax
+as that parser reads it. A @code{def} of your own wins over anything injected.
 
 @cindex engine
 The engine runs in process. It has jq's number model, jq's error messages

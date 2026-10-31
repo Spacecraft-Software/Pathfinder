@@ -405,18 +405,21 @@ mod tests {
             program.contains("startswith(\"__pathfinder_\")"),
             "internal bindings must be hidden from $ARGS.named"
         );
-        assert!(p.cli.files.is_empty());
+        assert_eq!(p.cli.files, Vec::<std::path::PathBuf>::new());
     }
 
     #[test]
     fn a_lone_dash_is_stdin_and_several_files_are_one_stream() {
-        assert!(planned(&[".", "-"]).cli.files.is_empty());
+        assert_eq!(
+            planned(&[".", "-"]).cli.files,
+            Vec::<std::path::PathBuf>::new()
+        );
         assert_eq!(
             planned(&[".", "-5"]).cli.files,
             [std::path::PathBuf::from("-5")]
         );
         let p = planned(&["-s", ".", "a.json", "b.json"]);
-        assert!(p.cli.files.is_empty());
+        assert_eq!(p.cli.files, Vec::<std::path::PathBuf>::new());
         assert_eq!(p.concat_inputs.map(|f| f.len()), Some(2));
     }
 

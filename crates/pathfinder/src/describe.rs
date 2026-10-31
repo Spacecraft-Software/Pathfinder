@@ -86,11 +86,11 @@ const COMMANDS: &[Command] = &[
         ],
         examples: &[
             (
-                "pathfinder --explain -c '.a.b = 1'",
-                "The rewritten assignment, as text",
+                "pathfinder --explain -c '.[1,2] |= empty'",
+                "The rewritten update of several paths, as text",
             ),
             (
-                "pathfinder --explain --json -c '.a.b = 1'",
+                "pathfinder --explain --json -c '.[1,2] |= empty'",
                 "The same, as one JSON document",
             ),
         ],
@@ -187,7 +187,7 @@ const COMMANDS: &[Command] = &[
 const ENVIRONMENT: &[(&str, &str)] = &[
     (
         "PATHFINDER_ENGINE",
-        "unset or native; any other value fails (the jaq engine was removed in 0.2.0)",
+        "unset, empty or native; any other value fails (the jaq engine was removed in 0.2.0)",
     ),
     (
         "PATHFINDER_NO_REWRITE",

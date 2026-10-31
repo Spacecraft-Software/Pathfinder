@@ -62,8 +62,8 @@ pub fn help_trailer() -> String {
          AI_AGENT, AGENT, a truthy CI, or a non-terminal stdout;\n\
          \n\
          Examples:\n    \
-         pathfinder --explain -c '.a.b = 1'\n    \
-         pathfinder --explain --json -c '.a.b = 1'\n    \
+         pathfinder --explain -c '.[1,2] |= empty'\n    \
+         pathfinder --explain --json -c '.[1,2] |= empty'\n    \
          pathfinder --version --json\n    \
          pathfinder --describe --json\n    \
          pathfinder --schema --format anthropic\n    \

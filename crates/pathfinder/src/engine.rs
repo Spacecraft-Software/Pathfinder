@@ -88,10 +88,16 @@ pub fn run(mut plan: Plan) -> i32 {
     i32::from(code)
 }
 
-/// Whether the driver can read `path` as a file: it opens, and is not a
-/// directory (which opens on Linux and fails on the first read).
+/// Whether the driver can read `path` as a file: it exists, is not a
+/// directory (which opens on Linux and fails on the first read), and, if it
+/// is a regular file, opens. Anything else (a FIFO, a device) is left to the
+/// driver's one open: opening a FIFO here and closing it would lose its
+/// writer.
 fn readable(path: &std::path::Path) -> bool {
-    std::fs::File::open(path)
-        .and_then(|f| f.metadata())
-        .is_ok_and(|m| !m.is_dir())
+    match std::fs::metadata(path) {
+        Err(_) => false,
+        Ok(m) if m.is_dir() => false,
+        Ok(m) if m.is_file() => std::fs::File::open(path).is_ok(),
+        Ok(_) => true,
+    }
 }

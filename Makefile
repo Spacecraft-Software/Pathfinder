@@ -34,9 +34,15 @@ diff:
 conformance:
 	$(if $(V),PATHFINDER_CONFORMANCE_VERBOSE=1) $(CARGO) test --test conformance -- --nocapture
 
-# Installs the binary and the `jq` symlink into $(PREFIX)/bin.
-# Refuses to clobber an existing jq; pass FORCE=--force to override.
+# Installs the binary, the `mjq` alias and the `jq` symlink into
+# $(PREFIX)/bin. Refuses to clobber an existing jq or mjq that is not
+# Pathfinder's, before touching the prefix; pass FORCE=--force to override.
 install: build
+	@if [ -z "$(FORCE)" ] && { [ -e $(PREFIX)/bin/mjq ] || [ -L $(PREFIX)/bin/mjq ]; } \
+	    && [ "$$(readlink $(PREFIX)/bin/mjq)" != pathfinder ]; then \
+		echo "$(PREFIX)/bin/mjq exists and is not Pathfinder's; pass FORCE=--force to replace it" >&2; \
+		exit 1; \
+	fi
 	install -Dm755 target/release/pathfinder $(PREFIX)/bin/pathfinder
 	ln -sf pathfinder $(PREFIX)/bin/mjq
 	$(PREFIX)/bin/pathfinder --install-shim $(PREFIX)/bin $(FORCE)

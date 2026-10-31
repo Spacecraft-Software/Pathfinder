@@ -144,10 +144,12 @@ argv[0] ──► parse jq's command line ──► check the program ──► 
 - **jq's grammar, jq's errors.** The command line is parsed by a transcription
   of jq's `main.c`; the program by a port of jq's lexer and bison grammar, so
   a syntax error is reported where and as jq reports it.
-- **The program is left byte-identical** unless it needs something. Two
-  things are rewritten: an update of several paths (`(.a, .b) |= f`), whose
-  deletions jq defers to the end, and an unknown `@format`, which jq rejects
-  at run time. A `def` of your own wins over anything injected.
+- **The program is left byte-identical** unless it needs something. An
+  update of several paths (`(.a, .b) |= f`) is rewritten, because jq defers
+  its deletions to the end; so are an unknown `@format`, which jq rejects at
+  run time, and a `?//` destructuring alternative. A program with an
+  `import` or `include` header is read by the engine's own parser and also
+  takes the rewrites that write jq's syntax as that parser reads it. A `def` of your own wins over anything injected.
 - **Unknown flags are rejected, never forwarded.** The engine's driver
   started as jaq's command line, which has `-i/--in-place`; nothing of the
   user's argv reaches it except through an option set from a jq flag.

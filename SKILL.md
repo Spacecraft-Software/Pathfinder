@@ -82,7 +82,7 @@ one of those verbs, `pathfinder --json .` and `jq --json .` exit 2.
 
 | Variable | Effect |
 |---|---|
-| `PATHFINDER_ENGINE` | Unset or `native`. Anything else exits 2: the `jaq` engine was removed in 0.2.0. |
+| `PATHFINDER_ENGINE` | Unset, empty or `native`. Anything else exits 2: the `jaq` engine was removed in 0.2.0. |
 | `PATHFINDER_NO_REWRITE` | Set to anything: run the filter without Pathfinder's rewrites. |
 
 ## Exit codes
