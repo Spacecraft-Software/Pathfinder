@@ -3,7 +3,7 @@
 # Maintainer: Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 
 pkgname=pathfinder-jq
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="jq 1.8.1-compatible jq, with its own engine"
 arch=('x86_64' 'aarch64')

@@ -4,27 +4,35 @@
 @c %**start of header
 @setfilename pathfinder.info
 @documentencoding UTF-8
+@documentlanguage en
 @settitle Pathfinder Manual
+@syncodeindex vr cp
 @c %**end of header
 
-@set VERSION 0.1.0
-@set UPDATED 2026-08-21
+@set VERSION 0.2.0
+@set UPDATED 2026-10-31
 @set JQBASE 1.8.1
-@set JAQVER 3.0.0
 
 @copying
-This manual documents Pathfinder version @value{VERSION}, a @command{jq}-compatible
-shim over @command{jaq}.
+This manual documents Pathfinder version @value{VERSION}, a
+@command{jq}-compatible @command{jq} in safe Rust, with an engine of its own.
 
-Copyright @copyright{} 2026 Mohamed Hammad.
+Copyright @copyright{} 2026 Mohamed Hammad
+(@email{Mohamed.Hammad@@SpacecraftSoftware.org}),
+@url{https://Pathfinder.SpacecraftSoftware.org/}.
 
 Released under the Creative Commons Attribution-ShareAlike 4.0 International
 license.
 @end copying
 
+@dircategory Text creation and manipulation
+@direntry
+* Pathfinder: (pathfinder).     A jq @value{JQBASE}-compatible jq.
+@end direntry
+
 @titlepage
 @title Pathfinder
-@subtitle A @command{jq}-compatible shim over @command{jaq}
+@subtitle A @command{jq} @value{JQBASE}-compatible @command{jq}, with its own engine
 @subtitle Version @value{VERSION}, @value{UPDATED}
 @author Mohamed Hammad
 @page
@@ -42,248 +50,208 @@ license.
 
 @menu
 * Introduction::         What Pathfinder is, and what it is not.
-* Installation::         Getting the @command{jq} name onto @env{PATH}.
+* Installation::         Getting @command{pathfinder}, @command{mjq} and @command{jq} onto @env{PATH}.
 * Invocation::           The command line, and Pathfinder's own verbs.
-* How It Works::         Translation, polyfills, and the two execution paths.
-* Divergences::          Where jaq and jq still disagree.
-* Testing::              The differential contract.
+* How It Works::         The front end, the rewrites, and the engine.
+* Divergences::          Where Pathfinder and jq still disagree.
+* Testing::              The differential contract and jq's own suite.
 * Index::
 @end menu
 
 @node Introduction
 @chapter Introduction
 
-@command{jaq} is a fast reimplementation of @command{jq} in safe Rust, and it is
-widely described as a drop-in replacement. Measured against jq @value{JQBASE},
-it is not one:
+@cindex purpose
+Pathfinder accepts @command{jq}'s exact command line and runs jq programs as
+jq @value{JQBASE} does: its numbers, its error messages and their locations,
+its regular expressions and its date functions. Installed as @command{jq}, it
+lets existing scripts keep working.
 
-@itemize @bullet
-@item
-Nine jq command-line flags make jaq exit 2 with @samp{unknown flag}.
-@item
-Twenty-two jq builtins are @samp{undefined filter}.
-@item
-jaq does not auto-vivify. @code{null | .a = 1} and @code{@{@} | .a.b = 1} fail,
-where jq builds the missing containers. This is the difference that breaks real
-scripts, and it appears in none of the ``drop-in replacement'' write-ups.
-@end itemize
+@cindex jaq
+It began as a shim in front of @command{jaq}, a fast reimplementation of jq in
+safe Rust that is @emph{not} a drop-in: nine of jq's flags are unknown to it,
+twenty-two builtins are undefined, and it does not create containers on
+assignment (@code{null | .a = 1} fails). The shim closed those gaps by
+rewriting filters. Since 0.2.0 Pathfinder is its own jq: the engine is a hard
+fork of jaq's, kept in its repository and changed until it behaves as jq does,
+and it runs in process.
 
-An @code{alias jq = jaq} hides all of that until it fails at run time.
-
-Pathfinder accepts jq's exact command line, translates it into jaq's, rewrites
-the filter when a missing builtin needs supplying, and hands off. It implements
-none of the jq language itself: jaq does the work.
-
-@cindex scope
-@cindex philosophy
-Two rules govern what it will and will not do.
-
-@table @strong
-@item It will not silently change what a filter means.
-Where jaq's semantics differ from jq's in a way that cannot be repaired from the
-filter level---the assignment operators, @code{*}, @code{/}---Pathfinder
-documents and warns rather than guessing.
-
-@item It will not be more permissive than jq.
-Names such as @code{leaf_paths}, @code{ascii}, @code{toarray} and @code{ANY} are
-missing from jaq, but they are missing from jq @value{JQBASE} too. Defining them
-would let a filter run here and fail on the next machine.
-@end table
+@cindex permissiveness
+Pathfinder is never @emph{more} permissive than jq. @code{leaf_paths},
+@code{ascii}, @code{toarray}, @code{ANY}, @code{ALL} and @code{@@base32} are
+not jq @value{JQBASE} builtins, so Pathfinder does not define them: a filter
+that ran here and failed on a machine with real jq is the one failure a
+compatible jq must not have.
 
 @node Installation
 @chapter Installation
 
-@command{jaq} must be reachable on @env{PATH}, or named by the
-@env{PATHFINDER_JAQ} environment variable.
+@cindex Nix
+With Nix, from the project's flake:
 
-@section From source
+@example
+nix run github:Spacecraft-Software/Pathfinder -- -r '.a' in.json
+@end example
+
+@cindex @command{mjq}
+@cindex @command{jq} symlink
+The package @code{packages.$@{system@}.pathfinder-jq} installs
+@command{pathfinder}, @command{mjq} (a short name for Pathfinder itself) and
+@command{jq}, a symlink to @command{pathfinder}.
+@code{packages.$@{system@}.default} leaves out @command{jq}: taking over that
+name is always an explicit choice. The package is one binary, with no runtime
+dependencies and no wrapper script, so a @command{jq} call is one
+@code{execve}.
+
+Without Nix:
 
 @example
 cargo build --release
 ./target/release/pathfinder --install-shim ~/.local/bin
 @end example
 
-This creates @file{~/.local/bin/jq} pointing at the binary. It refuses to
-overwrite an existing @command{jq} unless @option{--force} is given: silently
-replacing the system's JSON processor is not a decision a tool should make on
-your behalf.
-
-@section Declaratively
-
-On a managed host, prefer the packaging under @file{packaging/}. The Nix
-derivation takes a @code{withJqShim} argument, and the Guix package installs the
-symlink in a separate phase; both default to @emph{not} claiming the
-@command{jq} name, so adding the package to a profile never displaces an
-existing jq by surprise.
-
-The Nix build also pins jaq by store path rather than trusting @env{PATH}, which
-removes the ``jaq is missing'' failure mode entirely.
-
-Pathfinder never edits your shell configuration.
+@noindent
+That creates @file{~/.local/bin/jq} pointing at the binary and refuses to
+replace an existing @command{jq} without @option{--force};
+@code{make install} also installs @command{mjq}. Pathfinder never edits your
+shell configuration.
 
 @node Invocation
 @chapter Invocation
 
-@section As @command{jq}
-
-Exactly as jq. Every flag jq accepts is accepted, and unknown flags are rejected
-with jq's own wording and exit code.
-
-@example
-jq -r '.items[] | select(.active) | .name' data.json
-jq -s 'add' a.json b.json
-jq -n --jsonargs '$ARGS.positional' 1 '@{"k":2@}'
-@end example
-
-@cindex safety
-@cindex in-place
-Flags are matched against an explicit whitelist and never forwarded blindly.
-This is a safety property rather than tidiness: jaq has @option{-i}/@option{--in-place}
-and jq does not, so a pass-through shim would turn @code{jq -i '.' data.json}
-from jq's @samp{Unknown option -i} into a silent, irreversible rewrite of the
-file.
-
-@section As @command{pathfinder}
-
-Under its own name, two further verbs are available.
+@cindex names
+Pathfinder answers to three names. Through @command{jq} it is jq
+@value{JQBASE}: the command line, output, exit codes and diagnostics are jq's,
+@code{jq --version} prints @samp{jq-@value{JQBASE}}, and Pathfinder's own
+options are unknown, as they are to jq. Through @command{pathfinder} or
+@command{mjq} it is the same jq, plus these options:
 
 @table @option
 @item --explain
-Print the translated jaq argv, the assembled program, which polyfills were
-injected, whether the run will @code{exec} or pipe, and a warning if the filter
-assigns to a path. Nothing is executed.
+Show how the program would run, without running it: the engine, the
+assembled program and what was rewritten or injected into it, and how input
+and output are framed.
+
+@item --version
+Pathfinder's version, the jq it reproduces, its engine, the maintainer and
+the website.
 
 @item --install-shim @var{dir} [--force]
-Create the @command{jq} symlink in @var{dir}.
+Create @file{@var{dir}/jq} pointing at this binary. Exit 5 when a different
+@command{jq} is there, 4 when @var{dir} is not writable.
+
+@item --describe
+@itemx --schema [@var{command}] [--format @var{provider}]
+The native surface described for programs and agents, and each command's
+JSON Schema.
 @end table
 
-These are deliberately unavailable through the @command{jq} symlink: a script
-that passes @option{--explain} to what it believes is jq must receive jq's
-@samp{Unknown option} error, or the drop-in surface is not jq's surface.
+@cindex JSON mode
+Each of these reports as text on a terminal and as one JSON document
+otherwise, or when given @option{--json}, or when @env{AI_AGENT},
+@env{AGENT} or a truthy @env{CI} is set. None of that reaches the
+@command{jq} name.
+
+@vindex PATHFINDER_ENGINE
+@vindex PATHFINDER_NO_REWRITE
+Two environment variables:
+
+@table @env
+@item PATHFINDER_ENGINE
+Unset, or @code{native}. Any other value exits 2: the @code{jaq} engine of
+earlier versions was removed in 0.2.0.
+
+@item PATHFINDER_NO_REWRITE
+Set to anything: run the program without Pathfinder's rewrites, to compare
+the engine's own behaviour.
+@end table
 
 @node How It Works
 @chapter How It Works
 
-@section The two paths
+@cindex front end
+@cindex syntax errors
+The command line is parsed by a transcription of jq's @file{main.c}. The
+program is lexed and parsed by ports of jq's @file{lexer.l} and its bison
+grammar, so a syntax error is found exactly where jq finds it and worded as
+jq words it; jq's compile-time rejections (an undefined name, a constant
+non-string object key) are checked the same way, in jq's order.
 
-@table @strong
-@item exec
-The process image is replaced by jaq's. There is no second process and no
-copying; the cost over calling jaq directly is one @code{execve}. Verified with
-@command{strace}: zero @code{clone} or @code{fork} calls, one successful
-@code{execve} into jaq.
+@cindex rewrites
+The program is then left byte-identical unless it needs something. Two
+things are rewritten: an update of several paths, such as @code{.[1,2] |=
+empty}, which jq evaluates through its own @code{_modify} so that the
+deletions happen together at the end, and an unknown @code{@@format}, which jq
+rejects at run time. A @code{def} of your own wins over anything injected.
 
-@item spawn and pipe
-Used only for @option{-a}, @option{--seq}, and multiple input files, where jq's
-behaviour cannot be expressed in jaq's argv and bytes must be reshaped.
-@end table
+@cindex engine
+The engine runs in process. It has jq's number model, jq's error messages
+and locations, assignment that creates containers as jq's does, jq's
+@code{delpaths}, a port of the Oniguruma 6.9.10 that jq ships for its
+regular expressions, and a transcription of glibc 2.39's @code{strftime},
+@code{strptime} and @code{mktime}, the C library jq's release binary links,
+for its dates.
 
-The cost of @code{exec} is that Pathfinder cannot observe jaq's exit code or
-stderr, and so cannot retouch either. On the packaged jaq this costs nothing:
-the exit codes agree in every case tested. A stock jaq stops at the first
-uncaught error, where jq goes on to the next input.
-
-@section Filter rewriting
-
-Most filters are passed through byte-identical, which is what keeps the fast
-path available. When a filter does need something, four things can be spliced
-in, and their ordering constraints interact:
-
-@enumerate
-@item
-@code{import}/@code{include} directives stay at the very top; jaq rejects a
-directive that follows a @code{def}.
-@item
-The polyfill prelude precedes any use of the names it defines.
-@item
-A @code{$ARGS} wrap encloses the filter but sits below the directives.
-@item
-@code{$__loc__} is substituted in place, since it is a literal rather than a
-function.
-@end enumerate
-
-@cindex line numbers
-The prelude is emitted on the @emph{same line} as the filter's first line. jaq
-reports errors against the text it was handed, so a prelude on its own line
-would shift every reported line number by one; inline, the user's line numbers
-are unchanged.
-
-@cindex shadowing
-A @code{def} of your own for a polyfilled name wins over the injected one,
-because both jq and jaq take the last definition. Pathfinder therefore needs no
-collision check, and @option{--explain} reports when it happens.
-
-@section What gets polyfilled
-
-Decided by evidence, not by the manual: each of jq @value{JQBASE}'s 226 builtins
-was invoked against jaq @value{JAQVER} at its declared arity, and the 22 that
-answered @samp{undefined filter} are the gap.
-
-Supplied: @code{tostream}, @code{fromstream}, @code{truncate_stream},
-@code{IN}, @code{INDEX}, @code{JOIN}, @code{trimstr}, @code{format},
-@code{builtins}, @code{have_decnum}, @code{have_literal_numbers},
-@code{input_filename}, and @code{$__loc__}.
-
-Repaired---that is, shadowing a name jaq @emph{has}, because its behaviour
-differs---@code{setpath}, @code{todate} and @code{todateiso8601}.
-
-@cindex recursion
-A repair must be self-contained: shadowing a builtin and calling it by its own
-name inside the shadow is infinite recursion under jaq, not a call to the
-original.
+@cindex flags, unknown
+Unknown flags are rejected, never passed through. The engine's driver began
+as jaq's command line, which has @option{-i}/@option{--in-place}; nothing of
+the user's command line reaches it except through an option set from a jq
+flag.
 
 @node Divergences
 @chapter Divergences
 
-The full table, with measured evidence for each row, is in
-@file{doc/DIVERGENCES.md}. In summary:
+@cindex divergences
+The places Pathfinder still differs from jq @value{JQBASE} are listed,
+measured, in @file{doc/DIVERGENCES.md} in the source tree. In short:
 
-@table @strong
-@item Auto-vivification
-The one that matters. Calls to @code{setpath} are repaired; the @code{=},
-@code{|=}, @code{+=} and @code{//=} operators cannot be, because they are syntax
-rather than builtins. Work around it by seeding the container
-(@code{.a //= @{@} | .a.b = 1}) or by using @code{setpath}.
-
-@item Arithmetic corners
-@code{"a" * 0} is @code{""} in jq and @code{null} in jaq; @code{1 / 0} errors in
-jq and yields @code{Infinity}---invalid JSON---in jaq.
-
-@item Diagnostics
-A stock jaq reports an uncaught error in its own words and stops at it, and
-spaces @code{debug} output differently. stderr is passed through untouched so
-colour and interleaving stay correct; the packaged jaq is patched to report,
-locate and survive the error as jq does.
-
+@table @asis
 @item Refused outright
-@option{--stream}, @code{input_line_number}, the module-introspection builtins,
-and @code{input_filename} across several input files. Each gets a diagnostic
-naming the construct rather than a vaguer failure from jaq.
+@option{--stream}, the module-introspection builtins, @code{lgamma_r}, and
+Oniguruma's subexpression calls, absent operator and callouts. Each gets a
+diagnostic naming the construct.
+
+@item Paths and updates
+@code{. as $x | path($x)}, an update through @code{try @dots{} catch}, and
+@code{break} inside a @code{?//} alternative.
+
+@item Input and output
+The interleaving of stdout and stderr in one file; jq's @option{--seq} input
+messages; which of several bad @option{--argjson}-family arguments is
+reported first.
+
+@item Dates
+Local times past about the year 5 881 600, where glibc's daylight saving rule
+overflows, and @code{strflocaltime} of a time @code{localtime} cannot convert,
+where jq aborts.
 @end table
 
 @node Testing
 @chapter Testing
 
 @cindex differential testing
-Compatibility is established by differential testing, not by golden values. Each
-case runs through real jq and through the shim; both must agree on stdout bytes
-and exit code.
+Compatibility is established by differential testing, not by golden values.
+Each case runs through real jq @value{JQBASE} and through Pathfinder; both
+must agree on stdout bytes and exit code, and on stderr where it is jq's.
 
 @example
-make check     @r{# fmt + clippy + tests}
-make diff      @r{# the differential suite alone, verbose}
+make check         @r{# fmt + clippy + tests}
+make diff          @r{# the differential suite alone, verbose}
+make conformance   @r{# jq's own test suite, file by file}
 @end example
 
-Real jq need not be installed. The suite finds it via @env{PATHFINDER_REAL_JQ},
-or fetches it ephemerally with @code{nix build nixpkgs#jq}, and skips if neither
-is available.
+@vindex PATHFINDER_REAL_JQ
+The suite finds jq through @env{PATHFINDER_REAL_JQ}, or fetches it
+ephemerally with @code{nix build nixpkgs#jq}, and refuses any other version
+than @value{JQBASE}. jq's own test suite, vendored from its release, passes
+820 of 820 cases.
 
 This distinction is not academic. Hand-written goldens encode what the author
 believed jq does---which is the very thing under test. Four such beliefs proved
-wrong while this shim was being written: @option{--indent 0} does not mean
-compact, malformed JSON input exits 5 in both (not 2 in jq), @code{ltrimstr} on
-a non-string errors in jq @value{JQBASE} as well, and several names assumed to
-be jq builtins are not builtins at all. Every one would have shipped as a bug.
+wrong while Pathfinder was being written: @option{--indent 0} does not mean
+compact, malformed JSON input exits 5 (not 2), @code{ltrimstr} on a non-string
+errors in jq @value{JQBASE}, and several names assumed to be jq builtins are
+not builtins at all. Every one would have shipped as a bug.
 
 @node Index
 @unnumbered Index

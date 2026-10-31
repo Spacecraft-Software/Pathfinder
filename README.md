@@ -52,7 +52,8 @@ nix run github:Spacecraft-Software/Pathfinder -- -r '.a' in.json   # try it
 To daily-drive it, add the flake as an input to your system or Home Manager
 configuration and put `packages.${system}.pathfinder-jq` in `home.packages`.
 That variant ships `bin/jq -> pathfinder`; `packages.${system}.default` is the
-binary alone, for when you want Pathfinder without it answering to `jq`. Taking
+binary alone, for when you want Pathfinder without it answering to `jq`. Both
+also ship `bin/mjq`, a short name for `pathfinder` itself. Taking
 over the `jq` name is always an explicit choice.
 
 The package is one binary with no runtime dependencies and no wrapper script:
@@ -66,7 +67,7 @@ cargo build --release
 ```
 
 That creates `~/.local/bin/jq` pointing at the binary, and refuses to overwrite
-an existing `jq` without `--force`. Check that `~/.local/bin` comes before any real jq on your
+an existing `jq` without `--force`; `make install` also installs `mjq`. Check that `~/.local/bin` comes before any real jq on your
 `PATH`, or the symlink never wins.
 
 Pathfinder never edits your shell configuration.

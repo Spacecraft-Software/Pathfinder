@@ -337,7 +337,7 @@ crate would be. Two ways to repair it in the sources: move `halt_error` into
 `pathfinder-json/src/defs.jq`, next to `tojson`, or merge the crates when the
 engine's crate layout is settled.
 
-## jaq 3.1.2 (the packaged engine)
+## jaq 3.1.2 (the packaged engine, until M24)
 
 Bravais's nixpkgs moved to jaq 3.1.2 (2026-10-23), and patch `0008` stopped
 applying. The patch commits were replayed onto 3.1.2 in jaq's source tree:
@@ -599,11 +599,22 @@ expression: `path(splits(","))` gives jq's paths).
   loops read past `__mon_yday`, this reads what jq's binary reads there
   (measured: 255 before the common year's row).
 
-## Licence of Pathfinder's changes
+## M24: one engine
+
+The jaq engine (`PATHFINDER_ENGINE=jaq`) was removed (PLAN P-078). With it
+went `packaging/jaq/`, the patch set the Nix package applied to the jaq it
+pinned (patches `0001`–`0017`, with their 3.1.0 and 3.1.2 cuts), and the
+`pathfinder-jaq` binary that stood in for that jaq in CI. The patches stay
+in the history: they are in the tree at commit `0fd98bd` (M23), the last
+before the removal. Their changes are in the engine crates, where they were
+also applied (the sections above), so the sections referring to them stay
+true of the crates. `crates/pathfinder-jaq` is a library only; its
+`mimalloc` feature and dependency went with the binary.
+
 
 The text taken from jaq keeps jaq's MIT licence and its copyright notice
 (Standard §4.2). Pathfinder's changes to it, the patch set in
-`packaging/jaq/` and the files Pathfinder added among the imported ones (for
+`packaging/jaq/` (until M24) and the files Pathfinder added among the imported ones (for
 example `pathfinder-json/src/parse_error.rs`, `pathfinder-jaq/src/jq.rs`)
 are offered under `GPL-3.0-or-later OR MIT`, at the recipient's choice.
 `REUSE.toml` records each such file as `MIT AND (GPL-3.0-or-later OR MIT)`:

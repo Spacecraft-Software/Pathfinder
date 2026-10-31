@@ -13,6 +13,10 @@ Pathfinder's engine crates (a hard fork of jaq 3.1.1, grown to jq's
 semantics), linked in and run in process (`src/engine.rs`). Nothing is
 spawned.
 
+It answers to three names: `pathfinder`, `mjq` (a symlink the packages
+install, the same surface as `pathfinder`) and `jq` (jq's surface only;
+`compat::detect`).
+
 Until 0.2.0 a jaq binary could stand in for the engine
 (`PATHFINDER_ENGINE=jaq`); that engine, its patch set and its rewrites are
 gone (PLAN P-078). `PATHFINDER_ENGINE` is still read: unset or `native`

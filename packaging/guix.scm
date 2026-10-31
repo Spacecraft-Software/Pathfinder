@@ -10,7 +10,7 @@
 (define-public pathfinder
   (package
     (name "pathfinder")
-    (version "0.1.0")
+    (version "0.2.0")
     (source (local-file "../." "pathfinder-checkout"
                         #:recursive? #t))
     (build-system cargo-build-system)
