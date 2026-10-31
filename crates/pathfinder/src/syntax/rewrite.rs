@@ -77,80 +77,21 @@ pub const NO_REWRITE_ENV: &str = "PATHFINDER_NO_REWRITE";
 
 /// Which of jq's behaviours the rewriter supplies.
 ///
-/// The jaq engine needs every one. The native engine has them one by one as
-/// they move into it (PLAN M20); a behaviour it has natively is switched off
-/// in [`Rewrites::NATIVE`] in the same change, and the differential cases
-/// that pin it then hold the engine to it. The rewrites that only make jaq's
-/// parser read jq's syntax are one switch, [`Rewrites::syntax`]: the native
-/// engine compiles Pathfinder's syntax tree (M21). `?//` is a transform,
-/// not syntax, and both engines take it.
+/// The engine has jq's semantics itself (M20); what is left is jq's deferred
+/// deletion in an update of several paths, which the engine's update does
+/// not do, and the syntax jaq's parser reads otherwise or not at all, for
+/// the programs that parser still reads ([`Rewrites::syntax`]). `?//` is a
+/// transform, not a switch, and always taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "one independent switch per behaviour"
-)]
 pub struct Rewrites {
-    /// A computed object key must be a string.
-    pub computed_key: bool,
-    /// Assignment creates missing containers and raises jq's errors.
-    pub assignment: bool,
     /// An update of several paths (`(.a, .b) |= f`) deletes the paths `f`
     /// yields nothing for together, at the end, as jq's `_modify` does.
     pub comma_update: bool,
-    /// `/` and `%` raise jq's zero-divisor errors; `%` is on integers.
-    pub division: bool,
-    /// Binary operators evaluate the right operand in the outer loop.
-    pub operand_order: bool,
-    /// `del(f)` and `L |= empty` keep jq's order and semantics.
-    pub delete: bool,
-    /// A fractional index is truncated.
-    pub index: bool,
-    /// `null` slices to `null`; fractional bounds round outwards.
-    pub slice: bool,
-    /// A `catch` handler sees jq's wording of the error.
-    pub catch_wording: bool,
-    /// Unary minus on a non-number raises jq's error.
-    pub negation: bool,
-    /// `@base64d` and `@urid` decode by jq's rules.
-    pub decoders: bool,
     /// jq's syntax jaq's parser reads otherwise or not at all: `.5`,
     /// `{$b: pattern}`, a compound `reduce`/`foreach` source, and
-    /// `def f($a)` whose body calls `a`.
+    /// `def f($a)` whose body calls `a`. On only when jaq's parser reads
+    /// the program (an `import`/`include` header, `PATHFINDER_FRONT_END`).
     pub syntax: bool,
-}
-
-impl Rewrites {
-    /// Everything: what the jaq engine needs.
-    pub const ALL: Self = Self {
-        computed_key: true,
-        assignment: true,
-        comma_update: true,
-        division: true,
-        operand_order: true,
-        delete: true,
-        index: true,
-        slice: true,
-        catch_wording: true,
-        negation: true,
-        decoders: true,
-        syntax: true,
-    };
-
-    /// What the native engine still needs.
-    pub const NATIVE: Self = Self {
-        catch_wording: false,
-        computed_key: false,
-        operand_order: false,
-        division: false,
-        negation: false,
-        index: false,
-        slice: false,
-        assignment: false,
-        delete: false,
-        decoders: false,
-        syntax: false,
-        ..Self::ALL
-    };
 }
 
 /// Rewrite `src` if it needs it; `None` means "pass it through unchanged".
@@ -169,8 +110,6 @@ pub fn rewrite(src: &str, on: Rewrites) -> Option<Rewrite> {
         src,
         needs: Vec::new(),
         temps: 0,
-        fast_del: !defines_any(&tree, FAST_DEL_RELIES_ON),
-        keys: Vec::new(),
     };
     let (text, dirty) = cx.emit(&tree);
     // Keep whatever surrounds the expression — leading whitespace, a trailing
@@ -190,30 +129,20 @@ fn worth_parsing(src: &str) -> bool {
             // A number written with a bare point, `.5`, `1.` or `1.e3`,
             // which jaq cannot read.
             Tok::Number => bare_point(&src[t.span.start..t.span.end]),
-            // Assignment; `reduce`/`foreach` sources; `?//` alternatives and
-            // `{$b: pattern}` (a binding before `:`).
-            // `[`: an index or slice that may need jq's number rules; `-`: a
-            // negation, which has its own error message; `catch`: a handler,
-            // which sees jq's wording for errors.
-            // `/` and `%`: jq's zero-divisor errors and integer remainder.
-            // `+`, `*` and the comparisons: jq's operand order.
-            Tok::Op(
-                "=" | "|=" | "+=" | "-=" | "*=" | "/=" | "%=" | "//=" | "?//" | "[" | "-" | "/"
-                | "%" | "+" | "*" | "==" | "!=" | "<" | "<=" | ">" | ">=",
-            )
-            | Tok::Keyword(Kw::Reduce | Kw::Foreach | Kw::Catch)
+            // An update (of several paths); `reduce`/`foreach` sources; `?//`
+            // alternatives and `{$b: pattern}` (a binding before `:`).
+            Tok::Op("|=" | "+=" | "-=" | "*=" | "/=" | "%=" | "//=" | "?//")
+            | Tok::Keyword(Kw::Reduce | Kw::Foreach)
             | Tok::Binding(_) => true,
-            Tok::Ident(name) => name == "del",
-            Tok::Format(name) => {
-                matches!(name.as_str(), "base64d" | "urid") || !JQ_FORMATS.contains(&name.as_str())
-            }
+            // A format jq does not have, which it rejects at run time.
+            Tok::Format(name) => !JQ_FORMATS.contains(&name.as_str()),
             Tok::Str(parts) => parts
                 .iter()
                 .any(|p| matches!(p, StrPart::Interp(inner, _) if any(src, inner))),
             _ => false,
         })
     }
-    lex(src).is_ok_and(|toks| any(src, &toks) || super::check::has_computed_key(&toks))
+    lex(src).is_ok_and(|toks| any(src, &toks))
 }
 
 struct Cx<'a> {
@@ -223,12 +152,6 @@ struct Cx<'a> {
     needs: Vec<&'static str>,
     /// Counter for `$__pf_tN` temporaries, unique per program.
     temps: usize,
-    /// Whether `del(f)` may be routed to jaq's native `del`: false when the
-    /// program defines a name [`single_path`] reasons about.
-    fast_del: bool,
-    /// Computed object keys (`{(k): v}`, the parenthesised node) awaiting the
-    /// string check jaq leaves out.
-    keys: Vec<super::Span>,
 }
 
 impl Cx<'_> {
@@ -245,106 +168,13 @@ impl Cx<'_> {
     )]
     fn emit(&mut self, node: &Node) -> (String, bool) {
         match &node.kind {
-            // jaq builds `{1: 2}` — not JSON — from a computed key that is not
-            // a string, where jq raises an error. Check the key first.
-            Kind::Paren(inner) if self.on.computed_key && self.keys.contains(&node.span) => {
-                let (k, _) = self.emit(inner);
-                self.need("_pf_dump");
-                (format!("(({k}) | {KEY_CHECK})"), true)
-            }
-            Kind::Object(pairs) => {
-                let before = self.keys.len();
-                for p in pairs {
-                    if let super::ObjPair::KeyValue {
-                        key: super::ObjKey::Expr(k),
-                        ..
-                    } = p
-                        && !matches!(&k.kind, Kind::Paren(q) if matches!(q.kind, Kind::Str(_)))
-                    {
-                        self.keys.push(k.span);
-                    }
-                }
-                let out = self.splice(node);
-                self.keys.truncate(before);
-                out
-            }
-            // `L |= empty` is `del(L)` in jq 1.7+: `_modify` collects the paths
-            // `empty` produced nothing for and deletes them together.
+            // An update of several paths: jq's `_modify` defers deletions.
             Kind::Binary { op, lhs, rhs }
-                if self.on.delete
-                    && self.fast_del
-                    && *op == "|="
-                    && matches!(&rhs.kind, Kind::Call { name, args } if name == "empty" && args.is_empty()) =>
-            {
-                let text = self.delete(lhs).unwrap_or_else(|| {
-                    self.need("_pf_delpaths");
-                    let (l, _) = self.emit(lhs);
-                    format!("_pf_delpaths([path({l})])")
-                });
-                (format!("({text})"), true)
-            }
-            // `L /= R` and `L %= R` are `R as $t | L |= . op $t` in jq; the
-            // update goes through the same division as the operator.
-            Kind::Binary { op, lhs, rhs } if self.on.division && (*op == "/=" || *op == "%=") => {
-                let (l, _) = self.emit(lhs);
-                let (r, _) = self.emit(rhs);
-                let t = self.temp();
-                let update = self.arith(&op[..1], ".", &t);
-                let assign = if self.on.assignment {
-                    self.assignment("|=", lhs, &l, &update)
-                } else {
-                    format!("({l}) |= {update}")
-                };
-                (format!("(({r}) as {t} | {assign})"), true)
-            }
-            Kind::Binary { op, lhs, rhs }
-                if is_assignment(op)
-                    && (self.on.assignment
-                        || (self.on.comma_update && *op != "=" && has_comma(lhs))) =>
+                if self.on.comma_update && is_assignment(op) && *op != "=" && has_comma(lhs) =>
             {
                 let (l, _) = self.emit(lhs);
                 let (r, _) = self.emit(rhs);
-                (self.assignment(op, lhs, &l, &r), true)
-            }
-            // jq raises an error for a zero divisor where jaq returns
-            // `Infinity`/`NaN`, and jq's `%` is on integers. A divisor written
-            // as a non-zero literal needs no check for `/`.
-            Kind::Binary { op, lhs, rhs }
-                if self.on.division
-                    && (*op == "/" || *op == "%")
-                    && !nonzero_literal(rhs, self.src, op) =>
-            {
-                let (l, _) = self.emit(lhs);
-                let (r, _) = self.emit(rhs);
-                // jq evaluates the right operand in the outer loop.
-                let (a, b) = (self.temp(), self.temp());
-                let body = self.arith(op, &a, &b);
-                (format!("(({r}) as {b} | ({l}) as {a} | {body})"), true)
-            }
-            Kind::Binary { op, lhs, rhs } if self.on.division && *op == "%" => {
-                // A non-zero literal divisor: only the dividend is truncated.
-                let (l, _) = self.emit(lhs);
-                let (r, _) = self.emit(rhs);
-                let a = self.temp();
-                (
-                    format!("(({l}) as {a} | try (({a} - ({a} % 1)) % {r}) catch ({a} % {r}))"),
-                    true,
-                )
-            }
-            // jq evaluates the right operand in the outer loop, jaq the left.
-            // The difference shows in the order of outputs, of effects
-            // (`input - input`) and of errors (`.a + .b` raises `.b`'s) — and
-            // in none of them when either operand is inert.
-            Kind::Binary { op, lhs, rhs }
-                if self.on.operand_order
-                    && matches!(*op, "+" | "-" | "*" | "==" | "!=" | "<" | "<=" | ">" | ">=")
-                    && !inert(lhs)
-                    && !inert(rhs) =>
-            {
-                let (l, _) = self.emit(lhs);
-                let (r, _) = self.emit(rhs);
-                let t = self.temp();
-                (format!("(({r}) as {t} | ({l}) {op} {t})"), true)
+                (self.assignment(op, &l, &r), true)
             }
             // `.5`: jaq reads only `0.5`.
             // jaq's lexer reads neither `.5` nor `1.` (or `1.e2`); jq's
@@ -443,48 +273,6 @@ impl Cx<'_> {
             {
                 (self.splice_wrapping(node, Some(source.span)).0, true)
             }
-            Kind::Call { name, args }
-                if self.on.delete && self.fast_del && name == "del" && args.len() == 1 =>
-            {
-                match self.delete(&args[0]) {
-                    Some(text) => (text, true),
-                    None => self.splice(node),
-                }
-            }
-            // jaq rejects a fractional index (`.[1.5]`, `.[length/2]`, a `1.0`
-            // read from JSON); jq truncates it. The key is normalised inline,
-            // so the index stays a path expression for assignment and `del`.
-            Kind::Index { index, .. } if self.on.index && index_needs_norm(index, self.src) => {
-                let (text, _) = self
-                    .splice_mapping(node, Some(index.span), |k| format!("({k}) | {INDEX_NORM}"));
-                (text, true)
-            }
-            // jq slices `null` to `null` and rounds fractional bounds outwards;
-            // jaq errors on both. The bounds are evaluated against the input,
-            // not the base (`[1,2][0:.]`), so they are bound first; a bound
-            // that is a literal stays in place.
-            Kind::Slice { base, from, to } if self.on.slice => {
-                (self.slice(base, from.as_deref(), to.as_deref()), true)
-            }
-            // A `catch` handler sees jq's wording for the errors jaq words
-            // differently. Only the handler is touched: `try` without one, and
-            // `?`, discard the message anyway.
-            Kind::Try {
-                handler: Some(h), ..
-            } if self.on.catch_wording && reads_input(h) => {
-                self.need("_pf_err");
-                let (text, _) =
-                    self.splice_mapping(node, Some(h.span), |t| format!("(_pf_err | {t})"));
-                (text, true)
-            }
-            // jq's unary minus has its own message for a non-number.
-            Kind::Neg(n) if self.on.negation && !matches!(n.kind, Kind::Number) => {
-                self.need("_pf_neg");
-                let (t, _) = self.emit(n);
-                (format!("(({t}) | _pf_neg)"), true)
-            }
-            // jaq's decoders are stricter than jq's in some places and more
-            // lenient in others; the prelude has jq's rules.
             // jq answers an unknown format at run time; the engine has none
             // (or formats of its own, such as jaq's `@htmld`).
             Kind::Format(f) if !JQ_FORMATS.contains(&f.as_str()) => {
@@ -507,15 +295,6 @@ impl Cx<'_> {
                     let text = &self.src[node.span.start..node.span.end];
                     (text[text.find('"').unwrap_or(0)..].to_owned(), true)
                 }
-            }
-            Kind::Format(f) if self.on.decoders && (f == "base64d" || f == "urid") => {
-                let name = if f == "base64d" {
-                    "_pf_base64d"
-                } else {
-                    "_pf_urid"
-                };
-                self.need(name);
-                (format!("({name})"), true)
             }
             _ => self.splice(node),
         }
@@ -611,14 +390,25 @@ impl Cx<'_> {
             out
         });
         let v = format!("$__pf_t{}", self.temps);
+        // The body is written once, as a definition taking every variable:
+        // pasted into each alternative, a chain of `?//` grew threefold per
+        // link (found by fuzzing, M24).
+        let f = format!("_pf_alt{}", self.temps);
         self.temps += 1;
+        // `($a; $b)`: the parameters, and the arguments passing them on.
+        let args = if vars.is_empty() {
+            String::new()
+        } else {
+            let list: Vec<String> = vars.iter().map(|v| format!("${v}")).collect();
+            format!("({})", list.join("; "))
+        };
         // jaq reads `.[0]` of an object as `null` where jq raises an error, so
         // an array pattern would match an object and the next alternative would
         // never be tried. Check first, with jq's message.
         let alt = |p: &str, pat: &super::Pattern| {
             let check =
                 array_check(pat).map_or_else(String::new, |c| format!("({v} | {c} | empty), "));
-            format!("({nulls}{check}({v} as {p} | {b}))")
+            format!("({nulls}{check}({v} as {p} | {f}{args}))")
         };
         let mut alts = pats.iter().zip(patterns).rev();
         let (last, last_pat) = alts.next().expect("more than one pattern");
@@ -626,884 +416,25 @@ impl Cx<'_> {
         for (p, pat) in alts {
             text = format!("(try {} catch {text})", alt(p, pat));
         }
-        format!("({s} as {v} | {text})")
+        format!("({s} as {v} | def {f}{args}: {b}; {text})")
     }
 
-    /// `del(target)` through a fast route, when the target allows one.
-    ///
-    /// jaq's own `del` is linear, but agrees with jq only for a target that
-    /// yields one path per array (see [`single_path`]) and whose deleting step
-    /// is not a named key, which jaq removes by swapping the last key into its
-    /// place. Named keys are removed by rebuilding the object in order instead.
-    /// Either way, where jq succeeds and jaq errors (a `null` container, an
-    /// index out of range) or yields nothing (deleting the root), the exact
-    /// algorithm runs on the original input and gives jq's answer or error.
-    fn delete(&mut self, target: &Node) -> Option<String> {
-        if !single_path(target) {
-            return None;
-        }
-        // How the last step deletes: by name, by position, or by iterating.
-        let step = deleting_step(target);
-        let (prefix, leaf) = match &step.kind {
-            Kind::Field { .. } | Kind::Comma(..) => {
-                let (prefix, keys) = field_split(target, self.src)?;
-                (prefix, Leaf::Keys(keys))
-            }
-            Kind::Index { index, .. } if matches!(index.kind, Kind::Str(_)) => {
-                let (prefix, keys) = field_split(target, self.src)?;
-                (prefix, Leaf::Keys(keys))
-            }
-            Kind::Index { .. } | Kind::Slice { .. } => {
-                let (prefix, at) = position_split(target)?;
-                (prefix, Leaf::At(at))
-            }
-            _ => (None, Leaf::Native),
-        };
-        if prefix.is_some_and(|p| !update_prefix(p)) {
-            return None;
-        }
-        self.need("_pf_delpaths");
-        let (t, _) = self.emit(target);
-        let v = format!("$__pf_t{}", self.temps);
-        self.temps += 1;
-        let exact = format!("({v} | _pf_delpaths([path({t})]))");
-        let leaf = match leaf {
-            Leaf::Native => {
-                self.need("_pf_del0");
-                return Some(format!(
-                    "(. as {v} | try first(_pf_del0({t}), {exact}) catch {exact})"
-                ));
-            }
-            Leaf::Keys(keys) => {
-                self.need("_pf_del0");
-                delete_keys(&keys)
-            }
-            Leaf::At(at) => {
-                self.need("_pf_delat");
-                format!("_pf_delat({})", self.step_on_dot(at))
-            }
-        };
-        let fast = match prefix {
-            None => leaf,
-            Some(p) => {
-                let (p, _) = self.emit(p);
-                format!("(({p}) |= {leaf})")
-            }
-        };
-        Some(format!("(. as {v} | try {fast} catch {exact})"))
-    }
-
-    /// A fresh `$__pf_tN` variable name.
-    fn temp(&mut self) -> String {
-        let v = format!("$__pf_t{}", self.temps);
-        self.temps += 1;
-        v
-    }
-
-    /// jq's `/` or `%` of two simple operands (variables, or `.`).
-    ///
-    /// `/`: a zero divisor of a number is jq's error; anything else is jaq's
-    /// own division, whose type errors `catch` translates. `%`: both operands
-    /// truncated toward zero (`x - x % 1`, which also keeps NaN), and a
-    /// divisor that truncates to zero raises jq's error with the values as
-    /// written. Measured over 300,000 operations: `%` 0.31 s against jaq's
-    /// 0.06 s, where a test-and-truncate chain took 1.37 s.
-    fn arith(&mut self, op: &str, a: &str, b: &str) -> String {
-        self.need("_pf_dump");
-        // `%`'s `catch` handler reads the dividend, where `.` is the error.
-        let (bind, a) = if op == "%" && a == "." {
-            (". as $__pf_a | ", "$__pf_a")
-        } else {
-            ("", a)
-        };
-        let zero = |what: &str| {
-            format!(
-                "error(\"\\({a} | type) (\\({a} | _pf_dump)) and \\({b} | type) \
-                 (\\({b} | _pf_dump)) cannot be divided{what} because the divisor is zero\")"
-            )
-        };
-        if op == "/" {
-            let err = zero("");
-            format!(
-                "if {b} == 0 then (if {a} > true then (if {a} < \"\" then {err} else {a} / {b} end) \
-                 else {a} / {b} end) else {a} / {b} end"
-            )
-        } else {
-            let err = zero(" (remainder)");
-            // jaq's float `%` by `0.0` is NaN, not an error, so the truncated
-            // divisor is tested; a non-number fails in `% 1` and is handed to
-            // jaq's `%`, whose type error `catch` translates. A zero divisor
-            // is jq's error only for a number dividend: anything else is a
-            // type error, and NaN is `nan`, as in jq 1.8.1.
-            format!(
-                "{bind}try (({b} - ({b} % 1)) as $__pf_bi | if $__pf_bi == 0 then error(\"__pf_zero\") \
-                 else ({a} - ({a} % 1)) % $__pf_bi end) \
-                 catch (if . == \"__pf_zero\" and {a} > true and {a} < \"\" \
-                 and ({a} | isnan | not) then {err} else {a} % {b} end)"
-            )
-        }
-    }
-
-    /// A slice with jq's semantics: see the call site in [`Self::emit`].
-    fn slice(&mut self, base: &Node, from: Option<&Node>, to: Option<&Node>) -> String {
-        let b = if base.span.start == base.span.end {
-            ".".to_owned()
-        } else {
-            self.emit(base).0
-        };
-        let mut binds = String::new();
-        let mut bound = |cx: &mut Self, n: Option<&Node>, norm: &str| -> String {
-            match n {
-                Some(n)
-                    if !matches!(&n.kind, Kind::Number)
-                        && !matches!(&n.kind, Kind::Neg(m) if matches!(m.kind, Kind::Number)) =>
-                {
-                    let v = format!("$__pf_t{}", cx.temps);
-                    cx.temps += 1;
-                    let _ = write!(binds, "({}) as {v} | ", cx.bound(Some(n), norm));
-                    v
-                }
-                n => cx.bound(n, norm),
-            }
-        };
-        let f = bound(self, from, START_NORM);
-        let t = bound(self, to, END_NORM);
-        // Truthiness first: `if .` is nearly free under jaq, where an
-        // `== null` test on every slice cost 1.3 µs (300,000 slices:
-        // 0.34 s against 0.76 s; unguarded, 0.32 s).
-        let slice = format!("if . then .[{f}:{t}] elif . == null then . else .[{f}:{t}] end");
-        if b == "." && binds.is_empty() {
-            format!("({slice})")
-        } else {
-            format!("({binds}{b} | {slice})")
-        }
-    }
-
-    /// A slice bound, normalised with `norm` unless it is an integer literal.
-    fn bound(&mut self, n: Option<&Node>, norm: &str) -> String {
-        n.map_or_else(String::new, |n| {
-            let (t, _) = self.emit(n);
-            if index_needs_norm(n, self.src) {
-                format!("({t}) | {norm}")
-            } else {
-                t
-            }
-        })
-    }
-
-    /// An index or slice step re-based on `.`: `.a[0]` gives `.[0]`.
-    fn step_on_dot(&mut self, step: &Node) -> String {
-        match &step.kind {
-            Kind::Index { index, .. } => {
-                let (k, _) = self.emit(index);
-                if index_needs_norm(index, self.src) {
-                    format!(".[({k}) | {INDEX_NORM}]")
-                } else {
-                    format!(".[{k}]")
-                }
-            }
-            Kind::Slice { from, to, .. } => {
-                let (f, t) = (
-                    self.bound(from.as_deref(), START_NORM),
-                    self.bound(to.as_deref(), END_NORM),
-                );
-                format!(".[{f}:{t}]")
-            }
-            _ => unreachable!("position_split returns only index and slice steps"),
-        }
-    }
-
-    /// Emit an assignment with jq's semantics.
-    ///
-    /// The common case prepares the document with `_pf_vivify` and then lets
-    /// jaq's own operator run, which is fast and — once the containers exist —
-    /// agrees with jq. A target with an explicit comma (`.[1,2] |= empty`) is
-    /// the one place jaq's native update still differs: it deletes several
-    /// explicit indices in order, shifting the later ones. Those go through
-    /// jq's own `_modify`, which is only slow when there are many paths, and an
-    /// explicit comma never produces many.
-    ///
-    /// `=` evaluates its right-hand side before the pre-pass, on the original
-    /// input, as jq does; the update forms evaluate it per path, on the old value.
-    fn assignment(&mut self, op: &str, lhs: &Node, l: &str, r: &str) -> String {
-        let comma = has_comma(lhs);
+    /// Emit an update of several paths through jq's own `_modify`: the
+    /// engine deletes the paths `f` yields nothing for one by one, shifting
+    /// later indices (`.[1,2] |= empty`), where jq deletes them together at
+    /// the end. `_modify` is slow only with many paths, and an explicit comma
+    /// never makes many. `op=` evaluates its right-hand side once, on the
+    /// original input, as jq does.
+    fn assignment(&mut self, op: &str, l: &str, r: &str) -> String {
         let t = format!("$__pf_t{}", self.temps);
         self.temps += 1;
-        if comma && op != "=" {
-            self.need("_pf_modify");
-            return if op == "|=" {
-                format!("_pf_modify(({l}); ({r}))")
-            } else {
-                let bin = &op[..op.len() - 1];
-                format!("(({r}) as {t} | _pf_modify(({l}); . {bin} {t}))")
-            };
-        }
-        if !self.on.assignment {
-            // The engine creates the containers itself.
-            return match op {
-                "|=" => format!("(({l}) |= ({r}))"),
-                _ => format!("(({r}) as {t} | ({l}) {op} {t})"),
-            };
-        }
-        if !addresses(lhs) {
-            // Nothing in the target can name a missing location, so jaq's own
-            // operator is already jq's — no pre-pass, full native speed.
-            return match op {
-                "|=" => format!("(({l}) |= ({r}))"),
-                _ => format!("(({r}) as {t} | ({l}) {op} {t})"),
-            };
-        }
-        self.need("_pf_vivify");
-        if let Some(keys) = literal_keys(lhs, self.src) {
-            // A literal target on `.`: prepare it inline, then update natively.
-            let prep = literal_guard(&keys);
-            return match op {
-                "|=" => format!("({prep} | ({l}) |= ({r}))"),
-                _ => format!("(({r}) as {t} | {prep} | ({l}) {op} {t})"),
-            };
-        }
-        if let Some((outer, keys)) = split_target(lhs, self.src) {
-            // `(A | B) op …` as `A |= (prepare B | B op …)`.
-            let prep = literal_guard(&keys);
-            let inner = chain_text(&keys);
-            return match op {
-                "|=" => format!("(({outer}) |= ({prep} | {inner} |= ({r})))"),
-                _ => format!("(({r}) as {t} | ({outer}) |= ({prep} | {inner} {op} {t}))"),
-            };
-        }
-        match op {
-            "|=" => format!("(_pf_vivify(({l})) | ({l}) |= ({r}))"),
-            _ => format!("(({r}) as {t} | _pf_vivify(({l})) | ({l}) {op} {t})"),
-        }
-    }
-}
-
-/// One key of a literal target.
-enum Key {
-    /// A JSON string literal, quotes included.
-    Str(String),
-    Idx(u32),
-}
-
-/// The inline pre-pass for a literal target.
-///
-/// If the leaf's parent already exists with the right type and the index is in
-/// range, nothing happens. Otherwise each container on the way is built
-/// top-down with jaq's own `|=` — `{}` for a field name, `null`-padded arrays
-/// for an index — and a container of the wrong type raises jq's message right
-/// there, with no separate validation pass.
-fn literal_guard(keys: &[Key]) -> String {
-    let lit = |k: &Key| match k {
-        Key::Str(s) => s.clone(),
-        Key::Idx(i) => i.to_string(),
-    };
-    let path_expr = |ks: &[Key]| -> String {
-        if ks.is_empty() {
-            ".".to_owned()
+        self.need("_pf_modify");
+        if op == "|=" {
+            format!("_pf_modify(({l}); ({r}))")
         } else {
-            // `.[a][b]`, not `.[a].[b]`: jaq 3.0 does not parse the latter.
-            ks.iter().fold(String::from("."), |mut out, k| {
-                let _ = write!(out, "[{}]", lit(k));
-                out
-            })
+            let bin = &op[..op.len() - 1];
+            format!("(({r}) as {t} | _pf_modify(({l}); . {bin} {t}))")
         }
-    };
-    let getpath = |ks: &[Key]| -> String {
-        if ks.is_empty() {
-            ".".to_owned()
-        } else {
-            format!(
-                "getpath([{}])",
-                ks.iter().map(lit).collect::<Vec<_>>().join(",")
-            )
-        }
-    };
-    let right_type = |k: &Key| match k {
-        Key::Str(_) => "\"object\"",
-        Key::Idx(_) => "\"array\"",
-    };
-    let n = keys.len();
-    let all: Vec<String> = keys.iter().map(lit).collect();
-
-    let fits = match &keys[n - 1] {
-        Key::Str(_) => "type == \"object\"".to_owned(),
-        Key::Idx(i) => format!("type == \"array\" and length > {i}"),
-    };
-    let parent = getpath(&keys[..n - 1]);
-
-    // Create each container top-down with jaq's own update operator.
-    let steps: Vec<String> = (0..n)
-        .map(|j| {
-            let empty = match &keys[j] {
-                Key::Str(_) => "{}",
-                Key::Idx(_) => "[]",
-            };
-            let pad = match &keys[j] {
-                Key::Idx(i) => format!(
-                    " | if length <= {i} then . + [range(length; {i} + 1) | null] else . end"
-                ),
-                Key::Str(_) => String::new(),
-            };
-            let right = right_type(&keys[j]);
-            // jq's message for a container of the wrong type. jq evaluates the
-            // path before setting anything, so it is `jv_get`'s wording, with
-            // a string key spelled out raw.
-            let err = match &keys[j] {
-                Key::Str(k) => {
-                    format!("error(\"Cannot index \\(type) with string \\\"\" + {k} + \"\\\"\")")
-                }
-                Key::Idx(_) => "error(\"Cannot index \\(type) with number\")".to_owned(),
-            };
-            let body = format!(
-                "(if type == \"null\" then {empty} elif type == {right} then . else {err} end{pad})"
-            );
-            if j == 0 {
-                body
-            } else {
-                format!("({} |= {body})", path_expr(&keys[..j]))
-            }
-        })
-        .collect();
-
-    let _ = &all;
-    format!(
-        "(if (try ({parent} | {fits}) catch false) then . else {} end)",
-        steps.join(" | ")
-    )
-}
-
-/// Split a target into a part that only visits existing values and a literal
-/// suffix: `.[].v` and `.[] | select(.x) | .v` both become (`.[]…`, `["v"]`).
-///
-/// `(A | B) |= f` means `A |= (B |= f)` — each value A visits is updated
-/// independently — so the suffix can be prepared and updated per element with
-/// jaq's own operator, instead of enumerating every path one by one.
-fn split_target(node: &Node, src: &str) -> Option<(String, Vec<Key>)> {
-    match &node.kind {
-        Kind::Pipe(a, b) if !addresses(a) => {
-            let a_text = src[a.span.start..a.span.end].to_owned();
-            if let Some(keys) = literal_keys(b, src) {
-                return Some((a_text, keys));
-            }
-            let (rest, keys) = split_target(b, src)?;
-            Some((format!("{a_text} | {rest}"), keys))
-        }
-        Kind::Field { .. } | Kind::Index { .. } => {
-            // A postfix chain over a non-addressing base: `.[].a.b`.
-            let mut keys = Vec::new();
-            let mut n = node;
-            while let Kind::Field { base, .. } | Kind::Index { base, .. } = &n.kind {
-                keys.push(single_key(n, src)?);
-                n = base;
-            }
-            if matches!(n.kind, Kind::Identity) || addresses(n) {
-                return None;
-            }
-            keys.reverse();
-            Some((src[n.span.start..n.span.end].to_owned(), keys))
-        }
-        _ => None,
-    }
-}
-
-/// The key a single Field/Index step adds, if it is a literal.
-fn single_key(n: &Node, src: &str) -> Option<Key> {
-    match &n.kind {
-        Kind::Field {
-            name: super::FieldName::Ident(f),
-            ..
-        } => Some(Key::Str(format!("\"{f}\""))),
-        Kind::Field {
-            name: super::FieldName::Str(s),
-            ..
-        } if s.format.is_none() && s.parts.iter().all(|p| matches!(p, super::StrSeg::Text(_))) => {
-            match (s.parts.first(), s.parts.last()) {
-                (Some(super::StrSeg::Text(a)), Some(super::StrSeg::Text(b))) => {
-                    Some(Key::Str(src[a.start - 1..=b.end].to_owned()))
-                }
-                _ => Some(Key::Str("\"\"".to_owned())),
-            }
-        }
-        Kind::Index { index, .. } if matches!(index.kind, Kind::Number) => {
-            // Above jq's array-index limit, leave it to the generic walk, which
-            // raises jq's "Array index too large" instead of padding.
-            src[index.span.start..index.span.end]
-                .parse::<u32>()
-                .ok()
-                .filter(|i| *i <= 536_870_911)
-                .map(Key::Idx)
-        }
-        _ => None,
-    }
-}
-
-/// A literal chain on `.`: its keys, outermost first.
-fn literal_keys(node: &Node, src: &str) -> Option<Vec<Key>> {
-    let mut keys = Vec::new();
-    let mut n = node;
-    loop {
-        match &n.kind {
-            Kind::Identity => break,
-            Kind::Paren(inner) => n = inner,
-            Kind::Field { base, .. } | Kind::Index { base, .. } => {
-                keys.push(single_key(n, src)?);
-                n = base;
-            }
-            _ => return None,
-        }
-    }
-    keys.reverse();
-    (!keys.is_empty()).then_some(keys)
-}
-
-/// `.[k1][k2]…` for a key list — without a `.` between brackets, which
-/// jaq 3.0 does not parse.
-fn chain_text(keys: &[Key]) -> String {
-    keys.iter().fold(String::from("."), |mut out, k| {
-        let _ = match k {
-            Key::Str(s) => write!(out, "[{s}]"),
-            Key::Idx(i) => write!(out, "[{i}]"),
-        };
-        out
-    })
-}
-
-/// Whether an assignment target can name a location that may not exist yet.
-///
-/// Conservative: only targets built entirely from steps that visit existing
-/// values — `.`, `.[]`, `..`, `select(…)`, `recurse`, pipes, `?` — answer
-/// `false`. Any field, index, slice, variable or other call answers `true`.
-fn addresses(node: &Node) -> bool {
-    match &node.kind {
-        Kind::Identity | Kind::Recurse => false,
-        Kind::Iterate(base) | Kind::Optional(base) | Kind::Paren(base) => addresses(base),
-        Kind::Pipe(a, b) => addresses(a) || addresses(b),
-        Kind::Call { name, args } => !matches!(
-            (name.as_str(), args.len()),
-            ("select", 1) | ("recurse" | "empty", 0)
-        ),
-        _ => true,
-    }
-}
-
-/// jq's array index from a number key (`jv_get`): truncated toward zero, and
-/// `null` for NaN. Every other key passes through. Written as nested
-/// comparisons: under jaq a `type == "number"` test costs three times as much
-/// (0.92 s against 0.33 s for 300,000 indexings; unguarded, 0.22 s).
-/// jaq orders NaN below every number, so it takes the negative branch and
-/// becomes an index far below any array, which reads as `null`.
-const INDEX_NORM: &str = "if . < 0 then (if . > true then (if . > -9007199254740992 then ceil \
-     else -9007199254740992 end) else . end) elif . < \"\" then floor else . end";
-
-/// jq's slice start (`parse_slice`): rounded down; NaN and -Infinity are 0;
-/// +Infinity is past any end. Non-numbers are left for jaq to reject.
-const START_NORM: &str = "if . > true then (if isnan then 0 elif . > -9007199254740992 \
-     then (if . < 9007199254740992 then floor else 9007199254740992 end) else 0 end) else . end";
-
-/// jq's slice end: rounded up; NaN and +Infinity are the length (`null`);
-/// -Infinity is before any start.
-const END_NORM: &str = "if . > true then (if isnan then null elif . < 9007199254740992 \
-     then (if . > -9007199254740992 then ceil else -9007199254740992 end) else null end) else . end";
-
-/// Whether `rhs` is a number literal that needs no divisor check for `op`:
-/// non-zero for `/`; a non-zero integer for `%`, where only the dividend
-/// still needs truncating.
-fn nonzero_literal(rhs: &Node, src: &str, op: &str) -> bool {
-    let text = match &rhs.kind {
-        Kind::Number => &src[rhs.span.start..rhs.span.end],
-        Kind::Neg(n) if matches!(n.kind, Kind::Number) => &src[n.span.start..n.span.end],
-        _ => return false,
-    };
-    let integer = text.bytes().all(|b| b.is_ascii_digit());
-    text.parse::<f64>().is_ok_and(|v| v != 0.0) && (op == "/" || integer)
-}
-
-/// Whether a `catch` handler can see the error it receives. Conservative: only
-/// constants, variables, `empty` and the like answer `false`, and those handlers
-/// are left alone — translating a message nobody reads costs 12 µs per error.
-fn reads_input(node: &Node) -> bool {
-    match &node.kind {
-        Kind::Number | Kind::Var(_) | Kind::Loc | Kind::Break(_) | Kind::Format(_) => {
-            matches!(node.kind, Kind::Format(_))
-        }
-        Kind::Str(s) => s
-            .parts
-            .iter()
-            .any(|p| matches!(p, super::StrSeg::Interp(_))),
-        Kind::Call { name, args } => {
-            !(args.is_empty() && matches!(name.as_str(), "empty" | "null" | "true" | "false"))
-        }
-        Kind::Paren(n) => reads_input(n),
-        Kind::Array(n) => n.as_deref().is_some_and(reads_input),
-        Kind::Comma(a, b) => reads_input(a) || reads_input(b),
-        _ => true,
-    }
-}
-
-/// Whether an index key or slice bound needs jq's number handling. A string,
-/// a constructed array or object, `null`, and an integer literal (negated or
-/// not) are left exactly as written.
-fn index_needs_norm(key: &Node, src: &str) -> bool {
-    let integer = |n: &Node| {
-        src[n.span.start..n.span.end]
-            .bytes()
-            .all(|b| b.is_ascii_digit())
-    };
-    match &key.kind {
-        Kind::Str(_) | Kind::Array(_) | Kind::Object(_) => false,
-        Kind::Call { name, args } if name == "null" && args.is_empty() => false,
-        Kind::Number => !integer(key),
-        Kind::Neg(n) if matches!(n.kind, Kind::Number) => !integer(n),
-        Kind::Paren(n) => index_needs_norm(n, src),
-        Kind::Comma(a, b) => index_needs_norm(a, src) || index_needs_norm(b, src),
-        _ => true,
-    }
-}
-
-/// jq's check on a computed object key, with its message: the value is shown
-/// as `jv_dump_string_trunc` shows it, cut to 11 bytes plus `...`.
-const KEY_CHECK: &str = "if . >= \"\" and . < [] then . \
-     else error(\"Cannot use \\(type) (\\(_pf_dump)) as object key\") end";
-
-/// Names whose builtin meaning [`single_path`] and [`single_valued`] assume.
-const FAST_DEL_RELIES_ON: &[&str] = &[
-    "del",
-    "select",
-    "recurse",
-    "empty",
-    "not",
-    "length",
-    "type",
-    "has",
-    "test",
-    "startswith",
-    "endswith",
-    "contains",
-    "inside",
-    "ascii_downcase",
-    "ascii_upcase",
-    "tostring",
-    "tonumber",
-    "keys",
-    "isnan",
-    "in",
-    "any",
-    "all",
-    "IN",
-    "ltrimstr",
-    "rtrimstr",
-    "utf8bytelength",
-    "tojson",
-    "floor",
-    "abs",
-    "isempty",
-];
-
-/// Whether the program defines any of `names` itself.
-fn defines_any(node: &Node, names: &[&str]) -> bool {
-    if let Kind::Def { def, .. } = &node.kind
-        && names.contains(&def.name.as_str())
-    {
-        return true;
-    }
-    node.children().into_iter().any(|c| defines_any(c, names))
-}
-
-/// Whether a `del` target yields at most one path into any one array.
-///
-/// That is the shape where jaq's native `del` deletes what jq's does: it walks
-/// the target once, so a single path per container never shifts another. Two
-/// explicit indices into one array (`.[0,1]`, `.[3], .[5]`) are the case it
-/// gets silently wrong, deleting the second against the already-shortened
-/// array. Commas are therefore allowed only between field names, which do not
-/// shift, and `select`'s condition must produce at most one value, since each
-/// `true` would emit the path again.
-fn single_path(node: &Node) -> bool {
-    match &node.kind {
-        Kind::Identity | Kind::Recurse => true,
-        Kind::Iterate(base) | Kind::Optional(base) | Kind::Paren(base) => single_path(base),
-        Kind::Field { base, name } => single_path(base) && plain_field(name),
-        Kind::Index { base, index } => single_path(base) && literal_index(index),
-        Kind::Slice { base, from, to } => {
-            single_path(base)
-                && from.as_deref().is_none_or(literal_index)
-                && to.as_deref().is_none_or(literal_index)
-        }
-        Kind::Pipe(a, b) => single_path(a) && single_path(b),
-        Kind::Comma(..) => fields_only(node),
-        Kind::Call { name, args } => match (name.as_str(), args.as_slice()) {
-            ("select", [cond]) => single_valued(cond),
-            ("recurse" | "empty", []) => true,
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
-/// Inline, order-preserving deletion of named keys from an object.
-///
-/// jaq removes a key by swapping the last key into its place, so its own `del`
-/// keeps jq's order only when the key is the last one; otherwise the object is
-/// rebuilt without the keys. Inline rather than a prelude function, which
-/// measured twice as slow per object. Anything but an object is refused, for
-/// the caller's fallback to answer as jq does.
-fn delete_keys(keys: &[String]) -> String {
-    let present = keys
-        .iter()
-        .map(|k| format!("has({k})"))
-        .collect::<Vec<_>>()
-        .join(" or ");
-    let kept = keys
-        .iter()
-        .map(|k| format!(". != {k}"))
-        .collect::<Vec<_>>()
-        .join(" and ");
-    let rebuild = format!(
-        ". as $__pf_o | reduce (keys_unsorted[] | select({kept})) as $__pf_k ({{}}; .[$__pf_k] = $__pf_o[$__pf_k])"
-    );
-    let body = match keys {
-        [k] => format!(
-            "if has({k}) | not then . elif (keys_unsorted | .[-1]) == {k} then _pf_del0(.[{k}]) else {rebuild} end"
-        ),
-        _ => format!("if ({present}) | not then . else {rebuild} end"),
-    };
-    format!("(if type == \"object\" then ({body}) else error(\"pathfinder: not an object\") end)")
-}
-
-/// What the deleting step of a `del` target removes.
-enum Leaf<'a> {
-    /// Named keys, as JSON string literals.
-    Keys(Vec<String>),
-    /// One index or slice; the node is the step itself.
-    At(&'a Node),
-    /// Whatever iteration reached — jaq's own `del` handles it.
-    Native,
-}
-
-/// Split a target whose deleting step is an index or slice into the prefix
-/// leading to the array (`None` for `.`) and that step.
-fn position_split(n: &Node) -> Option<(Option<&Node>, &Node)> {
-    match &n.kind {
-        Kind::Paren(x) => position_split(x),
-        Kind::Index { base, .. } | Kind::Slice { base, .. } => Some((prefix_of(base), n)),
-        Kind::Pipe(p, step) if matches!(&step.kind, Kind::Index { base, .. } | Kind::Slice { base, .. } if matches!(base.kind, Kind::Identity)) => {
-            Some((prefix_of(p), step))
-        }
-        _ => None,
-    }
-}
-
-/// The step of a `del` target that does the deleting: the last one that moves
-/// to another location, looking through filters such as `select`.
-fn deleting_step(n: &Node) -> &Node {
-    match &n.kind {
-        Kind::Pipe(a, b) if only_filters(b) => deleting_step(a),
-        Kind::Pipe(_, b) => deleting_step(b),
-        Kind::Paren(x) | Kind::Optional(x) => deleting_step(x),
-        _ => n,
-    }
-}
-
-/// Steps that pass `.` through or drop it, never moving.
-fn only_filters(n: &Node) -> bool {
-    match &n.kind {
-        Kind::Identity => true,
-        Kind::Pipe(a, b) => only_filters(a) && only_filters(b),
-        Kind::Paren(x) => only_filters(x),
-        Kind::Call { name, args } => {
-            matches!((name.as_str(), args.len()), ("select", 1) | ("empty", 0))
-        }
-        _ => false,
-    }
-}
-
-/// Split a target that deletes named keys into the prefix leading to the
-/// object (`None` for `.` itself) and the keys, as JSON string literals.
-fn field_split<'a>(n: &'a Node, src: &str) -> Option<(Option<&'a Node>, Vec<String>)> {
-    match &n.kind {
-        Kind::Paren(x) => field_split(x, src),
-        Kind::Field { base, .. } | Kind::Index { base, .. } => {
-            Some((prefix_of(base), vec![key_name(n, src)?]))
-        }
-        Kind::Pipe(p, f) => {
-            let mut keys = Vec::new();
-            top_fields(f, src, &mut keys)?;
-            Some((prefix_of(p), keys))
-        }
-        Kind::Comma(..) => {
-            let mut keys = Vec::new();
-            top_fields(n, src, &mut keys)?;
-            Some((None, keys))
-        }
-        _ => None,
-    }
-}
-
-fn prefix_of(base: &Node) -> Option<&Node> {
-    (!matches!(base.kind, Kind::Identity)).then_some(base)
-}
-
-/// Collect `.a, .b, ."c"` — single fields on `.` — as JSON string literals.
-fn top_fields(n: &Node, src: &str, out: &mut Vec<String>) -> Option<()> {
-    match &n.kind {
-        Kind::Paren(x) => top_fields(x, src, out),
-        Kind::Comma(a, b) => {
-            top_fields(a, src, out)?;
-            top_fields(b, src, out)
-        }
-        Kind::Field { base, .. } | Kind::Index { base, .. }
-            if matches!(base.kind, Kind::Identity) =>
-        {
-            out.push(key_name(n, src)?);
-            Some(())
-        }
-        _ => None,
-    }
-}
-
-/// The key a single field or string-index step names, as a string literal.
-fn key_name(n: &Node, src: &str) -> Option<String> {
-    let lit = |s: &super::StrLit| -> Option<String> {
-        plain_string(s).then(|| {
-            let mut t = String::from("\"");
-            for seg in &s.parts {
-                if let super::StrSeg::Text(sp) = seg {
-                    t.push_str(&src[sp.start..sp.end]);
-                }
-            }
-            t.push('"');
-            t
-        })
-    };
-    match &n.kind {
-        Kind::Field {
-            name: super::FieldName::Ident(f),
-            ..
-        } => Some(format!("\"{f}\"")),
-        Kind::Field {
-            name: super::FieldName::Str(s),
-            ..
-        } => lit(s),
-        Kind::Index { index, .. } => match &index.kind {
-            Kind::Str(s) => lit(s),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// A prefix jaq's `|=` walks as jq's `_modify` would: one pass, no `..`
-/// (whose update order differs from jq's paths-first evaluation).
-fn update_prefix(n: &Node) -> bool {
-    single_path(n) && !contains_recurse(n)
-}
-
-fn contains_recurse(n: &Node) -> bool {
-    matches!(n.kind, Kind::Recurse)
-        || matches!(&n.kind, Kind::Call { name, args } if name == "recurse" && args.is_empty())
-        || n.children().into_iter().any(contains_recurse)
-}
-
-/// `.a`, `.a.b`, `.a, .b.c`: paths through field names alone.
-fn fields_only(node: &Node) -> bool {
-    match &node.kind {
-        Kind::Identity => true,
-        Kind::Field { base, name } => plain_field(name) && fields_only(base),
-        Kind::Paren(n) => fields_only(n),
-        Kind::Comma(a, b) => fields_only(a) && fields_only(b),
-        _ => false,
-    }
-}
-
-fn plain_field(name: &super::FieldName) -> bool {
-    match name {
-        super::FieldName::Ident(_) => true,
-        super::FieldName::Str(s) => plain_string(s),
-    }
-}
-
-fn plain_string(s: &super::StrLit) -> bool {
-    s.format.is_none() && s.parts.iter().all(|p| matches!(p, super::StrSeg::Text(_)))
-}
-
-/// A number or plain string literal, possibly negated.
-fn literal_index(n: &Node) -> bool {
-    match &n.kind {
-        Kind::Number => true,
-        Kind::Str(s) => plain_string(s),
-        Kind::Neg(inner) => matches!(inner.kind, Kind::Number),
-        _ => false,
-    }
-}
-
-/// Whether an expression produces at most one value per input.
-fn single_valued(node: &Node) -> bool {
-    match &node.kind {
-        Kind::Identity | Kind::Number | Kind::Var(_) | Kind::Loc | Kind::Array(_) => true,
-        Kind::Str(s) => s.parts.iter().all(|p| match p {
-            super::StrSeg::Text(_) => true,
-            super::StrSeg::Interp(q) => single_valued(q),
-        }),
-        Kind::Field { base, name } => single_valued(base) && plain_field(name),
-        Kind::Index { base, index } => single_valued(base) && single_valued(index),
-        Kind::Neg(n) | Kind::Paren(n) | Kind::Optional(n) => single_valued(n),
-        Kind::Pipe(a, b) => single_valued(a) && single_valued(b),
-        Kind::Binary { op, lhs, rhs } => {
-            !is_assignment(op) && single_valued(lhs) && single_valued(rhs)
-        }
-        Kind::Object(pairs) => pairs.iter().all(|p| match p {
-            super::ObjPair::KeyValue { key, value } => {
-                single_valued(value)
-                    && match key {
-                        super::ObjKey::Ident(_) | super::ObjKey::Var(..) => true,
-                        super::ObjKey::Str(s) => plain_string(s),
-                        super::ObjKey::Expr(k) => single_valued(k),
-                    }
-            }
-            super::ObjPair::Shorthand(super::ObjShort::Str(s)) => plain_string(s),
-            super::ObjPair::Shorthand(_) => true,
-        }),
-        Kind::If {
-            branches,
-            otherwise,
-        } => {
-            branches
-                .iter()
-                .all(|(c, t)| single_valued(c) && single_valued(t))
-                && otherwise.as_deref().is_none_or(single_valued)
-        }
-        Kind::Call { name, args } => match (name.as_str(), args.len()) {
-            // The first group collapses its arguments to one value whatever
-            // they yield; the second takes none.
-            ("any" | "all" | "isempty", _) | ("IN", 1 | 2) => args.iter().all(repeatable),
-            (
-                "not" | "length" | "type" | "ascii_downcase" | "ascii_upcase" | "tostring"
-                | "tonumber" | "keys" | "isnan" | "utf8bytelength" | "tojson" | "floor" | "abs",
-                0,
-            ) => true,
-            (
-                "has" | "test" | "startswith" | "endswith" | "contains" | "inside" | "in"
-                | "ltrimstr" | "rtrimstr",
-                _,
-            ) => args.iter().all(single_valued),
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
-/// Whether an operand yields exactly one value, without error or effect, so
-/// that when it is evaluated cannot be observed.
-fn inert(n: &Node) -> bool {
-    match &n.kind {
-        Kind::Identity | Kind::Number | Kind::Var(_) | Kind::Loc => true,
-        Kind::Str(s) => plain_string(s),
-        Kind::Neg(m) => matches!(m.kind, Kind::Number),
-        Kind::Paren(m) => inert(m),
-        Kind::Call { name, args } => {
-            args.is_empty() && matches!(name.as_str(), "null" | "true" | "false")
-        }
-        _ => false,
     }
 }
 
@@ -1596,15 +527,6 @@ fn pattern_vars<'a>(p: &'a super::Pattern, out: &mut Vec<&'a str>) {
     }
 }
 
-/// Whether evaluating `n` twice is unobservable. The `del` fallback evaluates
-/// its target a second time on the error path, so a target that reads input or
-/// writes to stderr must not take it.
-fn repeatable(n: &Node) -> bool {
-    let effectful = matches!(&n.kind, Kind::Call { name, .. }
-        if matches!(name.as_str(), "input" | "inputs" | "debug" | "stderr" | "halt" | "halt_error" | "input_line_number" | "now"));
-    !effectful && n.children().into_iter().all(repeatable)
-}
-
 /// Whether an assignment target spells out several paths with a comma.
 fn has_comma(node: &Node) -> bool {
     matches!(node.kind, Kind::Comma(..)) || node.children().into_iter().any(has_comma)
@@ -1661,147 +583,69 @@ fn without_bare_point(n: &str) -> String {
 mod tests {
     use super::{Rewrites, rewrite};
 
+    /// The rewrites a program takes when jaq's parser reads it.
     fn rw(src: &str) -> Option<String> {
-        rewrite(src, Rewrites::ALL).map(|r| r.text)
+        let on = Rewrites {
+            comma_update: true,
+            syntax: true,
+        };
+        rewrite(src, on).map(|r| r.text)
+    }
+
+    /// The rewrites a program takes when Pathfinder's parser reads it.
+    fn rw_native(src: &str) -> Option<String> {
+        let on = Rewrites {
+            comma_update: true,
+            syntax: false,
+        };
+        rewrite(src, on).map(|r| r.text)
     }
 
     #[test]
-    fn programs_without_assignment_are_not_touched() {
+    fn programs_without_a_comma_update_are_not_touched() {
         assert_eq!(rw(".a | select(.b == 1)"), None);
         assert_eq!(rw("[.[] | . + 1]"), None);
-        // `==`, `<=`, `>=`, `!=` are comparisons, not assignments.
         assert_eq!(rw(".a == 1 and .b <= 2 or .c != 3"), None);
-    }
-
-    #[test]
-    fn a_literal_target_is_prepared_inline_then_assigned_natively() {
-        let out = rw(".a.b = 1").expect("rewritten");
-        // The right-hand side is bound first, on the original input.
-        assert!(out.starts_with("((1) as $__pf_t0 | "), "{out}");
-        // jq's own message for a container of the wrong type, key included.
-        assert!(
-            out.contains(r#"error("Cannot index \(type) with string \"" + "b" + "\"")"#),
-            "{out}"
-        );
-        assert!(out.ends_with("| (.a.b) = $__pf_t0)"), "{out}");
-        assert!(
-            !out.contains("_pf_assign"),
-            "no per-path prelude call: {out}"
-        );
-    }
-
-    #[test]
-    fn an_update_runs_jaqs_operator_after_the_guard() {
-        let out = rw(".a |= . + 1").expect("rewritten");
-        assert!(out.ends_with("| (.a) |= (. + 1))"), "{out}");
-    }
-
-    #[test]
-    fn a_target_naming_nothing_new_needs_no_guard() {
-        assert_eq!(rw(".[] |= . + 1").as_deref(), Some("((.[]) |= (. + 1))"));
+        // The engine's own update is jq's for a single path.
+        assert_eq!(rw(".a.b = 1"), None);
+        assert_eq!(rw(".a |= . + 1"), None);
+        assert_eq!(rw("del(.[0,1])"), None);
+        assert_eq!(rw("(.a, .b) = 1"), None, "`=` defers nothing");
     }
 
     #[test]
     fn a_comma_target_goes_through_jqs_modify() {
-        // jaq's update deletes `.[1,2]` one after the other, shifting the second.
+        // The engine's update deletes `.[1,2]` one after the other, shifting
+        // the second.
         assert_eq!(
             rw(".[1,2] += 1").as_deref(),
             Some("((1) as $__pf_t0 | _pf_modify((.[1,2]); . + $__pf_t0))")
         );
-    }
-
-    #[test]
-    fn arithmetic_update_binds_the_rhs_first() {
-        let out = rw(".a += 1").expect("rewritten");
-        assert!(out.starts_with("((1) as $__pf_t0 | "), "{out}");
-        assert!(out.ends_with("| (.a) += $__pf_t0)"), "{out}");
-        let out = rw(".a //= 2").expect("rewritten");
-        assert!(out.starts_with("((2) as $__pf_t0 | "), "{out}");
-        assert!(out.ends_with("| (.a) //= $__pf_t0)"), "{out}");
+        assert_eq!(
+            rw("(.a, .b) |= empty").as_deref(),
+            Some("_pf_modify(((.a, .b)); (empty))")
+        );
     }
 
     #[test]
     fn surrounding_text_is_kept_byte_for_byte() {
-        // Odd spacing and the comment survive; only the assignment changed.
-        let out = rw("[ .x ,  (.a = 1) ]  # keep me").expect("rewritten");
-        assert!(out.starts_with("[ .x ,  (((1) as $__pf_t0 | "), "{out}");
-        assert!(out.ends_with("(.a) = $__pf_t0)) ]  # keep me"), "{out}");
-    }
-
-    #[test]
-    fn del_with_one_path_per_array_uses_jaqs_own_del() {
-        let out = rw("del(.[] | select(.x))").expect("rewritten");
-        assert!(out.contains("_pf_del0(.[] | select(.x))"), "{out}");
-        // ...with jq's exact algorithm behind it for errors and the root.
-        assert!(
-            out.contains("catch ($__pf_t0 | _pf_delpaths([path(.[] | select(.x))]))"),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn del_of_named_keys_keeps_key_order() {
-        let out = rw("del(.[].a)").expect("rewritten");
-        assert!(out.contains("((.[]) |= (if type == \"object\""), "{out}");
-        assert!(out.contains("keys_unsorted"), "{out}");
-    }
-
-    #[test]
-    fn del_of_an_index_checks_for_an_array() {
-        let out = rw("del(.a[0])").expect("rewritten");
-        assert!(out.contains("((.a) |= _pf_delat(.[0]))"), "{out}");
-    }
-
-    #[test]
-    fn del_with_several_paths_into_one_array_is_left_to_the_repair() {
-        // jaq would delete `.[1]` against the array `.[0]` already shortened.
-        assert_eq!(rw("del(.[0,1])"), None);
-        assert_eq!(
-            rw("del(.[] | select(. == (1, 2)))"),
-            None,
-            "select may emit twice"
-        );
-    }
-
-    #[test]
-    fn a_del_target_reading_input_is_not_routed_through_the_fallback() {
-        // The fallback would evaluate the target, and so `input`, twice.
-        assert_eq!(rw("del(.[] | select(any(input; . == 1)))"), None);
-        assert!(rw("del(.[] | select(any(.[]; . == 1)))").is_some());
-    }
-
-    #[test]
-    fn a_program_defining_select_keeps_its_del() {
-        assert_eq!(rw("def select(f): .; del(.[] | select(.x))"), None);
-    }
-
-    #[test]
-    fn update_with_empty_is_deletion() {
-        let out = rw(".[0] |= empty").expect("rewritten");
-        assert!(out.contains("_pf_delat(.[0])"), "{out}");
+        // Odd spacing and the comment survive; only the update changed.
+        let out = rw("[ .x ,  ((.a,.b) |= 1) ]  # keep me").expect("rewritten");
+        assert!(out.starts_with("[ .x ,  (_pf_modify("), "{out}");
+        assert!(out.ends_with(") ]  # keep me"), "{out}");
     }
 
     #[test]
     fn a_rewritten_binding_cannot_swallow_what_follows() {
         // Without the outer parentheses, `R as $t | …` would take `, 2` along.
-        let out = rw("[.a += 1, 2]").expect("rewritten");
+        let out = rw("[.[0,1] += 1, 2]").expect("rewritten");
         assert!(out.starts_with("[((1) as $__pf_t0 |"), "{out}");
         assert!(out.ends_with("), 2]"), "{out}");
     }
 
     #[test]
-    fn a_value_parameter_called_as_a_filter_is_desugared() {
-        assert_eq!(
-            rw("def f($a; g): [a, $a, g]; f(1)").as_deref(),
-            Some("(def f(a; g): a as $a | ([a, $a, g]); f(1))")
-        );
-        // Not called as a filter: left as written.
-        assert_eq!(rw("def f($a): $a + 1; f(1)"), None);
-    }
-
-    #[test]
-    fn nested_assignments_get_distinct_temporaries() {
-        let out = rw(".a += (.b += 1)").expect("rewritten");
+    fn nested_updates_get_distinct_temporaries() {
+        let out = rw(".[0,1] += (.[2,3] += 1 | .[0])").expect("rewritten");
         assert!(
             out.contains("$__pf_t0") && out.contains("$__pf_t1"),
             "{out}"
@@ -1809,14 +653,26 @@ mod tests {
     }
 
     #[test]
-    fn assignments_inside_strings_and_defs_are_found() {
-        assert!(rw("\"\\(.a = 1)\"").is_some());
-        assert!(rw("def f: .a = 1; f").is_some());
-        assert!(rw("{k: (.a |= 2)}").is_some());
+    fn updates_inside_strings_and_defs_are_found() {
+        assert!(rw("\"\\((.a,.b) |= 1)\"").is_some());
+        assert!(rw("def f: (.a,.b) |= 1; f").is_some());
+        assert!(rw("{k: ((.a,.b) |= 2)}").is_some());
     }
 
     #[test]
-    fn compound_reduce_sources_are_parenthesised() {
+    fn a_value_parameter_called_as_a_filter_is_desugared_for_jaqs_parser() {
+        assert_eq!(
+            rw("def f($a; g): [a, $a, g]; f(1)").as_deref(),
+            Some("(def f(a; g): a as $a | ([a, $a, g]); f(1))")
+        );
+        // Not called as a filter: left as written.
+        assert_eq!(rw("def f($a): $a + 1; f(1)"), None);
+        // Pathfinder's parser reads jq's syntax itself.
+        assert_eq!(rw_native("def f($a; g): [a, $a, g]; f(1)"), None);
+    }
+
+    #[test]
+    fn compound_reduce_sources_are_parenthesised_for_jaqs_parser() {
         assert_eq!(
             rw("reduce .[] * 2 as $i (0; . + $i)").as_deref(),
             Some("reduce (.[] * 2) as $i (0; . + $i)")
@@ -1826,30 +682,37 @@ mod tests {
             None,
             "a simple source is left alone"
         );
+        assert_eq!(rw_native("reduce .[] * 2 as $i (0; . + $i)"), None);
     }
 
     #[test]
-    fn operands_are_reordered_only_where_the_order_shows() {
-        // An inert operand — one value, no error, no effect — hides the order.
-        assert_eq!(rw(". * 2 == $x and .a < \"b\" or null != -1"), None);
-        assert_eq!(rw("(.a) + (true)"), None);
+    fn bare_points_are_written_out_for_jaqs_parser() {
+        assert_eq!(rw("[.5, 1., 1.e3]").as_deref(), Some("[0.5, 1, 1e3]"));
+        assert_eq!(rw_native("[.5, 1., 1.e3]"), None);
+    }
+
+    #[test]
+    fn an_unknown_format_is_jqs_run_time_error() {
         assert_eq!(
-            rw(".a + .b").as_deref(),
-            Some("((.b) as $__pf_t0 | (.a) + $__pf_t0)")
+            rw_native("@nope").as_deref(),
+            Some("(error(\"nope is not a valid format\"))")
         );
-        assert_eq!(
-            rw("[input - input]").as_deref(),
-            Some("[((input) as $__pf_t0 | (input) - $__pf_t0)]")
-        );
-        // The comparisons too, nested operands included.
-        assert_eq!(
-            rw("(1,2) <= (.[] + .[])").as_deref(),
-            Some("(((((.[]) as $__pf_t0 | (.[]) + $__pf_t0))) as $__pf_t1 | ((1,2)) <= $__pf_t1)")
-        );
+        assert_eq!(rw_native("@base64d"), None);
     }
 
     #[test]
     fn unparseable_programs_pass_through() {
-        assert_eq!(rw(".a = "), None);
+        assert_eq!(rw(".[0,1] |= "), None);
+    }
+
+    #[test]
+    fn a_destructuring_body_is_written_once() {
+        let once = rw_native(".[] as [$a] ?// $a | $a + 1000").expect("rewritten");
+        assert_eq!(once.matches("1000").count(), 1, "{once}");
+        // Pasted into each alternative, 20 links were 3^20 copies.
+        let link = ".[] as $a ?// {a:$a} ?// {a:$a}";
+        let src = format!("{} | $a", vec![link; 20].join(" | "));
+        let text = rw_native(&src).expect("rewritten");
+        assert!(text.len() < 40 * src.len(), "{} bytes", text.len());
     }
 }

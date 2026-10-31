@@ -374,13 +374,12 @@ version = "3.1.1"
 dependencies = [
  "env_logger",
  "log",
- "mimalloc",
  "pathfinder-all",
 ]
 
 [[package]]
 name = "pathfinder-jq"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "mimalloc",

@@ -118,7 +118,7 @@ fn assemble_here(
     let inexpressible: Vec<(String, &'static str)> = info
         .called
         .iter()
-        .filter_map(|n| prelude::inexpressible(n, ctx.native).map(|why| (n.clone(), why)))
+        .filter_map(|n| prelude::inexpressible(n).map(|why| (n.clone(), why)))
         .collect();
 
     let header = &src[..info.header_end];
@@ -147,9 +147,9 @@ fn assemble_here(
     // syntax error, so normalize before wrapping.
     let body: &str = if info.is_effectively_empty { "." } else { body };
 
-    // Rewrite what jaq would run differently from jq (assignment, chiefly).
-    // `None` means the body needed nothing, or could not be parsed: either way
-    // it goes to jaq exactly as written.
+    // Rewrite what the engine would run differently from jq (an update of
+    // several paths, chiefly). `None` means the body needed nothing, or could
+    // not be parsed: either way it runs exactly as written.
     let mut rewrites = ctx.rewrites();
     // jaq's parser reads a program with a header (`front::main_module`).
     rewrites.syntax |= !header.is_empty();
@@ -162,23 +162,7 @@ fn assemble_here(
             }
         }
     }
-    // The regex repairs look literal regexes up instead of scanning them on
-    // every call; collect them only when one of those repairs is injected.
-    let regex_ctx;
-    let ctx = if !ctx.native
-        && wanted
-            .iter()
-            .any(|w| matches!(w.as_str(), "match" | "capture" | "sub" | "gsub" | "scan"))
-    {
-        regex_ctx = prelude::Context {
-            regex_literals: crate::regex::regex_args(body),
-            ..ctx.clone()
-        };
-        &regex_ctx
-    } else {
-        ctx
-    };
-    let prelude_text = prelude::render(&wanted, ctx);
+    let prelude_text = prelude::render(&wanted);
     let body: &str = rewritten_body.as_ref().map_or(body, |rw| rw.text.as_str());
 
     // Parser validation hook; see `debug_reprint`.
@@ -393,22 +377,22 @@ mod tests {
         assert_eq!(a.text, ".a | select(.b)");
         assert!(
             !a.rewritten,
-            "no rewrite means the exec fast path stays available"
+            "an unrewritten program keeps `-f` read by the engine itself"
         );
         assert_eq!(a.injected, Vec::<String>::new());
     }
 
     /// The parser's depth bounds (TODO T-019) cost nothing below them: deep
     /// programs are still rewritten, and every pass over their trees survives
-    /// in a debug build. Past them, a program reaches jaq as written. These
+    /// in a debug build. Past them, a program reaches the engine as written. These
     /// programs are long, so `assemble` runs them on its deep stack.
     #[test]
     fn depth_bounds_rewrite_below_and_pass_through_above() {
         std::thread::Builder::new()
             .stack_size(64 << 20)
             .spawn(|| {
-                let nested = |n: usize| format!("{}.a.b = 1{}", "[".repeat(n), "]".repeat(n));
-                let chain = |n: usize| format!(".a.b = (1{})", " + 1".repeat(n));
+                let nested = |n: usize| format!("{}(.a, .b) |= 1{}", "[".repeat(n), "]".repeat(n));
+                let chain = |n: usize| format!("(.a, .b) |= (1{})", " + 1".repeat(n));
                 for src in [nested(400), chain(1400)] {
                     let a = plain(&src);
                     assert!(a.syntax_rewritten, "{}", &src[..40]);
@@ -425,14 +409,13 @@ mod tests {
             .expect("no overflow, no panic");
     }
 
-    /// The syntax rewrites are off on the native engine only while its own
-    /// front end reads the program: jaq's parser, chosen or taking a program
-    /// with a header, reads `.5` as `.` and `5`.
+    /// The syntax rewrites are off while Pathfinder's front end reads the
+    /// program: jaq's parser, chosen or taking a program with a header, reads
+    /// `.5` as `.` and `5`.
     #[test]
     fn syntax_rewrites_follow_the_parser_that_reads_the_program() {
         let on = |src: &str, jaq_front_end: bool| {
             let ctx = Context {
-                native: true,
                 jaq_front_end,
                 ..Context::default()
             };
@@ -446,20 +429,20 @@ mod tests {
 
     #[test]
     fn a_polyfilled_name_pulls_in_its_definition() {
-        let a = plain("[tostream]");
+        let a = plain("builtins | length");
         assert!(a.rewritten);
-        assert!(a.text.contains("def tostream:"));
-        assert!(a.text.ends_with("[tostream]"));
-        assert_eq!(a.injected, ["tostream"]);
+        assert!(a.text.starts_with("def builtins: ["));
+        assert!(a.text.ends_with("builtins | length"));
+        assert_eq!(a.injected, ["builtins"]);
     }
 
     #[test]
     fn the_prelude_stays_on_line_one() {
-        let a = plain("[tostream]\n| .[0]");
+        let a = plain("[builtins]\n| .[0]");
         let first = a.text.lines().next().expect("has a first line");
-        assert!(first.contains("def tostream:"));
+        assert!(first.contains("def builtins:"));
         assert!(
-            first.contains("[tostream]"),
+            first.contains("[builtins]"),
             "filter's line 1 must stay on line 1"
         );
         // The user's `| .[0]` was on line 2 and must still be on line 2.
@@ -468,10 +451,10 @@ mod tests {
 
     #[test]
     fn module_directives_stay_above_everything() {
-        let a = plain(r#"include "m"; [tostream]"#);
+        let a = plain(r#"include "m"; [builtins]"#);
         assert!(a.text.starts_with(r#"include "m";"#));
         let dir = a.text.find("include").expect("directive present");
-        let def = a.text.find("def tostream:").expect("prelude present");
+        let def = a.text.find("def builtins:").expect("prelude present");
         assert!(dir < def, "a def before a directive does not compile");
     }
 
@@ -526,26 +509,23 @@ mod tests {
 
     #[test]
     fn names_that_cannot_be_supplied_are_reported_not_faked() {
-        let a = plain("input_line_number");
+        let a = plain("modulemeta");
         assert_eq!(a.inexpressible.len(), 1);
-        assert_eq!(a.inexpressible[0].0, "input_line_number");
-        assert!(!a.text.contains("def input_line_number"));
+        assert_eq!(a.inexpressible[0].0, "modulemeta");
+        assert!(!a.text.contains("def modulemeta"));
     }
 
     #[test]
     fn a_user_definition_wins_over_the_polyfill() {
-        // Both are present; jq and jaq both take the last definition, so the
-        // user's own wins without Pathfinder having to suppress anything.
-        let a = plain("def tostream: \"mine\"; tostream");
-        let ours = a
-            .text
-            .find("def tostream: path(")
-            .expect("polyfill injected");
+        // Both are present; the last definition wins, so the user's own wins
+        // without Pathfinder having to suppress anything.
+        let a = plain("def builtins: \"mine\"; builtins");
+        let ours = a.text.find("def builtins: [").expect("polyfill injected");
         let theirs = a
             .text
-            .find(r#"def tostream: "mine""#)
+            .find(r#"def builtins: "mine""#)
             .expect("user def kept");
         assert!(ours < theirs);
-        assert_eq!(a.shadowed, ["tostream"], "explain should be able to say so");
+        assert_eq!(a.shadowed, ["builtins"], "explain should be able to say so");
     }
 }

@@ -85,6 +85,8 @@ mod tests {
         assert_eq!(detect(&argv(&[])), InvokedAs::Pathfinder);
         // A `jq-1.7` symlink is not `jq`, and must not silently claim to be.
         assert_eq!(detect(&argv(&["jq-1.7"])), InvokedAs::Pathfinder);
+        // `mjq`, the packages' short name for Pathfinder, is Pathfinder.
+        assert_eq!(detect(&argv(&["/usr/bin/mjq"])), InvokedAs::Pathfinder);
     }
 
     #[test]

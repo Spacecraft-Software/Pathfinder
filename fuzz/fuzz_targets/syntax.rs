@@ -10,7 +10,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use pathfinder_fuzz::{prelude, program, regex, syntax};
+use pathfinder_fuzz::{prelude, program, syntax};
 
 fuzz_target!(|data: &[u8]| {
     let Ok(src) = std::str::from_utf8(data) else {
@@ -21,7 +21,6 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(tree) = syntax::parse::parse(src) {
         drop(syntax::print::full(&tree, src));
     }
-    drop(regex::regex_args(src));
 
     // The path the shim takes for every filter: scan, compile checks,
     // `$__loc__`, rewrite, prelude.

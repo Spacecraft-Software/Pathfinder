@@ -8,16 +8,19 @@ file is only what is true *here*.
 
 A binary, `pathfinder`, installed with a `jq` symlink beside it. It parses
 jq's command line and filter (`src/jqargs.rs`, `src/syntax/`), rewrites the
-filter where the engine would run it differently from jq, and evaluates it on
-one of two engines (`src/engine.rs`, PRD R-014):
+little the engine still runs differently from jq, and evaluates it on
+Pathfinder's engine crates (a hard fork of jaq 3.1.1, grown to jq's
+semantics), linked in and run in process (`src/engine.rs`). Nothing is
+spawned.
 
-- **`native`** — Pathfinder's engine crates (a hard fork of jaq 3.1.1),
-  linked in and run in process. The default of a plain `cargo build`.
-- **`jaq`** — a jaq binary, `exec`ed or spawned. The default of the Nix
-  package until the native engine replaces it (PLAN P-081).
+It answers to three names: `pathfinder`, `mjq` (a symlink the packages
+install, the same surface as `pathfinder`) and `jq` (jq's surface only;
+`compat::detect`).
 
-`PATHFINDER_ENGINE=native|jaq` chooses at run time; unset, the build's default
-applies (`PATHFINDER_DEFAULT_ENGINE` at build time, else `native`).
+Until 0.2.0 a jaq binary could stand in for the engine
+(`PATHFINDER_ENGINE=jaq`); that engine, its patch set and its rewrites are
+gone (PLAN P-078). `PATHFINDER_ENGINE` is still read: unset, empty or
+`native` runs, anything else exits 2, so a script that asks for jaq fails loudly.
 
 The repository is a Cargo workspace. The shim is `crates/pathfinder`; paths
 like `src/…` and `tests/…` in this file are relative to it. The root
@@ -25,40 +28,20 @@ like `src/…` and `tests/…` in this file are relative to it. The root
 `default-members` keeps a bare `cargo build`/`test`/`clippy` on the shim;
 `--workspace` reaches every crate.
 
-Baseline is **jq 1.8.1**. The differential suite passes unchanged against jaq
-**3.0.0, 3.1.0 and 3.1.1**; CI pins 3.1.0, the version nixpkgs 26.05 ships and
-therefore the one daily-driven through Bravais. `input_filename` is jq's on
-the native engine, answered from the driver's reader (`jq::Position`):
-`null` before any input is read, then the file the reader has open, across
-several files too. On the jaq engine the prelude defines a constant, which
-can be only one of those (`null` under `-n`, else the input's name; an error
-with several files).
+Baseline is **jq 1.8.1**; jq's own suite passes 820/820 (`FLOOR`).
+`input_filename` and `input_line_number` are answered from the driver's
+reader (`jq::Position`): `null` before any input is read, then the file the
+reader has open, across several files too.
 
 ## Build, test, lint
 
 ```sh
 cargo build --release
-cargo test                       # the shim: unit + differential
+cargo test                       # the shim: unit, differential, conformance, native
 cargo test --workspace --exclude pathfinder-jq   # the engine crates
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 make check                       # all of the above
-```
-
-A bare `cargo test` runs the suites on the native engine. Run them on the jaq
-engine too — CI runs both (`make test-jaq` takes `JAQ=<binary>`):
-
-```sh
-PATHFINDER_ENGINE=jaq PATHFINDER_JAQ=/path/to/jaq cargo test
-```
-
-`crates/pathfinder-jaq` also builds `pathfinder-jaq`, a `jaq`-compatible
-binary on the engine crates, for checking that the in-tree crates and the
-packaged jaq agree:
-
-```sh
-cargo build --release -p pathfinder-jaq
-PATHFINDER_ENGINE=jaq PATHFINDER_JAQ=$PWD/target/release/pathfinder-jaq cargo test
 ```
 
 ## The rule that matters most
@@ -72,7 +55,7 @@ curl -fsSL -o jq https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linu
 echo "020468de7539ce70ef1bceaf7cde2e8c4f2ca6c3afb84642aabc5c97d9fc2a0d  jq" | sha256sum -c -
 chmod +x jq
 printf '{}' | ./jq -c '.a.b = 1'
-printf '{}' | PATHFINDER_ENGINE=native target/release/pathfinder -c '.a.b = 1'
+printf '{}' | target/release/pathfinder -c '.a.b = 1'
 ```
 
 Point `PATHFINDER_REAL_JQ` at it for the suites: their fallback,
@@ -125,77 +108,42 @@ print. To keep the `jq` name untouched:
   `metadata.invoking_agent`.
 - `jq --version` stays `jq-1.8.1`, and `jq --help` stays jq's text; the
   native `--help` adds a trailer on stderr.
-- `--version` reports the jaq lookup without spawning jaq; the lookup order
-  lives once, in `main.rs`'s `jaq_binary`.
 - No third-party dependency for this: `src/json.rs` writes the JSON.
   `serde_json` is a dev-dependency, used by `tests/native.rs` to parse the
   output.
-- `--version` and `--explain` name the engine (`engine`, and for the jaq
-  engine its binary and lookup step); a `PATHFINDER_ENGINE` naming no engine
-  fails under either name with exit 2, as a structured error in JSON mode.
+- `--version` and `--explain` name the engine (`native`); a
+  `PATHFINDER_ENGINE` naming another fails under either name with exit 2, as
+  a structured error in JSON mode.
 
 ## Architectural invariants
 
-- **Whitelist, never pass through.** Every flag reaching jaq is named explicitly
-  in `translate.rs`. This is a *safety* property, not tidiness: jaq has
-  `-i/--in-place` and jq does not, so forwarding unknown flags would turn
-  `jq -i '.' data.json` into a silent, irreversible file rewrite.
-- **One plan, two renderings.** `translate::plan` decides everything once and
-  renders it twice: `Plan::argv` for a jaq binary, `Plan::cli` (the engine's
-  run options, `jaq::Cli`) for the native engine, built from jq's command
-  line directly. `run_options_agree_with_jaqs_reading_of_the_argv` pins the
-  two together; a new flag goes into both or the test fails.
-- **The native engine is jaq's CLI as a library** (`crates/pathfinder-jaq`,
-  lib `jaq`): `jaq::run` takes the run options, stdin, the concatenated
-  files' `Segment`s and stdout, and returns the exit status. It never exits
-  the process itself (`halt` included), so the caller flushes first. The
-  shim around it does what it does around a jaq binary, in process: several
-  files are one `inputs::reader` stream described by `inputs::segments`
-  (never `PATHFINDER_INPUTS`, which would show in `$ENV`), `--seq` input goes
-  through `post::StripRs`, and `-a`/`--seq` output through `post::Framer`,
-  the same framer that reshapes a jaq binary's stdout.
-- **Do not become more permissive than jq.** A name missing from jaq is polyfilled
-  only if jq 1.8.1 actually defines it. Accepting a filter real jq rejects lets a
-  script pass here and fail on the next machine — the worst outcome for a shim.
-- **On the jaq engine, the `exec` path stays the default.** Give it up only for
-  a transform that genuinely cannot be expressed in jaq's argv (`-a`, `--seq`,
-  multi-file input).
+- **Whitelist, never pass through.** Every option the engine's driver
+  receives is set in `translate.rs` from a jq flag it named. This is a
+  *safety* property, not tidiness: the driver is jaq's command line as a
+  library, and jaq has `-i/--in-place` where jq does not, so nothing of the
+  user's argv reaches it except through a field set there.
+- **The engine is jaq's CLI as a library** (`crates/pathfinder-jaq`, lib
+  `jaq`): `jaq::run` takes the run options (`jaq::Cli`, built by
+  `translate::plan`), stdin, the concatenated files' `Segment`s and stdout,
+  and returns the exit status. It never exits the process itself (`halt`
+  included), so the caller flushes first. Several files are one
+  `inputs::reader` stream described by `inputs::segments`, `--seq` input
+  goes through `post::StripRs`, and `-a`/`--seq` output through
+  `post::Framer`.
+- **Do not become more permissive than jq.** A name is defined only if jq
+  1.8.1 defines it. Accepting a filter real jq rejects lets a script pass here
+  and fail on the next machine — the worst outcome for a shim.
 - **The filter stays byte-identical unless something is needed.** `assemble`
-  returns `rewritten: false` in that case and `-f` is kept, preserving jaq's error
-  provenance.
-- **Prelude on one line.** jaq reports errors against the text it was handed; a
+  returns `rewritten: false` in that case and `-f` is kept, preserving the
+  error provenance of the file.
+- **Prelude on one line.** Errors are reported against the program text; a
   prelude on its own line would shift every user line number by one.
-- **A repair reaches the original through an alias defined before it.**
-  Calling the shadowed name inside its own shadow recurses forever under jaq.
-  But definitions bind names where they are written, so
-  `def _pf_mktime: mktime; def mktime: … | _pf_mktime;` reaches the builtin.
-  Emit the alias and the shadow together, alias first; when one repair uses
-  another (`todateiso8601` → `strftime`), declare it in `deps` so emission
-  order makes it bind the repair, not the builtin.
-- **On the jaq engine, jaq's two-argument regex builtins reject `null`
-  flags**; jq treats `null` as none. Route the no-flags case to jaq's
-  one-argument builtin.
-- **jaq reads any leading `-` as a flag**, where jq's `isoptish` does not. A
-  program starting with `-` gets a leading space; a file `-x` becomes `./-x`; a
-  `--args` value starting with `-` is bound by name. Never use `--` to fix this:
-  after `--`, jaq reads `-` as a file literally named `-` instead of stdin.
-- **No wrapper script in front of the binary.** The Nix package pins jaq by
-  compiling its store path in (`PATHFINDER_DEFAULT_JAQ` → `PINNED_JAQ`), not with
-  `wrapProgram`, which would fork a shell before every `jq` call. Lookup order is
-  `PATHFINDER_JAQ`, then the pin, then `jaq` on `PATH`.
-- **stderr is inherited, never captured**, so jaq's diagnostics, `debug` output,
-  colour detection and interleaving stay correct.
-- **Several input files reach jaq as one stdin stream, described in
-  `PATHFINDER_INPUTS`** (`src/inputs.rs`; read by `jaq/src/jq.rs`, patch
-  `0015`): names, byte counts, and jq's message for an unreadable file. Nothing
-  goes between files, because jq inserts nothing. The packaged jaq makes each
-  boundary an `fgets` chunk boundary, names the file being read and restarts
-  its line count; a stock jaq ignores the variable. The two sides share one
-  record format (`<bytes>:<n>:<name><m>:<message>`): change both or neither.
+- **stderr is the engine's own**: diagnostics, `debug` output and their
+  interleaving with stdout are written by the driver as jq writes them.
 
 ### The parser and the rewriter (`src/syntax/`)
 
-- **The native engine compiles what Pathfinder's parser reads** (M21,
+- **The engine compiles what Pathfinder's parser reads** (M21,
   `src/front.rs`): `jaq::Cli::front_end` hands jaq's loader
   `front::main_module`, which turns the assembled program's syntax tree into
   the engine's terms. Every string in them is a slice of the program text,
@@ -208,7 +156,7 @@ print. To keep the `jq` name untouched:
   `PATHFINDER_FRONT_END=jaq` puts jaq's parser back, to compare the two.
   Whenever jaq's parser reads a program (that switch, or an
   `import`/`include` header), the program takes the syntax rewrites
-  (`Rewrites::syntax`) as on the jaq engine.
+  (`Rewrites::syntax`), which write jq's syntax as jaq's parser reads it.
 
 - **A syntax error is found by jq's own grammar** (M21, P-069,
   `syntax/jq_errors.rs`): bison 3.8's driver over the tables bison generated
@@ -268,7 +216,7 @@ print. To keep the `jq` name untouched:
   new recursive pass over the tree must stay within `MAX_DEPTH`; a new
   grammar cycle must pass through `query`, `term` or `pattern`, or be wrapped
   in `Parser::nested` where it recurses (as `//` is in `expr`).
-- **Assignment is native on the native engine** (M20): the engine creates
+- **Assignment is native** (M20): the engine creates
   containers and raises jq's errors, and only a comma target with an update
   (`(.a, .b) |= f`) is rewritten, to `_pf_modify`, whose deletions jq defers
   to the end (`Rewrites::comma_update`). Keep the engine's update from
@@ -285,29 +233,9 @@ print. To keep the `jq` name untouched:
   (`filter::bind_native`), so a native standing for a jq *definition* sits
   behind one that binds its `$` parameters (`range/3` → `_range`), and a
   definition standing for a C builtin binds them last first (`setpath`).
-- **On the jaq engine, assignment is vivify-then-native.** Prepare the containers (inline guard for
-  a literal target, `_pf_vivify` otherwise), then let jaq's own operator run —
-  it matches jq once the containers exist. jq's `_modify` transcribed into jaq
-  is quadratic (2.4 s for 10k elements); a comma target is the only thing still
-  sent through `_pf_modify`.
-- **On the native engine, `del` and `delpaths` are jq's** (M20): the
-  engine's `delpaths` is a port of jq's `jv_delpaths`, so the `delete`
-  rewrite and the prelude's repairs are off there.
-- **On the jaq engine, `del(f)` uses jaq's `del` only where it is jq's**: one path per array
-  (`single_path`), a deleting step that is not a named key (jaq swap-removes
-  keys, breaking order), with `try … catch` falling back to `_pf_delpaths` on
-  the original input. The fallback evaluates the target twice, so effectful
-  calls (`input`, `debug`, …) keep a target off this route (`repeatable`).
-- **Program-defined names disable reasoning about them.** If the filter defines
-  `del`, `select`, or a name `single_valued` trusts, the `del` route is off.
-- **Emit `.[a][b]`, never `.[a].[b]`** — jaq 3.0 does not parse the latter.
-  The user's own `.a.[0]`/`.a.[]` are spliced without the dot for the same
-  reason (`splice_mapping`).
-- **Index keys and slice bounds are evaluated against the input, not the
-  base.** `[1,2][0:.]` slices with the outer `.`; a rewrite that pipes the base
-  first must bind the bounds before it. A non-literal key is rounded inline
-  (`INDEX_NORM`) so it stays a path expression; never guard with `type ==`.
-- **On the native engine, regexes are jq 1.8.1's Oniguruma** (M22,
+- **`del` and `delpaths` are jq's** (M20): the engine's `delpaths` is a
+  port of jq's `jv_delpaths`.
+- **Regexes are jq 1.8.1's Oniguruma** (M22,
   `crates/pathfinder-regex`): Oniguruma 6.9.10, the one jq's release
   binary vendors, in its one configuration (`ONIG_SYNTAX_PERL_NG`, UTF-8,
   `ONIG_OPTION_CAPTURE_GROUP`). The parser transcribes `regparse.c` (a
@@ -336,7 +264,7 @@ print. To keep the `jq` name untouched:
   compared line by line. jq's own limit applies: its `main` lowers
   Oniguruma's parse depth limit to 1024, so 512 nested groups are
   `parse depth limit over`.
-- **On the native engine, the time builtins are glibc's** (M23,
+- **The time builtins are glibc's** (M23,
   `pathfinder-std/src/ctime.rs`): jq's `gmtime`, `mktime`, `strftime`,
   `strptime` and their local forms call the C library, and its release
   binary links glibc 2.39, so `ctime.rs` transcribes that release's
@@ -348,29 +276,17 @@ print. To keep the `jq` name untouched:
   jq's definitions. Only the zone's rules come from `jiff`. Measure a
   time claim with `tools/time-diff.py` under several `TZ`; a change here
   is checked against glibc's source, not against a man page.
-- **On the jaq engine, `src/regex.rs` and the prelude's `_pf_scanre` must
-  name groups identically.** The Rust side precomputes literal regexes, the jq side scans
-  computed ones; the two are transcriptions of one tokenising regex. Change
-  both or neither. The literal table is *bound*, not defined
-  (`{…} as $__pf_rl | def …`): a definition rebuilds it on every call.
 - **Measure the cost of a jq-level definition before adding one per element.**
-  A filter-parameter call, `first`, `type` (about 4 µs under jaq 3.1) and
+  A filter-parameter call, `first`, `type` (about 4 µs under jaq 3.1's engine) and
   `and`/`or` (several µs each) are expensive; comparisons (`. < ""` is "not a
   string, number or later type"), nested `if`s, inline text and `label`/`break`
   are cheap. Type tests in a per-element path are written as comparisons.
-- **Error text reaches scripts only through `catch`.** The native engine
-  words its errors as jq does (M20): the core's `Error::typ`/`math`/`index`
-  and the builtins raise jq 1.8.1's messages, built with `ValT::jq_quoted`.
-  On the jaq engine the rewriter wraps a handler that reads its input in
-  `_pf_err`, which turns jaq's templates back into jq's wording, and a
-  builtin whose jq message names it gets a guard that runs jaq's builtin
-  first and re-raises with jq's text only on a wrong input type.
-- **The packaged jaq words an uncaught error by the same rules.**
-  `packaging/jaq/0008-uncaught-errors.patch` adds `jaq/src/jq.rs`, whose
-  `wording` is a Rust transcription of `_pf_err` (and its `dump` of
-  `_pf_dump`). Change both or neither, then regenerate the patch from the jaq
-  source tree; `patched_engine_reports_errors_as_jq` compares stderr and exit
-  status with real jq.
+- **Errors are worded as jq words them** (M20): the core's
+  `Error::typ`/`math`/`index` and the builtins raise jq 1.8.1's messages,
+  built with `ValT::jq_quoted`. An uncaught error is reported by the driver
+  (`pathfinder-jaq/src/jq.rs`, `wording`) with jq's location;
+  `errors_are_reported_as_jq_reports_them` compares stderr and exit status
+  with real jq.
 - **The error location counts lines the way jq reads them**: `fgets` into a
   4096-byte buffer, so up to a newline or 4095 bytes at a time, and through
   the chunk holding the last byte the parser needed (the delimiter after a
@@ -380,17 +296,17 @@ print. To keep the `jq` name untouched:
   Measure stdin with `perf stat -e cycles:u`, one run per invocation (`-r`
   gives later runs an empty stdin).
 - **A parse error is worded by jq's own parser, transcribed.**
-  `jaq-json/src/parse_error.rs` (patch `0013`) is `jv_parse.c`'s state
+  `pathfinder-json/src/parse_error.rs` is `jv_parse.c`'s state
   machine without the values; jaq's parser builds the values, and on failure
   the value that failed is re-scanned from jq's initial state. On stdin
   `jq::Position` implements `Recall`, keeping that value's text only when the
   line buffer is compacted. jaq's reader rejects what jq's rejects (comments,
   byte strings, non-string keys, run-on literals) so that both stop at the
   same byte; loosening it makes the two disagree on where an error is.
-- **A path expression fails where jq's does** (patch `0010`): a non-path
-  filter in path mode yields a *lost* path (`Node::Lost`), which fails only
-  when a later step uses it. The messages start `Invalid`, which `_pf_err`
-  and `jq.rs::wording` pass through unchanged; keep it so.
+- **A path expression fails where jq's does**: a non-path filter in path
+  mode yields a *lost* path (`Node::Lost`), which fails only when a later
+  step uses it. The messages start `Invalid`, which `jq.rs::wording` passes
+  through unchanged; keep it so.
 
 ## Conformance
 
@@ -399,22 +315,8 @@ vendored, MIT) through the shim — the coverage measure, as opposed to the
 differential suite's statement of intent. `make conformance` prints per-file
 pass rates; `V=1` lists every failure.
 
-- `FLOOR` is a ratchet. Raise it in the change that raises the score; never
-  lower it to make a change pass. `FLOOR-native` is the same ratchet for the
-  native engine and `FLOOR-patched` for the packaged, patched jaq; the test
-  asks `pathfinder --version --json` which engine runs, and a jaq whose
-  `--version` contains `+pathfinder` is the patched one. A stock jaq is held
-  to `FLOOR`.
-- **The patches are developed against jaq's source, not edited by hand.**
-  Unpack the pinned jaq's `src`, commit it, make one commit per patch, and
-  regenerate `packaging/jaq/*.patch` with `git diff`. Never touch jaq's
-  `Cargo.toml`/`Cargo.lock`: the Nix build reuses the upstream vendored
-  dependencies.
-- **Until `packaging/jaq/` is retired (P-078), an engine fix lands twice**:
-  as a commit in jaq's source tree, folded into the patch it repairs and the
-  patches regenerated, and as the same diff applied to `crates/pathfinder-*`.
-  The packaged jaq and the in-tree crates must stay identical in behaviour;
-  `pathfinder-jaq` run as `PATHFINDER_JAQ` checks it.
+- `FLOOR` is a ratchet, now at 820 of 820. Raise it in the change that
+  raises the score; never lower it to make a change pass.
 - `EXCLUDED` is generated from real jq 1.8.1, never hand-edited.
 - A rising total can hide regressions: compare the failing-case lists before and
   after (`V=1`), not just the count. The first `match`/`test`/`capture` repair
@@ -424,8 +326,8 @@ pass rates; `V=1` lists every failure.
 
 `fuzz/` is a `cargo fuzz` crate with its own Cargo root, outside the
 workspace. It has no lib target to link against, so `fuzz/src/lib.rs`
-includes the shim's modules by `#[path]` (`jqargs`, `scan`, `regex`,
-`prelude`, `program`, `syntax`); a new `crate::` dependency of those needs a
+includes the shim's modules by `#[path]` (`jqargs`, `scan`, `prelude`,
+`program`, `syntax`); a new `crate::` dependency of those needs a
 line there. Three targets:
 
 | Target | Input | `-max_len` |
@@ -448,11 +350,18 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
   (`def`, `repeat`, `while`, `until`, `recurse(`, `halt`, `debug`, `stderr`,
   numbers of four digits or with an exponent) and caps inputs and outputs;
   what remains unbounded is cut off by `-timeout`/`-rss_limit_mb`, so a
-  timeout or OOM there is not a finding without a bounded reproducer. Its
-  first finding, a panic on `[1 #`, is fixed (patch `0016`).
+  timeout or OOM there is a finding only if real jq is faster on it: run
+  the artifact through both. M24's 24 h run found `range("")` counting for
+  ever that way, and `syntax` a chain of `?//` growing threefold per link.
+  The target's first finding, a panic on `[1 #`, is fixed in the engine's
+  lexer.
 - A crash is reproduced with `cargo fuzz run -s none <target> <artifact>`.
-  A shim crash gets a fix and a unit test; an engine crash lands twice (see
-  Conformance).
+  A crash gets a fix and a test where it happened: a unit test in the shim,
+  a differential case or an engine crate test in the engine.
+- A job can hang after its timeout fires (`-s none`, M24: `ALARM: working
+  on the last Unit`, then no CPU for five hours), and `-fork`'s parent waits
+  on it. In a long run, check that each target's log still grows; killing
+  the stuck job lets the parent go on.
 - `fuzz/seeds/` is committed (jq's suite for `syntax`/`engine`); `corpus/`,
   `artifacts/` and `target/` are not.
 
@@ -463,35 +372,33 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
 | `Cargo.toml` | The workspace: members, `default-members`, the shared lint set (`[workspace.lints]`) and the release profile. One `Cargo.lock`, at the root. |
 | `crates/pathfinder/src/jqargs.rs` | jq's argv grammar, transcribed from jq's `src/main.c`. Hand-rolled; clap cannot express it. |
 | `crates/pathfinder/src/scan.rs` | The jq token scanner — the crate's only real algorithm. Strings, `\(…)` interpolation nesting, comments, module headers. |
-| `crates/pathfinder/src/prelude.rs` | Polyfill and repair definitions, and the evidence for each. |
+| `crates/pathfinder/src/prelude.rs` | The two definitions left to inject: jq's `builtins` list and its `_modify`. |
 | `crates/pathfinder/src/program.rs` | Program assembly: module header, prelude, `$ARGS` wrap, `$__loc__`. |
-| `crates/pathfinder/src/translate.rs` | jq argv → jaq argv. The only module that knows both dialects. |
-| `crates/pathfinder/src/front.rs` | The native engine's front end: the syntax tree as the engine's terms, slices of the program text. |
-| `crates/pathfinder/src/engine.rs` | The engine switch (`PATHFINDER_ENGINE`) and running the native engine in process. |
-| `crates/pathfinder/src/post.rs` | `-a` and `--seq` byte transforms: `Framer` (output) and `StripRs` (input), for both engines. |
-| `crates/pathfinder/src/inputs.rs` | Several input files: opened before the engine starts, read as one stream, and described to it — as `Segment`s in process, in `PATHFINDER_INPUTS` to a jaq binary. |
+| `crates/pathfinder/src/translate.rs` | jq's command line → the engine's run options (`jaq::Cli`); whitelist only. |
+| `crates/pathfinder/src/front.rs` | The front end: the syntax tree as the engine's terms, slices of the program text. |
+| `crates/pathfinder/src/engine.rs` | Running a plan on the engine in process; refusing a `PATHFINDER_ENGINE` other than `native`. |
+| `crates/pathfinder/src/post.rs` | `-a` and `--seq` byte transforms: `Framer` (output) and `StripRs` (input). |
+| `crates/pathfinder/src/inputs.rs` | Several input files: opened before the engine starts, read as one stream, and described to it as `Segment`s. |
 | `crates/pathfinder/src/native.rs` | `--explain` / `--version` / `--install-shim`, their text and JSON reports, and structured errors; reachable only under the native name. |
 | `crates/pathfinder/src/describe.rs` | `--describe` and `--schema`: the native surface described from one table of commands. |
 | `crates/pathfinder/src/mode.rs` | The native verbs' output-mode cascade (CLI Standard §5). |
 | `crates/pathfinder/src/json.rs` | Minimal JSON writer (RFC 8259 escaping) for the native reports; std-only. |
 | `crates/pathfinder/src/syntax/lex.rs`, `parse.rs` | jq's lexer and grammar, transcribed. Every node keeps its span. |
-| `crates/pathfinder/src/regex.rs` | Facts about literal regexes for the jaq engine's regex repairs: group naming (mirrors the prelude's run-time scan), whether a group can be skipped, whether the regex can match empty. |
-| `crates/pathfinder/src/syntax/rewrite.rs` | Source-to-source rewrites: assignment, `del`, `?//`, `{$b: p}`, computed-key checks, compound `reduce` sources. |
+| `crates/pathfinder/src/syntax/rewrite.rs` | Source-to-source rewrites: an update of several paths, `?//`, unknown formats, and jq's syntax for jaq's parser. |
 | `crates/pathfinder/src/syntax/jq_errors.rs`, `jq_tables.rs` | jq's syntax errors: its lexer ported, and bison's driver over jq 1.8.1's generated tables (`tools/jq-tables.py`). |
 | `crates/pathfinder/src/syntax/check.rs` | jq's compile-time rejections, and jq's constant folding to decide them. |
 | `crates/pathfinder/src/syntax/print.rs` | Fully parenthesised printer: parser validation, and pattern text for rewrites. |
-| `packaging/jaq/` | Patches to jaq's own source (number output, arithmetic precision, input literals, string repetition, object keys, `debug`, uncaught errors, `halt_error`, path expressions, `l // r` as a path, `%`, parse errors, lazy input reading, file names in error locations, a comment at the end of the program, `input` past the end and `halt_error`'s status), applied by `packaging/default.nix`. Cut against 3.1.1 (this flake's nixpkgs); Bravais builds whatever its own nixpkgs has, by making this flake follow it, so every jaq it may carry needs a cut that applies without fuzz. `0008`, `0013`, `0015` and `0017` have a 3.1.0 cut (3.1.0's `real_main` differs on the lines they replace); `0008`, `0010` and `0015` have a 3.1.2 cut (3.1.2 passes `input_filename` to `run` and rounds with its own helpers); `0016` is skipped from 3.1.2, which fixed the same bug the same way. `cut` in `default.nix` picks by version. When nixpkgs moves jaq, replay the patch commits onto the new release in jaq's source tree, apply the old cuts with `patch -p1` and cut anew only those that fail or fuzz. MIT for jaq's text, Pathfinder's changes GPL-3.0-or-later OR MIT; never sent upstream. |
-| `crates/pathfinder-core`, `-std`, `-json`, `-fmts` | jaq 3.1.1's engine crates, imported with the patch set applied (`crates/UPSTREAM.md`). Library names stay `jaq_core`, … so the sources stay diffable against upstream. |
+| `crates/pathfinder-core`, `-std`, `-json`, `-fmts` | jaq 3.1.1's engine crates, imported with Pathfinder's patch set applied and grown since (`crates/UPSTREAM.md`). Library names stay `jaq_core`, … so the sources stay diffable against upstream. |
 | `crates/pathfinder-std/src/ctime.rs` | glibc 2.39's `strftime`, `strptime`, `mktime`/`timegm` and `gmtime`/`localtime` in Rust, as jq's release binary runs them (M23); `LGPL-2.1-or-later` for glibc's text. |
 | `crates/pathfinder-regex` | jq 1.8.1's Oniguruma 6.9.10 in Rust (M22): `parse.rs` (`regparse.c`), `tune.rs` and `compile.rs` (`regcomp.c`), `exec.rs` (`regexec.c`), `error.rs` (`regerror.c`), `tables.rs` (its Unicode data, generated). No dependencies; Oniguruma's BSD-2-Clause and notice on what is taken from it. |
 | `crates/pathfinder-all` | jaq 3.1.1's `jaq-all` (lib `jaq_all`): compiling, running, reading and writing on the engine crates. Its `defs.jq` holds definitions that need every engine crate (`format`). |
-| `crates/pathfinder-jaq` | jaq 3.1.1's CLI, with the CLI hunks of the patch set, as the library `jaq` the native engine runs (`jaq::run`) and as the binary `pathfinder-jaq`, run as `PATHFINDER_JAQ` to check the crates against the packaged jaq. `publish = false`; never installed. |
+| `crates/pathfinder-jaq` | jaq 3.1.1's CLI, with the CLI hunks of the patch set, as the library `jaq` the shim runs (`jaq::run`). `publish = false`; never installed. |
 | `crates/pathfinder/tests/differential.rs` | The compatibility contract: byte-exact agreement with real jq on chosen cases. |
 | `crates/pathfinder/tests/conformance.rs` | The coverage measure: jq's own suite, judged as jq's runner judges it. |
 | `crates/pathfinder/tests/native.rs` | The native surface: mode cascade, JSON shapes, exit codes, and that the `jq` name is unchanged under an agent environment. |
 | `tools/jq-tables.py` | Writes `jq_tables.rs` from jq 1.8.1's `src/` (parser tables, C builtins). |
-| `tools/regex-diff.py` | Random regexes through jq 1.8.1 and the native engine, compared case by case (M22). |
-| `tools/time-diff.py` | Random time calls through jq 1.8.1 and the native engine under several zones, compared case by case (M23). |
+| `tools/regex-diff.py` | Random regexes through jq 1.8.1 and the engine, compared case by case (M22). |
+| `tools/time-diff.py` | Random time calls through jq 1.8.1 and the engine under several zones, compared case by case (M23). |
 | `tools/onig-tables.py` | Writes `pathfinder-regex`'s `tables.rs` from the Oniguruma in jq 1.8.1's tarball (properties, folds, grapheme breaks, ISO-8859-1 types). |
 | `fuzz/` | `cargo fuzz` targets for jq's argv, the front end, and evaluation through the engine crates; see Fuzzing. Its own Cargo root. |
 | `SKILL.md` | Agent-facing description of the shim. Frontmatter first, so its licence is in `REUSE.toml`; keep `description` ≤ 1000 rendered characters. |
@@ -500,7 +407,7 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
 
 - `unsafe` — every crate sets `unsafe_code = "forbid"` through the workspace
   lint set.
-- Forwarding an unrecognised flag to jaq.
+- Passing an unrecognised flag through to the engine's driver.
 - Polyfilling a name jq 1.8.1 does not define.
 - Adding a third-party runtime dependency to the shim crate; it depends on the
   engine crates and std only. A dependency the engine needs goes into an
@@ -512,9 +419,6 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
 
 - `prelude::render` returning `""` is the *good* case: it means the fast path is
   available.
-- Tests that assert an engine-specific report set `PATHFINDER_ENGINE`
-  themselves: the Nix package compiles in `jaq` as the default, a plain
-  `cargo build` `native`.
 - `$ARGS.named` must not leak the `__pathfinder_*` bindings the `--jsonargs`
   emulation adds; the wrap filters them out.
 - `$__loc__.file` is `"<top-level>"` in jq for inline filters *and* `-f` files.
@@ -530,8 +434,7 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
 Every file is covered by REUSE (Standard §4.3): Pathfinder's own files carry
 the two SPDX tags. Software is `GPL-3.0-or-later`; docs are `CC-BY-SA-4.0`;
 the embedded jq help text keeps upstream jq's MIT (§4.2). The engine crates
-imported from jaq (`crates/pathfinder-{core,std,json,fmts,all,jaq}`) and the
-patches in `packaging/jaq/` keep jaq's MIT for the text taken from jaq;
+imported from jaq (`crates/pathfinder-{core,std,json,fmts,all,jaq}`) keep jaq's MIT for the text taken from jaq;
 Pathfinder's changes to them, and the files Pathfinder adds among them, are
 `GPL-3.0-or-later OR MIT`, so the expression for each such file is
 `MIT AND (GPL-3.0-or-later OR MIT)` and the file as a whole stays usable

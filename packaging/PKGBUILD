@@ -3,13 +3,13 @@
 # Maintainer: Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 
 pkgname=pathfinder-jq
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
-pkgdesc="jq-compatible shim over jaq"
+pkgdesc="jq 1.8.1-compatible jq, with its own engine"
 arch=('x86_64' 'aarch64')
 url="https://Pathfinder.SpacecraftSoftware.org/"
 license=('GPL-3.0-or-later')
-depends=('jaq')
+depends=()
 makedepends=('cargo')
 # Deliberately NOT conflicts=('jq'): the two can coexist, and which one answers
 # to `jq` is decided by PATH order or by installing the shim yourself. Silently
@@ -32,6 +32,8 @@ check() {
 package() {
   cd "$srcdir/$pkgname-$pkgver"
   install -Dm755 "target/release/pathfinder" "$pkgdir/usr/bin/pathfinder"
+  # `mjq`: a short name for Pathfinder itself, which shadows nothing.
+  ln -s pathfinder "$pkgdir/usr/bin/mjq"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 doc/DIVERGENCES.md "$pkgdir/usr/share/doc/$pkgname/DIVERGENCES.md"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

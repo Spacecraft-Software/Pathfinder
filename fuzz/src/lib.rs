@@ -24,9 +24,6 @@ pub mod prelude;
 #[path = "../../crates/pathfinder/src/program.rs"]
 pub mod program;
 
-#[path = "../../crates/pathfinder/src/regex.rs"]
-pub mod regex;
-
 #[path = "../../crates/pathfinder/src/scan.rs"]
 pub mod scan;
 

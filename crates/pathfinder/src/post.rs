@@ -1,27 +1,25 @@
 // SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Output transforms for the two jq flags jaq has no equivalent for.
-//!
-//! These are the only cases that give up the `exec` fast path, because they
-//! need to see jaq's output before the user does.
+//! Byte transforms for the two jq flags the engine's driver has no
+//! equivalent for.
 //!
 //! # `-a` / `--ascii-output`
 //!
 //! Verified against jq 1.8.1: `jq -ra '"café"'` prints `"caf\u00e9"` — **with
 //! quotes**. `-a` cancels `-r`'s rawness for strings. That is what makes this
-//! transform simple: Pathfinder strips the raw flags from jaq's argv, so
-//! everything arriving here is JSON, and in JSON a non-ASCII byte can only occur
-//! inside a string literal. No parser is needed — escape every non-ASCII scalar
-//! and the result is exactly jq's.
+//! transform simple: Pathfinder takes the raw modes off the engine's options,
+//! so everything arriving here is JSON, and in JSON a non-ASCII byte can only
+//! occur inside a string literal. No parser is needed — escape every
+//! non-ASCII scalar and the result is exactly jq's.
 //!
 //! # `--seq`
 //!
 //! jq's `--seq` is `application/json-seq` in *both* directions: it emits
 //! `RS value LF`, and it also *requires* RS-framed input — feeding jq a plain
-//! `1\n2\n` under `--seq` is a parse error. jaq knows nothing about RS, so the
-//! input needs its separators stripped on the way in as well as added on the
-//! way out.
+//! `1\n2\n` under `--seq` is a parse error. The engine's reader knows nothing
+//! about RS, so the input needs its separators stripped on the way in as well
+//! as added on the way out.
 
 use std::io::{self, Read, Write};
 
@@ -97,37 +95,15 @@ impl Splitter {
     }
 }
 
-/// Copy `input` to `output`, applying `post` to each value.
-///
-/// Flushes after every value so a downstream reader sees results as they are
-/// produced; jaq itself is unbuffered on a pipe and Pathfinder must not
-/// reintroduce the latency it was careful not to add.
-pub fn transform(mut input: impl Read, output: &mut impl Write, post: Post) -> io::Result<()> {
-    let mut framer = Framer::new(output, post);
-    framer.flush_each = true;
-    let mut buf = [0u8; 8192];
-    loop {
-        let n = input.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        framer.write_all(&buf[..n])?;
-    }
-    framer.finish()
-}
-
 /// A writer applying `post` to the values written through it.
 ///
-/// The in-process engine writes its outputs through one, and
-/// [`transform`] copies jaq's stdout through one, so both engines frame
-/// values with the same code. Call [`Framer::finish`] after the last value.
+/// The engine writes its outputs through one. Call [`Framer::finish`] after
+/// the last value.
 pub struct Framer<W: Write> {
     inner: W,
     post: Post,
     splitter: Splitter,
     value: Vec<u8>,
-    /// Flush `inner` after every value.
-    pub flush_each: bool,
 }
 
 impl<W: Write> Framer<W> {
@@ -137,7 +113,6 @@ impl<W: Write> Framer<W> {
             post,
             splitter: Splitter::default(),
             value: Vec::with_capacity(4096),
-            flush_each: false,
         }
     }
 
@@ -157,9 +132,6 @@ impl<W: Write> Write for Framer<W> {
             if self.splitter.feed(b) {
                 emit(&mut self.inner, &self.value, self.post)?;
                 self.value.clear();
-                if self.flush_each {
-                    self.inner.flush()?;
-                }
             } else {
                 self.value.push(b);
             }
@@ -253,8 +225,8 @@ fn write_escape(output: &mut impl Write, c: char) -> io::Result<()> {
 
 /// Copy `input` to `output`, dropping the RS bytes that frame json-seq input.
 ///
-/// jaq has no `--seq`, so it would reject the separators outright. Stripping
-/// them is lossless for well-formed json-seq: RS never appears inside a JSON
+/// The engine's reader would reject the separators outright. Stripping them
+/// is lossless for well-formed json-seq: RS never appears inside a JSON
 /// text, only between them.
 pub fn strip_rs(mut input: impl Read, output: &mut impl Write) -> io::Result<()> {
     let mut buf = [0u8; 8192];
@@ -276,8 +248,8 @@ pub fn strip_rs(mut input: impl Read, output: &mut impl Write) -> io::Result<()>
     Ok(())
 }
 
-/// A reader dropping the RS bytes that frame json-seq input: [`strip_rs`]
-/// for the in-process engine, which reads rather than being written to.
+/// A reader dropping the RS bytes that frame json-seq input, as [`strip_rs`]
+/// copies them.
 pub struct StripRs<R>(pub R);
 
 impl<R: Read> Read for StripRs<R> {
@@ -304,11 +276,15 @@ impl<R: Read> Read for StripRs<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Post, Terminator, strip_rs, transform};
+    use super::{Framer, Post, Terminator, strip_rs};
+    use std::io::Write as _;
 
     fn run(input: &str, post: Post) -> String {
         let mut out: Vec<u8> = Vec::new();
-        transform(input.as_bytes(), &mut out, post).expect("transform succeeds");
+        let mut framer = Framer::new(&mut out, post);
+        framer.write_all(input.as_bytes()).expect("write succeeds");
+        framer.finish().expect("finish succeeds");
+        drop(framer);
         String::from_utf8(out).expect("output is UTF-8")
     }
 

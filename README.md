@@ -5,17 +5,12 @@ SPDX-License-Identifier: CC-BY-SA-4.0
 
 # Pathfinder
 
-**A jq 1.8.1-compatible `jq` on a fork of [`jaq`](https://github.com/01mf02/jaq)'s engine.**
+**A jq 1.8.1-compatible `jq` in safe Rust, on an engine grown from [`jaq`](https://github.com/01mf02/jaq)'s.**
 
-Pathfinder accepts jq's exact command line, rewrites the filter where its
-engine would run it differently from jq, and evaluates it. Install it as `jq`
-and existing scripts keep working.
-
-It began as a shim in front of jaq and is becoming its own jq (`PRD.md`): the
-engine is a hard fork of jaq's, in this repository, and since M19 it runs in
-process (`PATHFINDER_ENGINE=native`). Handing off to a jaq binary
-(`PATHFINDER_ENGINE=jaq`) stays possible until the native engine has replaced
-it; the Nix package still defaults to it.
+Pathfinder accepts jq's exact command line and runs jq programs as jq 1.8.1
+does: its numbers, its error messages, its regular expressions (a port of
+the Oniguruma jq ships) and its date functions (glibc's, as jq's release
+binary runs them). Install it as `jq` and existing scripts keep working.
 
 ## Why
 
@@ -27,20 +22,23 @@ described as one. Measured against jq 1.8.1:
 - Twenty-two jq builtins are `undefined filter`.
 - **jaq does not auto-vivify**: `null | .a = 1` and `{} | .a.b = 1` error, where
   jq builds the containers. This is the one that breaks real scripts, and it is
-  not mentioned in any of the "drop-in replacement" write-ups. Pathfinder
-  rewrites the assignment so it does.
+  not mentioned in any of the "drop-in replacement" write-ups.
 
-`alias jq = jaq` hides all of that until it fails at runtime. Pathfinder closes
-the gap where it can and says so precisely where it cannot.
+`alias jq = jaq` hides all of that until it fails at runtime. Pathfinder began
+as a shim in front of jaq that closed those gaps by rewriting filters; since
+0.2.0 it is its own jq. The engine is a hard fork of jaq's, in this
+repository, changed until it behaves as jq does, and it runs in process: one
+`execve`, nothing spawned. The few places it still differs are measured and
+listed.
 
 ## Status
 
 | | |
 |---|---|
 | Baseline | jq **1.8.1** |
-| Engine | `native`: the engine crates (jaq 3.1.1, forked), in process. `jaq`: jaq **3.0.0, 3.1.0, 3.1.1** (CI pins 3.1.0); the Nix package pins jaq 3.1.1 with [Pathfinder's patches](packaging/jaq/) and defaults to it until M24 |
-| Differential suite | **203 invocations**, byte-identical stdout and exit code |
-| jq's own test suite | **99.4%** (815/820) on the native engine and on the packaged jaq; **96.5%** (791/820) on a stock jaq; **100%** of the manual's examples on the first two — `make conformance` |
+| Engine | Pathfinder's engine crates (forked from jaq 3.1.1), in process |
+| Differential suite | **1 174 invocations**, byte-identical stdout and exit code against jq 1.8.1 |
+| jq's own test suite | **100%** (820/820) — `make conformance` |
 | Known unrepaired divergences | All in [`doc/DIVERGENCES.md`](doc/DIVERGENCES.md), measured |
 
 ## Install
@@ -54,13 +52,12 @@ nix run github:Spacecraft-Software/Pathfinder -- -r '.a' in.json   # try it
 To daily-drive it, add the flake as an input to your system or Home Manager
 configuration and put `packages.${system}.pathfinder-jq` in `home.packages`.
 That variant ships `bin/jq -> pathfinder`; `packages.${system}.default` is the
-binary alone, for when you want Pathfinder without it answering to `jq`. Taking
+binary alone, for when you want Pathfinder without it answering to `jq`. Both
+also ship `bin/mjq`, a short name for `pathfinder` itself. Taking
 over the `jq` name is always an explicit choice.
 
-The Nix build pins jaq by store path at compile time, so a missing or different
-`jaq` on `PATH` cannot break it, and no wrapper script sits in front of the
-binary — a `jq` call is still exactly one `execve` into Pathfinder and one into
-jaq.
+The package is one binary with no runtime dependencies and no wrapper script:
+a `jq` call is exactly one `execve`.
 
 Without Nix:
 
@@ -70,8 +67,7 @@ cargo build --release
 ```
 
 That creates `~/.local/bin/jq` pointing at the binary, and refuses to overwrite
-an existing `jq` without `--force`. `jaq` must then be on `PATH`, or named by
-`PATHFINDER_JAQ`. Check that `~/.local/bin` comes before any real jq on your
+an existing `jq` without `--force`; `make install` also installs `mjq`. Check that `~/.local/bin` comes before any real jq on your
 `PATH`, or the symlink never wins.
 
 Pathfinder never edits your shell configuration.
@@ -89,16 +85,15 @@ jq -n --jsonargs '$ARGS.positional' 1 '{"k":2}'
 Under its own name it also answers questions of its own:
 
 ```sh
-pathfinder --explain -c '[fromstream(tostream)]'   # what would jaq receive?
-pathfinder --version                               # which Pathfinder, which jaq?
+pathfinder --explain -c '.[1,2] |= empty'          # what would the engine run?
+pathfinder --version                               # which Pathfinder?
 pathfinder --install-shim ~/.local/bin [--force]
 ```
 
-`--explain` prints the translated argv, the assembled program, which polyfills
-were injected, whether the run will `exec` or pipe, and a warning if the filter
-assigns to a path. `--version` names Pathfinder's version, the jaq it would run
-and where that came from (`PATHFINDER_JAQ`, `pinned` or `PATH`), the maintainer
-and the website. `--install-shim` exits 5 when a different `jq` is already
+`--explain` prints the engine, the assembled program (and what was rewritten
+or injected into it), and how input and output are framed. `--version` names
+Pathfinder's version, the jq it reproduces, its engine, the maintainer and
+the website. `--install-shim` exits 5 when a different `jq` is already
 there and `--force` was not given, and 4 when the directory is not writable.
 
 These verbs are unavailable through the `jq` symlink on purpose: a script
@@ -128,7 +123,7 @@ such command is known:
 |---|---|---|
 | `INVALID_ARGUMENT` | 2 | jq's grammar rejects the command line |
 | `MISSING_ARGUMENT` | 2 | `--explain` with no filter on a terminal, or `-f` with no file |
-| `UNSUPPORTED` | 2 | a jq feature jaq cannot provide |
+| `UNSUPPORTED` | 2 | a jq feature Pathfinder cannot provide (`--stream`, `modulemeta`) |
 | `COMPILE_ERROR` | 3 | a filter jq refuses to compile; 3 is jq's own code, kept so both names agree, although the CLI Standard's table gives 3 to `NOT_FOUND` |
 | `GENERAL` | 1 | `--install-shim` could not create the link |
 | `PERMISSION_DENIED` | 4 | `--install-shim` into a directory that is not writable |
@@ -141,33 +136,33 @@ changes nothing. Agents should read [`SKILL.md`](SKILL.md).
 ## How it works
 
 ```
-argv[0] ──► parse jq's grammar ──► translate flags ──► exec jaq
-              (hand-rolled)          (whitelist)        └── or spawn + pipe
-                                                            for -a / --seq /
-                                                            multi-file input
+argv[0] ──► parse jq's command line ──► check the program ──► run the engine
+              (jq's grammar)              (jq's parser,          (in process)
+                                           jq's errors)
 ```
 
-- **The fast path is `exec`.** The process image is replaced by jaq's; there is
-  no second process and no copying. Cost over calling jaq directly: one
-  `execve`. This is the path for nearly every invocation.
-- **The filter is left byte-identical** unless it actually needs something —
-  most filters are passed through untouched.
-- **Polyfills are prepended on one line**, so jaq's reported line numbers still
-  match what you typed. A `def` of your own for the same name wins over the
-  injected one, because both jq and jaq take the last definition.
-- **Unknown flags are rejected, never forwarded.** jaq has `-i/--in-place` and jq
-  does not; forwarding would turn `jq -i '.' data.json` into a silent rewrite of
-  your file.
+- **jq's grammar, jq's errors.** The command line is parsed by a transcription
+  of jq's `main.c`; the program by a port of jq's lexer and bison grammar, so
+  a syntax error is reported where and as jq reports it.
+- **The program is left byte-identical** unless it needs something. An
+  update of several paths (`(.a, .b) |= f`) is rewritten, because jq defers
+  its deletions to the end; so are an unknown `@format`, which jq rejects at
+  run time, and a `?//` destructuring alternative. A program with an
+  `import` or `include` header is read by the engine's own parser and also
+  takes the rewrites that write jq's syntax as that parser reads it. A `def` of your own wins over anything injected.
+- **Unknown flags are rejected, never forwarded.** The engine's driver
+  started as jaq's command line, which has `-i/--in-place`; nothing of the
+  user's argv reaches it except through an option set from a jq flag.
 
 ## Scope
 
-Pathfinder will not silently change what a filter means. Where jaq's semantics
-differ from jq's in a way it does not repair — the number model, the order in
-which `(a,b) + (c,d)` combines — it documents rather than guessing.
+Pathfinder will not silently change what a filter means. Where it still
+differs from jq — `--stream`, module introspection, a date past the year
+5 881 600 — it refuses or documents rather than guessing.
 
 It also refuses to be *more* permissive than jq. `leaf_paths`, `ascii`,
-`isvalid`, `toarray`, `ANY`, `ALL`, `@base32` and friends are missing from jaq,
-but they are missing from jq 1.8.1 too, so Pathfinder does not define them.
+`isvalid`, `toarray`, `ANY`, `ALL`, `@base32` and friends are not jq 1.8.1
+builtins, so Pathfinder does not define them.
 Accepting a filter that real jq rejects would let a script pass here and break on
 the next machine.
 
@@ -175,7 +170,7 @@ the next machine.
 
 ```sh
 make check      # fmt + clippy + tests
-cargo test      # unit tests, plus the differential suite
+cargo test      # unit tests, the differential suite and jq's own suite
 ```
 
 The differential suite runs every case through **real jq** and through the shim
