@@ -38,6 +38,7 @@ conformance:
 # Refuses to clobber an existing jq; pass FORCE=--force to override.
 install: build
 	install -Dm755 target/release/pathfinder $(PREFIX)/bin/pathfinder
+	ln -sf pathfinder $(PREFIX)/bin/mjq
 	$(PREFIX)/bin/pathfinder --install-shim $(PREFIX)/bin $(FORCE)
 
 reuse:

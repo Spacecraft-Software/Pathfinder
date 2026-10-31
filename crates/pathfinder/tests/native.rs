@@ -72,9 +72,14 @@ fn temp_dir(tag: &str) -> PathBuf {
 
 /// The binary under the name `jq`, through a symlink in a temp dir.
 fn jq_shim() -> PathBuf {
-    let link = temp_dir("jq").join("jq");
+    shim_named("jq")
+}
+
+/// The binary under `name`, through a symlink in a temp dir.
+fn shim_named(name: &str) -> PathBuf {
+    let link = temp_dir(name).join(name);
     std::os::unix::fs::symlink(assert_cmd::cargo::cargo_bin("pathfinder"), &link)
-        .expect("can create the jq symlink");
+        .expect("can create the symlink");
     link
 }
 
@@ -446,6 +451,18 @@ fn json_without_a_verb_is_still_an_unknown_option() {
         err.starts_with("pathfinder: Unknown option --json\n"),
         "{err}"
     );
+}
+
+/// `mjq`, the packages' short name, is Pathfinder under another name: its
+/// own verbs answer, and a jq call runs as under either name.
+#[test]
+fn the_mjq_name_is_pathfinder() {
+    let mjq = shim_named("mjq");
+    let (code, out, _) = stdout_of(Command::new(&mjq).args(["--version", "--json"]));
+    assert_eq!(code, Some(0));
+    assert_eq!(document(&out)["data"]["engine"]["name"], "native");
+    let (code, out, _) = stdout_of(Command::new(&mjq).args(["-nc", "[1, 2] | add"]));
+    assert_eq!((code, out.as_str()), (Some(0), "3\n"));
 }
 
 #[test]

@@ -26,7 +26,12 @@
           (add-after 'install 'install-jq-shim
             (lambda* (#:key outputs #:allow-other-keys)
               (let ((bin (string-append (assoc-ref outputs "out") "/bin")))
-                (symlink "pathfinder" (string-append bin "/jq"))))))))
+                (symlink "pathfinder" (string-append bin "/jq")))))
+          ;; `mjq`: a short name for Pathfinder itself, which shadows nothing.
+          (add-after 'install 'install-mjq-alias
+            (lambda* (#:key outputs #:allow-other-keys)
+              (let ((bin (string-append (assoc-ref outputs "out") "/bin")))
+                (symlink "pathfinder" (string-append bin "/mjq"))))))))
     (home-page "https://Pathfinder.SpacecraftSoftware.org/")
     (synopsis "jq 1.8.1-compatible jq, with its own engine")
     (description

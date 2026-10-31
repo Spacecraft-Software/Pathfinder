@@ -7,6 +7,9 @@
   # can be added to a profile without silently taking over the `jq` name; the
   # flake exposes both variants.
   withJqShim ? false,
+  # Install `mjq`, a short name for Pathfinder itself: it answers as
+  # `pathfinder` does (its own verbs included), and shadows nothing.
+  withMjqAlias ? true,
 }:
 
 rustPlatform.buildRustPackage rec {
@@ -20,9 +23,13 @@ rustPlatform.buildRustPackage rec {
   # here. It skips cleanly when none is found; CI is where it actually runs.
   doCheck = true;
 
-  postInstall = lib.optionalString withJqShim ''
-    ln -s pathfinder "$out/bin/jq"
-  '';
+  postInstall =
+    lib.optionalString withJqShim ''
+      ln -s pathfinder "$out/bin/jq"
+    ''
+    + lib.optionalString withMjqAlias ''
+      ln -s pathfinder "$out/bin/mjq"
+    '';
 
   meta = with lib; {
     description = "jq 1.8.1-compatible jq, with its own engine";
