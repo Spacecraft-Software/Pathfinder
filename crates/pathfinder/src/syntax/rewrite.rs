@@ -390,14 +390,25 @@ impl Cx<'_> {
             out
         });
         let v = format!("$__pf_t{}", self.temps);
+        // The body is written once, as a definition taking every variable:
+        // pasted into each alternative, a chain of `?//` grew threefold per
+        // link (found by fuzzing, M24).
+        let f = format!("_pf_alt{}", self.temps);
         self.temps += 1;
+        // `($a; $b)`: the parameters, and the arguments passing them on.
+        let args = if vars.is_empty() {
+            String::new()
+        } else {
+            let list: Vec<String> = vars.iter().map(|v| format!("${v}")).collect();
+            format!("({})", list.join("; "))
+        };
         // jaq reads `.[0]` of an object as `null` where jq raises an error, so
         // an array pattern would match an object and the next alternative would
         // never be tried. Check first, with jq's message.
         let alt = |p: &str, pat: &super::Pattern| {
             let check =
                 array_check(pat).map_or_else(String::new, |c| format!("({v} | {c} | empty), "));
-            format!("({nulls}{check}({v} as {p} | {b}))")
+            format!("({nulls}{check}({v} as {p} | {f}{args}))")
         };
         let mut alts = pats.iter().zip(patterns).rev();
         let (last, last_pat) = alts.next().expect("more than one pattern");
@@ -405,7 +416,7 @@ impl Cx<'_> {
         for (p, pat) in alts {
             text = format!("(try {} catch {text})", alt(p, pat));
         }
-        format!("({s} as {v} | {text})")
+        format!("({s} as {v} | def {f}{args}: {b}; {text})")
     }
 
     /// Emit an update of several paths through jq's own `_modify`: the
@@ -692,5 +703,16 @@ mod tests {
     #[test]
     fn unparseable_programs_pass_through() {
         assert_eq!(rw(".[0,1] |= "), None);
+    }
+
+    #[test]
+    fn a_destructuring_body_is_written_once() {
+        let once = rw_native(".[] as [$a] ?// $a | $a + 1000").expect("rewritten");
+        assert_eq!(once.matches("1000").count(), 1, "{once}");
+        // Pasted into each alternative, 20 links were 3^20 copies.
+        let link = ".[] as $a ?// {a:$a} ?// {a:$a}";
+        let src = format!("{} | $a", vec![link; 20].join(" | "));
+        let text = rw_native(&src).expect("rewritten");
+        assert!(text.len() < 40 * src.len(), "{} bytes", text.len());
     }
 }

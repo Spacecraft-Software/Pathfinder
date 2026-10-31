@@ -16,7 +16,14 @@ def tostring: "\(.)";
 # Pathfinder: jq's `range/3` is a definition, binding its first argument
 # outermost; natives bind their last outermost, as jq's C builtins.
 def range($from; $upto; $by): _range($from; $upto; $by);
-def range(from; to): range(from; to; 1);
+# jq's `range/2` is its `RANGE` opcode, which takes only numbers; `range/3`
+# is a definition and takes anything. A number is above `true`, below "".
+# `RANGE` stops at `$from >= $upto` in C, never true of a NaN `$upto`, so
+# that counts as infinity (`infinite` is not defined yet here).
+def range($from; $upto):
+  if $from > true and $from < "" and $upto > true and $upto < ""
+  then _range($from; if $upto != $upto then 1e308 * 10 else $upto end; 1)
+  else error("Range bounds must be numeric") end;
 def range(to): range(0; to);
 def repeat(f): def rec: f, rec; rec;
 def recurse(f): def rec: ., (f | rec); rec;

@@ -350,11 +350,18 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
   (`def`, `repeat`, `while`, `until`, `recurse(`, `halt`, `debug`, `stderr`,
   numbers of four digits or with an exponent) and caps inputs and outputs;
   what remains unbounded is cut off by `-timeout`/`-rss_limit_mb`, so a
-  timeout or OOM there is not a finding without a bounded reproducer. Its
-  first finding, a panic on `[1 #`, is fixed in the engine's lexer.
+  timeout or OOM there is a finding only if real jq is faster on it: run
+  the artifact through both. M24's 24 h run found `range("")` counting for
+  ever that way, and `syntax` a chain of `?//` growing threefold per link.
+  The target's first finding, a panic on `[1 #`, is fixed in the engine's
+  lexer.
 - A crash is reproduced with `cargo fuzz run -s none <target> <artifact>`.
   A crash gets a fix and a test where it happened: a unit test in the shim,
   a differential case or an engine crate test in the engine.
+- A job can hang after its timeout fires (`-s none`, M24: `ALARM: working
+  on the last Unit`, then no CPU for five hours), and `-fork`'s parent waits
+  on it. In a long run, check that each target's log still grows; killing
+  the stuck job lets the parent go on.
 - `fuzz/seeds/` is committed (jq's suite for `syntax`/`engine`); `corpus/`,
   `artifacts/` and `target/` are not.
 

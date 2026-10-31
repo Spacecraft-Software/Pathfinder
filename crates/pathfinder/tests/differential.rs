@@ -222,6 +222,23 @@ static CASES: &[Case] = &[
         "[1]",
         &["-c", r#"[. as [$a] ?// $b | (1, 2, error("boom"))]?"#],
     ),
+    // The body of a chain of alternatives, once grown threefold per link
+    // (found by fuzzing, M24); variables from outside, and `def`s.
+    c(
+        "[[[[[[[[1]]]]]]]]",
+        &[
+            "-c",
+            ".[] as $a ?// {a:$a} | .[] as [$b] ?// $b | .[] as $c ?// [$c] | \
+             .[] as [$d] ?// {d:$d} ?// $d | .[] as $e ?// {e:$e} | [$a,$b,$c,$d,$e]",
+        ],
+    ),
+    c(
+        "[[1],2,{\"a\":3}]",
+        &[
+            "-c",
+            "1 as $x | def f: 3; [.[] as [$a] ?// $a | [$a, $x, f]]",
+        ],
+    ),
     c(
         r#"{"b":[1,2]}"#,
         &["-c", ". as {$b: [$c, $d]} | [$b, $c, $d]"],
@@ -1818,6 +1835,20 @@ static NATIVE_CASES: &[Case] = &[
     ),
     c("[3,4]", &["-c", "try ([range(0; 6; 0)]) catch ."]),
     c("[3,4]", &["-c", "try ([range(0;1;nan)]) catch ."]),
+    // `range/1` and `range/2` take only numbers, `range/3` anything; a
+    // string bound once counted up for ever (found by fuzzing, M24).
+    c("null", &["-c", "try range(\"\") catch ."]),
+    c("null", &["-c", "[range(1, \"a\"; 3)]"]),
+    c("null", &["-c", "[range(1; 2, null)]"]),
+    c("null", &["-c", "try ([range([]; 3)]) catch ."]),
+    c("null", &["-c", "[range(0; {})?]"]),
+    c("null", &["-c", "[range(null; 3; 1)]"]),
+    c("null", &["-c", "[limit(3; range(0; \"a\"; 1))]"]),
+    c("null", &["-c", "[limit(3; range(nan))]"]),
+    c("null", &["-c", "[limit(3; range(nan; 3))]"]),
+    c("null", &["-c", "[limit(3; range(0; nan; 1))]"]),
+    c("{}", &["-c", "transpose"]),
+    c("[]", &["-c", "transpose"]),
     c("[3,4]", &["-c", "try ([nan, infinite, -infinite]) catch ."]),
     // C's `(int)` cast for math functions' integer arguments, and C's
     // `scalb` (M20, T-026).

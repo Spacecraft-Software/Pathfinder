@@ -11,7 +11,7 @@ Everything here was measured against **jq 1.8.1's release binary** (the
 declared baseline; see `AGENTS.md` for how to fetch it), not inferred. What
 Pathfinder *does* reproduce is not listed: the differential suite
 (`crates/pathfinder/tests/differential.rs`) asserts byte-for-byte agreement
-with jq on 1 177 invocations, stdout and exit status, and a part of it stderr
+with jq on 1 191 invocations, stdout and exit status, and a part of it stderr
 too; jq's own test suite passes 820 of 820.
 
 Until 0.2.0 Pathfinder could also run on a jaq binary (`PATHFINDER_ENGINE=jaq`),
@@ -44,9 +44,23 @@ rather than answering differently.
   result 1`.
 - **An update through `try … catch`.** `(try .a catch .b) |= 1` updates `.a` in
   jq; here it fails with `invalid path expression with input …`.
+- **A path through `?//`.** `path(.[] as [$a] ?// $a | .)` is `[]` for each
+  element in jq; here it fails with `Invalid path expression with result …`,
+  because the alternatives are tried with `try … catch`.
 - **`break` inside a `?//` alternative.** jq treats it as an error and tries the
   next alternative: `[label $o | .[] as [$a] ?// $a | if $a == 1 then break $o
   else $a end]` on `[[1],2]` is `[[1],2]` in jq and `[]` here.
+
+## Regular expressions
+
+- **The retry limit.** Oniguruma gives up a match after 10 000 000 steps of
+  its own (`retry-limit-in-match over`); `pathfinder-regex` counts its
+  backtracks instead, and of Oniguruma's search optimisation it has only the
+  required-literal check (TODO T-044). A pattern that backtracks without end
+  on its text, such as `.{0,9}{0,9}.++++.*`, therefore can fail here where jq
+  answers, or answer after seconds where jq rules the text out at once
+  (`.{4}{3,}{3}?+…` on a text too short for it). Found by fuzzing; both give
+  the same answer on the rest of what was found.
 
 ## Input and output
 

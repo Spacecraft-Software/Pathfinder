@@ -91,9 +91,11 @@ one does, its Unicode tables generated from Oniguruma's data files.
 - [x] T-051 `mjq`, a short name for `pathfinder`, installed by the Nix, Guix and Arch packages and `make install`
 - [x] T-052 (P-080) README, AGENTS.md, SKILL.md, the Texinfo manual, `crates/UPSTREAM.md` and `doc/DIVERGENCES.md` describe one engine; every divergence re-measured
 - [x] T-053 (P-079) Benchmarks against jq 1.8.1 and jaq 3.1.2 recorded in `doc/DIVERGENCES.md`
-- [ ] T-054 (P-079) 24 h of fuzzing clean, all four targets (started 2026-10-31T04:11Z)
+- [ ] T-054 (P-079) 24 h of fuzzing clean, all four targets (`jqargs`, `regex` from 2026-10-31T04:11Z; `engine`, `syntax` again on the fixed build from 2026-10-31T14:24Z, after T-057 and T-058)
 - [x] T-055 (P-081) Version 0.2.0
 - [ ] T-056 (P-081) Bravais on Pathfinder 0.2.0 (`nix flake update pathfinder`), then the `v0.2.0` tag
+- [x] T-057 (P-079, fuzzing) `range/1` and `range/2` take only numbers, as jq's `RANGE` opcode: `range("")` counted up for ever; a NaN bound counts for ever, as in jq; `transpose` is jq's definition
+- [x] T-058 (P-079, fuzzing) The body of a `?//` chain is written once, as a definition: pasted into each alternative it grew threefold per link (12 links, 2 GB)
 
 ## Standing
 
