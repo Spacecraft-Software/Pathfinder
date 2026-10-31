@@ -27,8 +27,7 @@
 //! - `FLOOR` is the pass count the shim must not fall below. It is a ratchet:
 //!   raise it in the change that raises the score, never lower it.
 //!
-//! The suite needs jaq, not jq: the expected outputs are in the files. It skips
-//! when jaq cannot be run, unless `PATHFINDER_REQUIRE_JAQ` is set, as CI does.
+//! The suite needs no jq: the expected outputs are in the files.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read as _, Write as _};
@@ -232,28 +231,6 @@ fn exe_under_test(scratch: &Path) -> PathBuf {
     link
 }
 
-/// The engine the shim runs, as it reports it: `native` (in process),
-/// `patched` (Pathfinder's patched jaq, `packaging/jaq/`) or `stock` (any
-/// other jaq). Asked of `pathfinder --version --json`, so it follows
-/// `PATHFINDER_ENGINE`, the build's default and the jaq lookup exactly.
-fn engine() -> &'static str {
-    let out = Command::new(env!("CARGO_BIN_EXE_pathfinder"))
-        .args(["--version", "--json"])
-        .output()
-        .expect("pathfinder runs");
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("a JSON report");
-    let engine = &v["data"]["engine"];
-    if engine["name"] == "native" {
-        return "native";
-    }
-    let jaq = engine["path"].as_str().unwrap_or("jaq");
-    let patched = Command::new(jaq)
-        .arg("--version")
-        .output()
-        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("+pathfinder"));
-    if patched { "patched" } else { "stock" }
-}
-
 fn read_list(name: &str) -> String {
     std::fs::read_to_string(suite_dir().join(name)).unwrap_or_default()
 }
@@ -268,17 +245,12 @@ fn jq_suite_conformance() {
     std::fs::create_dir_all(&scratch).expect("scratch dir");
     let exe = exe_under_test(&scratch);
 
-    // Can the shim reach jaq at all? A missing engine is an environment
-    // problem, not a conformance result. (The native engine is never
-    // missing.)
-    if run(&exe, ".", "1").0 == Some(127) {
-        assert!(
-            std::env::var_os("PATHFINDER_REQUIRE_JAQ").is_none(),
-            "PATHFINDER_REQUIRE_JAQ is set but the shim cannot execute jaq"
-        );
-        eprintln!("skipping: the shim cannot execute jaq");
-        return;
-    }
+    assert_ne!(
+        run(&exe, ".", "1").0,
+        Some(127),
+        "the program under test cannot be executed: {}",
+        exe.display()
+    );
 
     let mut files: Vec<PathBuf> = std::fs::read_dir(suite_dir())
         .expect("suite dir")
@@ -379,13 +351,7 @@ fn jq_suite_conformance() {
         eprintln!("failures:\n{}", failures.join("\n"));
     }
 
-    // Each engine has its own ratchet: the patched jaq and the native engine
-    // pass more of the suite than a stock jaq.
-    let floor_file = match engine() {
-        "native" => "FLOOR-native",
-        "patched" => "FLOOR-patched",
-        _ => "FLOOR",
-    };
+    let floor_file = "FLOOR";
     let floor: usize = read_list(floor_file)
         .lines()
         .find(|l| !l.starts_with('#') && !l.trim().is_empty())

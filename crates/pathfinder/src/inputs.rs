@@ -1,36 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Several input files, fed to jaq as the one stream jq reads them as.
+//! Several input files, read as the one stream jq reads them as.
 //!
 //! jq reads its files one after another as a single stream, with nothing
 //! between them: `12` in one file and `34` in the next are the number `1234`.
-//! jaq runs the program once per file, so Pathfinder concatenates the files
-//! onto jaq's stdin instead (see `translate::concat_inputs`).
+//! The engine's driver runs the program once per file, so Pathfinder reads
+//! the files as one stream instead (see `translate::concat_inputs`).
 //!
 //! jq still knows which file it is reading. An uncaught error is reported at
 //! `a.json:3`, the line count starting again in each file, and a file that
 //! cannot be opened is reported when the reader reaches it. So the files are
-//! also described to jaq in [`INPUTS_ENV`]: names, byte counts, and the jq
-//! message for one that cannot be read. Pathfinder's patched jaq uses it to
-//! report as jq does; a stock jaq ignores it.
+//! also described to the driver as [`jaq::Segment`]s: names, byte counts, and
+//! the jq message for one that cannot be read.
 //!
-//! Byte counts have to be known before jaq starts. A regular file's is its
-//! size; any other input that is not the last (stdin, a FIFO, a process
+//! Byte counts have to be known before the engine starts. A regular file's is
+//! its size; any other input that is not the last (stdin, a FIFO, a process
 //! substitution) is read into memory first, and so is every input but the
 //! last under `--seq`, whose separators are stripped. The last input needs no
 //! count and is always streamed.
 
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 
 use crate::post;
-
-/// The variable Pathfinder's patched jaq reads the description from; the
-/// format is documented beside its reader, `jaq/src/jq.rs` in the patched
-/// source (`packaging/jaq/`).
-pub const INPUTS_ENV: &str = "PATHFINDER_INPUTS";
 
 /// Where an input's bytes come from.
 enum Source {
@@ -141,55 +135,7 @@ fn strerror(e: &io::Error) -> String {
     }
 }
 
-/// The value of [`INPUTS_ENV`]: per input, `<bytes>:<name length>:<name>`
-/// then `<message length>:<message>`, the message empty for a readable one.
-/// Lengths are in bytes. The text is UTF-8: a name that is not is described
-/// lossily, as the failure message shows it.
-pub fn describe(inputs: &[Input]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    for input in inputs {
-        let name = input.name.to_string_lossy();
-        let failure = input.failure().unwrap_or_default();
-        let (len, n, m) = (input.len(), name.len(), failure.len());
-        let _ = write!(out, "{len}:{n}:{name}{m}:{failure}");
-    }
-    out
-}
-
-/// Write the inputs one after another, with nothing between them, as jq
-/// reads them; with RS stripped if `--seq` asked for it.
-pub fn feed(sink: &mut impl Write, inputs: Vec<Input>, strip: bool) -> io::Result<()> {
-    for input in inputs {
-        match input.source {
-            Source::File(file, len) => {
-                // Exactly the length described, should the file grow. One
-                // that shrinks meanwhile makes the stream shorter than
-                // described: later locations name a file too early.
-                let mut file = file.take(len);
-                if strip {
-                    post::strip_rs(&mut file, sink)?;
-                } else {
-                    io::copy(&mut file, sink)?;
-                }
-            }
-            Source::Bytes(bytes) => sink.write_all(&bytes)?,
-            Source::Stdin => {
-                let mut stdin = io::stdin().lock();
-                if strip {
-                    post::strip_rs(&mut stdin, sink)?;
-                } else {
-                    io::copy(&mut stdin, sink)?;
-                }
-            }
-            Source::Failed(_) => {}
-        }
-    }
-    Ok(())
-}
-
-/// The inputs as the in-process engine's [`jaq::Segment`]s: what
-/// [`describe`] tells a jaq binary, without the environment.
+/// The inputs as the engine's [`jaq::Segment`]s.
 pub fn segments(inputs: &[Input]) -> Vec<jaq::Segment> {
     inputs
         .iter()
@@ -200,14 +146,16 @@ pub fn segments(inputs: &[Input]) -> Vec<jaq::Segment> {
         .collect()
 }
 
-/// The inputs one after another as one stream, as [`feed`] writes them,
-/// for the in-process engine to read.
+/// The inputs one after another as one stream, with nothing between them, as
+/// jq reads them; with RS stripped if `--seq` asked for it.
 pub fn reader(inputs: Vec<Input>, strip: bool) -> impl Read {
     let parts: Vec<Box<dyn Read>> = inputs
         .into_iter()
         .filter_map(|input| -> Option<Box<dyn Read>> {
             let part: Box<dyn Read> = match input.source {
-                // As in `feed`: exactly the length described.
+                // Exactly the length described, should the file grow. One
+                // that shrinks meanwhile makes the stream shorter than
+                // described: later locations name a file too early.
                 Source::File(file, len) => Box::new(file.take(len)),
                 Source::Bytes(bytes) => return Some(Box::new(io::Cursor::new(bytes))),
                 Source::Stdin => Box::new(io::stdin().lock()),
@@ -258,31 +206,8 @@ impl<I: Iterator<Item = Box<dyn Read>>> Read for Concat<I> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Input, Source, describe, strerror};
-    use std::ffi::OsString;
+    use super::strerror;
     use std::io;
-
-    #[test]
-    fn describes_names_lengths_and_failures() {
-        let inputs = [
-            Input {
-                name: OsString::from("a.json"),
-                source: Source::Bytes(b"1\n2\n".to_vec()),
-            },
-            Input {
-                name: OsString::from("no:such"),
-                source: Source::Failed("Could not open file no:such: x".to_owned()),
-            },
-            Input {
-                name: OsString::from("<stdin>"),
-                source: Source::Stdin,
-            },
-        ];
-        assert_eq!(
-            describe(&inputs),
-            "4:6:a.json0:0:7:no:such30:Could not open file no:such: x0:7:<stdin>0:"
-        );
-    }
 
     #[test]
     fn strerror_drops_the_os_error_number() {

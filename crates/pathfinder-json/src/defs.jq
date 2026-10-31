@@ -3,7 +3,7 @@ def _totype(p; e): if p then . else fromjson | if p then . else e end end;
 # Pathfinder: `tonumber` and `toboolean` are native, as jq 1.8.1's.
 
 # Arrays
-def transpose: [range([.[] | length] | max) as $i | [.[][$i]]];
+def transpose: [range(0; map(length)|max // 0) as $i | [.[][$i]]];
 
 # Indexing
 def in(xs)    : . as $x | xs | has     ($x);

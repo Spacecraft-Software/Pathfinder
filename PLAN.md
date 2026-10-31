@@ -80,7 +80,7 @@ the same change.
 
 ## M24 — Release
 
-- [ ] P-078 The jaq engine path and `packaging/jaq/` are removed; Nix builds one binary
+- [x] P-078 The jaq engine path and `packaging/jaq/` are removed; Nix builds one binary
 - [ ] P-079 24 h of fuzzing clean; benchmarks recorded in `doc/DIVERGENCES.md`
-- [ ] P-080 README, AGENTS.md, SKILL.md, the Texinfo manual and `DIVERGENCES.md` describe the engine
+- [x] P-080 README, AGENTS.md, SKILL.md, the Texinfo manual and `DIVERGENCES.md` describe the engine
 - [ ] P-081 Bravais switched to the native engine; version 0.2.0

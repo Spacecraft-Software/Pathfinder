@@ -76,9 +76,9 @@ const COMMANDS: &[Command] = &[
     Command {
         tool: "pathfinder_explain",
         synopsis: "pathfinder --explain [--json] [OPTIONS] FILTER",
-        description: "Show how a jq call would run (engine, rewritten program, jaq command line) without running it.",
+        description: "Show how a jq call would run (engine, rewritten program, input and output framing) without running it.",
         parameters: JQ_CALL,
-        output_schema: r#"{"type":"object","properties":{"engine":{"type":"string","enum":["native","jaq"]},"jaq_argv":{"type":"array","items":{"type":"string"}},"program":{"type":"object","properties":{"rewritten":{"type":"boolean"},"injected":{"type":"array","items":{"type":"string"}},"shadowed":{"type":"array","items":{"type":"string"}},"syntax_rewritten":{"type":"boolean"},"text":{"type":"string"}},"required":["rewritten"]},"execution":{"type":"string","enum":["in-process","exec","pipe"]},"stdout":{"type":"object","properties":{"ascii":{"type":"boolean"},"seq":{"type":"boolean"}}},"stdin":{"type":"object","properties":{"strip_rs":{"type":"boolean"},"concat_files":{"type":"integer"}}}},"required":["engine","jaq_argv","program","execution","stdout","stdin"]}"#,
+        output_schema: r#"{"type":"object","properties":{"engine":{"type":"string","enum":["native"]},"program":{"type":"object","properties":{"rewritten":{"type":"boolean"},"injected":{"type":"array","items":{"type":"string"}},"shadowed":{"type":"array","items":{"type":"string"}},"syntax_rewritten":{"type":"boolean"},"text":{"type":"string"}},"required":["rewritten"]},"execution":{"type":"string","enum":["in-process"]},"stdout":{"type":"object","properties":{"ascii":{"type":"boolean"},"seq":{"type":"boolean"}}},"stdin":{"type":"object","properties":{"strip_rs":{"type":"boolean"},"concat_files":{"type":"integer"}}}},"required":["engine","program","execution","stdout","stdin"]}"#,
         exit_codes: &[
             (0, "SUCCESS"),
             (2, "USAGE_ERROR or UNSUPPORTED"),
@@ -86,11 +86,11 @@ const COMMANDS: &[Command] = &[
         ],
         examples: &[
             (
-                "pathfinder --explain -c '.a.b = 1'",
-                "The rewritten assignment, as text",
+                "pathfinder --explain -c '.[1,2] |= empty'",
+                "The rewritten update of several paths, as text",
             ),
             (
-                "pathfinder --explain --json -c '.a.b = 1'",
+                "pathfinder --explain --json -c '.[1,2] |= empty'",
                 "The same, as one JSON document",
             ),
         ],
@@ -103,10 +103,13 @@ const COMMANDS: &[Command] = &[
         synopsis: "pathfinder --version [--json]",
         description: "Report Pathfinder's version, the jq it reproduces, and the engine a jq call runs on.",
         parameters: NONE,
-        output_schema: r#"{"type":"object","properties":{"version":{"type":"string"},"jq_baseline":{"type":"string"},"engine":{"type":"object","properties":{"name":{"type":"string","enum":["native","jaq"]},"selected_by":{"type":"string","enum":["PATHFINDER_ENGINE","built-in","default"]},"path":{"type":"string"},"source":{"type":"string","enum":["PATHFINDER_JAQ","pinned","PATH"]}},"required":["name","selected_by"]}},"required":["version","jq_baseline","engine"]}"#,
+        output_schema: r#"{"type":"object","properties":{"version":{"type":"string"},"jq_baseline":{"type":"string"},"engine":{"type":"object","properties":{"name":{"type":"string","enum":["native"]}},"required":["name"]}},"required":["version","jq_baseline","engine"]}"#,
         exit_codes: &[
             (0, "SUCCESS"),
-            (2, "USAGE_ERROR: PATHFINDER_ENGINE names no engine"),
+            (
+                2,
+                "USAGE_ERROR: PATHFINDER_ENGINE asks for the removed jaq engine",
+            ),
         ],
         examples: &[
             ("pathfinder --version", "As text"),
@@ -184,11 +187,7 @@ const COMMANDS: &[Command] = &[
 const ENVIRONMENT: &[(&str, &str)] = &[
     (
         "PATHFINDER_ENGINE",
-        "native (in process) or jaq (a jaq binary); unset, the build's default",
-    ),
-    (
-        "PATHFINDER_JAQ",
-        "the jaq binary for the jaq engine; wins over the build's pin and PATH",
+        "unset, empty or native; any other value fails (the jaq engine was removed in 0.2.0)",
     ),
     (
         "PATHFINDER_NO_REWRITE",

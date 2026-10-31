@@ -1,2 +1,3 @@
-# Minimum passing count for tests/conformance.rs. A ratchet: raise only.
-791
+# Minimum passing count for tests/conformance.rs on Pathfinder's engine.
+# A ratchet: raise only.
+820

@@ -46,16 +46,6 @@ path = ["crates/pathfinder/src/embed/jq-help.txt", "crates/pathfinder/src/embed/
 SPDX-FileCopyrightText = "2012 Stephen Dolan and jq contributors"
 SPDX-License-Identifier = "MIT"
 
-# Patches to jaq's source (packaging/jaq/), applied by packaging/default.nix.
-# Derived from jaq, which is MIT: the jaq text they carry keeps that licence
-# (Standard §4.2), and Pathfinder's changes are offered under
-# GPL-3.0-or-later or MIT, at the recipient's choice. As a whole each file
-# can therefore always be used under MIT.
-[[annotations]]
-path = ["packaging/jaq/*.patch"]
-SPDX-FileCopyrightText = ["Michael Färber <michael.faerber@gedenkt.at> and jaq contributors", "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
-SPDX-License-Identifier = "MIT AND (GPL-3.0-or-later OR MIT)"
-
 # Fuzz seeds for jq's command line (NUL-separated argv) and for the regex
 # engine (pattern NUL text NUL flags), which cannot carry a header.
 [[annotations]]
@@ -63,15 +53,9 @@ path = ["fuzz/seeds/jqargs/**", "fuzz/seeds/regex/**"]
 SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
-# The pass-count ratchet for the patched engine.
-[[annotations]]
-path = ["crates/pathfinder/tests/jq-suite/FLOOR-patched", "crates/pathfinder/tests/jq-suite/FLOOR-native"]
-SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
-SPDX-License-Identifier = "GPL-3.0-or-later"
-
 # The engine: jaq 3.1.1's jaq-core, jaq-std, jaq-json, jaq-fmts, jaq-all (as
 # pathfinder-all) and jaq's CLI (as pathfinder-jaq), imported as a hard fork
-# (crates/UPSTREAM.md) with packaging/jaq/ applied. jaq is MIT and its files
+# (crates/UPSTREAM.md) with Pathfinder's patch set applied. jaq is MIT and its files
 # carry no headers; upstream states its copyright only through the crates'
 # `authors` field, quoted here. The imported text keeps that licence and that
 # notice (Standard §4.2). Pathfinder's changes to these files, and the files

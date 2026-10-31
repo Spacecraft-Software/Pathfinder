@@ -5,13 +5,12 @@
   #:use-module (guix packages)
   #:use-module (guix git-download)
   #:use-module (guix build-system cargo)
-  #:use-module ((guix licenses) #:prefix license:)
-  #:use-module (gnu packages jq))
+  #:use-module ((guix licenses) #:prefix license:))
 
 (define-public pathfinder
   (package
     (name "pathfinder")
-    (version "0.1.0")
+    (version "0.2.0")
     (source (local-file "../." "pathfinder-checkout"
                         #:recursive? #t))
     (build-system cargo-build-system)
@@ -27,18 +26,20 @@
           (add-after 'install 'install-jq-shim
             (lambda* (#:key outputs #:allow-other-keys)
               (let ((bin (string-append (assoc-ref outputs "out") "/bin")))
-                (symlink "pathfinder" (string-append bin "/jq"))))))))
-    ;; jaq is a runtime dependency: Pathfinder implements none of the jq
-    ;; language and is useless without it.
-    (inputs (list jaq))
+                (symlink "pathfinder" (string-append bin "/jq")))))
+          ;; `mjq`: a short name for Pathfinder itself, which shadows nothing.
+          (add-after 'install 'install-mjq-alias
+            (lambda* (#:key outputs #:allow-other-keys)
+              (let ((bin (string-append (assoc-ref outputs "out") "/bin")))
+                (symlink "pathfinder" (string-append bin "/mjq"))))))))
     (home-page "https://Pathfinder.SpacecraftSoftware.org/")
-    (synopsis "jq-compatible shim over jaq")
+    (synopsis "jq 1.8.1-compatible jq, with its own engine")
     (description
-     "Pathfinder accepts jq's command line, translates it into jaq's, rewrites
-the filter when a missing builtin needs supplying, and hands off to jaq.
-Installed as @command{jq} it lets existing scripts keep working while jaq does
-the actual work.  Divergences that cannot be repaired from the filter level are
-documented rather than silently papered over.")
+     "Pathfinder accepts jq's command line and runs jq programs as jq 1.8.1
+does, on an engine of its own grown from jaq's: jq's numbers, errors,
+regular expressions (an Oniguruma port) and time functions.  Installed as
+@command{jq} it lets existing scripts keep working.  The few places it
+differs from jq are documented rather than silently papered over.")
     (license license:gpl3+)))
 
 pathfinder
