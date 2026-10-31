@@ -37,7 +37,7 @@ pub fn die(prog: &str, line: &str) -> ! {
 /// from jq's without telling anyone, which is the one failure mode a
 /// compatibility shim must never have.
 pub fn unsupported(prog: &str, feature: &str, detail: &str) -> ! {
-    eprintln!("{prog}: {feature} is not supported by jaq, so Pathfinder cannot emulate it.");
+    eprintln!("{prog}: {feature} is not supported by Pathfinder.");
     eprintln!("{prog}: {detail}");
     eprintln!("{prog}: see doc/DIVERGENCES.md in the Pathfinder source tree.");
     std::process::exit(EXIT_USAGE);

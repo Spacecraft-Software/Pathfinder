@@ -41,18 +41,29 @@ pub fn check() -> Result<(), String> {
 /// Several input files are read as one stream, described by
 /// [`jaq::Segment`]s; `--seq` input loses its separators on the way in; `-a`
 /// and `--seq` output is framed on the way out by [`Framer`].
-pub fn run(plan: &Plan) -> i32 {
+pub fn run(mut plan: Plan) -> i32 {
     jaq::init_logging();
     let strip = plan.strip_input_rs;
-    let (input, segments): (Box<dyn Read>, Vec<jaq::Segment>) = match &plan.concat_inputs {
-        Some(files) => {
-            let inputs = inputs::open(files, strip);
-            let segments = inputs::segments(&inputs);
-            (Box::new(inputs::reader(inputs, strip)), segments)
-        }
-        None if strip => (Box::new(post::StripRs(io::stdin().lock())), Vec::new()),
-        None => (Box::new(io::stdin().lock()), Vec::new()),
+    // One input file is the driver's to read, which it does faster than the
+    // stream several are read as; but one it cannot open is read as a
+    // stream, so that it is reported in jq's words (`Could not open file`).
+    let unreadable = match plan.cli.files.as_slice() {
+        [one] if !readable(one) => Some(vec![one.clone().into_os_string()]),
+        _ => None,
     };
+    if unreadable.is_some() {
+        plan.cli.files.clear();
+    }
+    let (input, segments): (Box<dyn Read>, Vec<jaq::Segment>) =
+        match unreadable.as_ref().or(plan.concat_inputs.as_ref()) {
+            Some(files) => {
+                let inputs = inputs::open(files, strip);
+                let segments = inputs::segments(&inputs);
+                (Box::new(inputs::reader(inputs, strip)), segments)
+            }
+            None if strip => (Box::new(post::StripRs(io::stdin().lock())), Vec::new()),
+            None => (Box::new(io::stdin().lock()), Vec::new()),
+        };
 
     // jaq's choice: unbuffered to a terminal, so each value shows at once,
     // block-buffered otherwise.
@@ -75,4 +86,12 @@ pub fn run(plan: &Plan) -> i32 {
         code
     };
     i32::from(code)
+}
+
+/// Whether the driver can read `path` as a file: it opens, and is not a
+/// directory (which opens on Linux and fails on the first read).
+fn readable(path: &std::path::Path) -> bool {
+    std::fs::File::open(path)
+        .and_then(|f| f.metadata())
+        .is_ok_and(|m| !m.is_dir())
 }

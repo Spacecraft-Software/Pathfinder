@@ -2406,6 +2406,10 @@ static NATIVE_CASES: &[Case] = &[
 
 /// Cases needing input files, which are created in a temp dir at run time.
 static FILE_CASES: &[Case] = &[
+    // One input file that cannot be read: jq's message, exit 2.
+    c("", &["-c", ".", "no-such-file.json"]),
+    c("", &["-nc", "[inputs]", "no-such-file.json"]),
+    c("", &["-c", ".", "."]),
     c("", &["-c", ".", "f1.json"]),
     c("", &["-c", ".", "f1.json", "f2.json"]),
     c("", &["-c", "input_filename", "f1.json"]),

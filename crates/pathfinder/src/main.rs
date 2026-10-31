@@ -145,7 +145,7 @@ fn main() {
         return;
     }
 
-    std::process::exit(engine::run(&plan));
+    std::process::exit(engine::run(plan));
 }
 
 /// Run a native verb that takes no jq call, and end the process; any other
