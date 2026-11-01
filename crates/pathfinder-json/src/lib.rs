@@ -533,7 +533,10 @@ fn skip_take_chars(range: val::Range<num::PosUsize>, b: &[u8]) -> (usize, usize)
         if pos {
             chars.nth(c).unwrap_or(b.len())
         } else {
-            chars.nth_back(c - 1).unwrap_or(0)
+            // Pathfinder: `-0` (a bound in (-1, 0), rounded) is the end, as
+            // in jq, where `c - 1` wrapped and `"abcd"[:-0.5]` was `""`.
+            c.checked_sub(1)
+                .map_or(b.len(), |c| chars.nth_back(c).unwrap_or(0))
         }
     };
     let from_byte = range.start.map_or(0, byte_index);
