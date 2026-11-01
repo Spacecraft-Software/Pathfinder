@@ -550,6 +550,11 @@ static CASES: &[Case] = &[
         "[0,1,2,3,4]",
         &["-c", ".[1.1] = 5, del(.[1.5]), (.[1.5:3.5] = [\"x\"])"],
     ),
+    // A bound in (-1, 0) is the end of a string, not its start (found by
+    // fuzzing, M24): the first slice of a string, then a second of it.
+    c("\"abcd\"", &["-c", "[.[:-0.99], .[-0.5:], .[:-0.0]]"]),
+    c("\"aé\"", &["-c", ".[:-0.5]"]),
+    c("\"abcd\"", &["-c", ". as $s | [range(3) | $s[:-0.5]]"]),
     c(
         "[-1, 1, 2, 3, 1000000000000000000]",
         &["-c", "map([1,2][0:.])"],

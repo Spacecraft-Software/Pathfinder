@@ -11,7 +11,7 @@ Everything here was measured against **jq 1.8.1's release binary** (the
 declared baseline; see `AGENTS.md` for how to fetch it), not inferred. What
 Pathfinder *does* reproduce is not listed: the differential suite
 (`crates/pathfinder/tests/differential.rs`) asserts byte-for-byte agreement
-with jq on 1 191 invocations, stdout and exit status, and a part of it stderr
+with jq on 1 194 invocations, stdout and exit status, and a part of it stderr
 too; jq's own test suite passes 820 of 820.
 
 Until 0.2.0 Pathfinder could also run on a jaq binary (`PATHFINDER_ENGINE=jaq`),
