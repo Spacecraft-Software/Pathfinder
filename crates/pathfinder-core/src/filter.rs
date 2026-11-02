@@ -371,36 +371,99 @@ fn cartesian_rl<'a, D: DataT>(
     })
 }
 
-/// Pathfinder: `path.update(cv, f)`, failing where jq's update fails. jq
-/// finds a target's paths before it updates, so a target that is no path
-/// expression fails as `path(target)` does (`Invalid path expression near
-/// attempt to iterate through …`, patch 0010), where jaq's update said
-/// `invalid path expression with input …`.
+/// Pathfinder: `path |= f` as jq 1.8.1 runs it. jq's `_modify` (and
+/// `_assign` for `=`) is `reduce path(paths) as $p (.; setpath($p; getpath($p)
+/// | f))`: every path is found on the input, before any update, so a target
+/// that is no path expression fails as `path(target)` does, and a target
+/// whose paths depend on what was written (`recurse = [1]`, `.. |= [.]`)
+/// still updates only the input's paths, where updating as the target is
+/// walked never ended. A path `f` yields nothing for is deleted at the end,
+/// all such paths together. A plain path has the same paths whatever is
+/// written, so it is updated natively, in one pass.
 fn update_jq<'a, D: DataT>(
     path: &'a Id,
     cv: Cv<'a, D>,
     f: BoxUpdate<'a, D::V<'a>>,
 ) -> ValXs<'a, D::V<'a>> {
-    // A plain path cannot fail as no path expression, and keeping a second
-    // reference to the input would make every in-place update copy it.
+    // Keeping a second reference to the input would make every in-place
+    // update copy it, so a plain path does without.
     if plain_path(path, cv.0.lut()) {
         return path.update(cv, f);
     }
-    let (ctx, input) = (cv.0.clone(), cv.1.clone());
-    Box::new(path.update(cv, f).map(move |r| match r {
-        Err(e) if e.is_path_expr() => {
-            let mut paths = path.paths((ctx.clone(), (input.clone(), RcList::default())));
-            // The first failure `path(target)` would report, a lost path's
-            // included.
-            let found = paths.find_map(|r| match r {
-                Err(e) => Some(e),
-                Ok((v, p)) if p.lost().is_some() => Some(Exn::from(Error::path_result(&v))),
-                Ok(_) => None,
-            });
-            Err(found.unwrap_or(e))
+    let input = cv.1.clone();
+    box_once(update_paths(
+        path.paths((cv.0, (cv.1, RcList::default()))),
+        input,
+        &f,
+    ))
+}
+
+/// Pathfinder: `null`, the element past the end of an empty array.
+fn null<V: ValT>() -> V {
+    let empty: V = core::iter::empty().collect();
+    empty
+        .index(&V::from(0isize))
+        .unwrap_or_else(|_| V::from(false))
+}
+
+/// Pathfinder: the body of jq's `_modify` over the paths `paths` of `v`.
+fn update_paths<'a, V: ValT + 'a>(
+    paths: impl Iterator<Item = ValX<'a, (V, RcList<V>), V>>,
+    mut v: V,
+    f: &dyn Update<'a, V>,
+) -> ValX<'a, V> {
+    use crate::path::{Opt, Part, Path};
+    use alloc::vec::Vec;
+    use core::cell::Cell;
+    let mut deleted: Vec<V> = Vec::new();
+    for vp in paths {
+        let (at, p) = vp?;
+        if p.lost().is_some() {
+            return Err(Exn::from(Error::path_result(&at)));
         }
-        r => r,
-    }))
+        let mut keys: Vec<V> = p.iter().cloned().collect();
+        keys.reverse();
+        // jq takes `f`'s first output; with none, the path is deleted later.
+        let none = Cell::new(false);
+        let first = |x: V| {
+            let old = x.clone();
+            if let Some(y) = f(x).next() {
+                box_once(y)
+            } else {
+                none.set(true);
+                box_once(Ok(old))
+            }
+        };
+        v = if keys.is_empty() {
+            // The empty path is the value itself; `first` yields one output.
+            first(v)
+                .try_fold(None, |_, y| y.map(Some))?
+                .unwrap_or_else(null)
+        } else {
+            let parts = keys
+                .iter()
+                .map(|k| (Part::Index(k.clone()), Opt::Essential));
+            Path(parts.collect()).update(v, first)?
+        };
+        if none.get() {
+            deleted.push(keys.into_iter().collect());
+        }
+    }
+    if deleted.is_empty() {
+        return Ok(v);
+    }
+    // jq's `delpaths`: the paths sorted, the greatest deleted first, and the
+    // whole value gone (`null`) if one of them is the empty path.
+    deleted.sort_by(|x, y| x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal));
+    for keys in deleted.into_iter().rev() {
+        let keys: Vec<V> = keys.values().collect::<Result<_, _>>()?;
+        if keys.is_empty() {
+            return Ok(null());
+        }
+        let parts = keys.into_iter().map(|k| (Part::Index(k), Opt::Essential));
+        v = Path(parts.collect()).update(v, |_| Box::new(core::iter::empty()))?;
+    }
+    Ok(v)
 }
 
 /// Pathfinder: whether `id` is a path by its form alone: `.`, steps on a

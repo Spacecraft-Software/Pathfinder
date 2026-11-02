@@ -91,12 +91,16 @@ one does, its Unicode tables generated from Oniguruma's data files.
 - [x] T-051 `mjq`, a short name for `pathfinder`, installed by the Nix, Guix and Arch packages and `make install`
 - [x] T-052 (P-080) README, AGENTS.md, SKILL.md, the Texinfo manual, `crates/UPSTREAM.md` and `doc/DIVERGENCES.md` describe one engine; every divergence re-measured
 - [x] T-053 (P-079) Benchmarks against jq 1.8.1 and jaq 3.1.2 recorded in `doc/DIVERGENCES.md`
-- [ ] T-054 (P-079) 24 h of fuzzing clean, all four targets: `regex` from 2026-10-31T04:11Z, `syntax` from 14:24Z (after T-057, T-058) and `jqargs` from 15:02Z ran clean; `engine` runs again from 2026-11-01T17:10Z (after T-059)
+- [ ] T-054 (P-079) 24 h of fuzzing clean, all four targets: `regex` from 2026-10-31T04:11Z, `syntax` from 14:24Z (after T-057, T-058) and `jqargs` from 15:02Z ran clean; `engine` runs again after T-059, T-062 and T-063
 - [x] T-055 (P-081) Version 0.2.0
 - [ ] T-056 (P-081) Bravais on Pathfinder 0.2.0 (`nix flake update pathfinder`), then the `v0.2.0` tag
 - [x] T-057 (P-079, fuzzing) `range/1` and `range/2` take only numbers, as jq's `RANGE` opcode: `range("")` counted up for ever; a NaN bound counts for ever, as in jq; `transpose` is jq's definition
 - [x] T-058 (P-079, fuzzing) The body of a `?//` chain is written once, as a definition: pasted into each alternative it grew threefold per link (12 links, 2 GB)
 - [x] T-059 (P-079, fuzzing) A string's slice bound in (-1, 0) is its end, as in jq: `"abcd"[:-0.99]` was `""` (an overflow, a panic in a checked build)
+- [ ] T-060 Number literals compared as decimals, as jq compares two literals: `1e-400 == 0` is `false` in jq (`doc/DIVERGENCES.md`) (optional)
+- [ ] T-061 A value keeps its path while it is the same value, as in jq: `path(limit(2; .[]))`, `. as $x | path($x)` (optional)
+- [x] T-062 (P-079, fuzzing) A literal is finalized in jq's decNumber context before it is printed: an exponent past `emax` is an infinity (`1.7976931348623157e+308`), a zero's exponent is clamped, a literal below Etiny rounds half-up to it; an exponent near `i64::MAX` overflowed (a panic in a checked build)
+- [x] T-063 (P-079, fuzzing) `=`, `|=` and `op=` update the paths found in the input, as jq's `_assign` and `_modify`, deletions at the end; `walk` is jq's definition: `recurse = ./.` walked what it wrote and overflowed the stack, `[1] | .. = [[2]]` was `[[2]]`, `(try .a catch .b) |= 1` failed
 
 ## Standing
 
