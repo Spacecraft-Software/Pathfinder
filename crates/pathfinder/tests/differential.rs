@@ -2504,6 +2504,125 @@ static NATIVE_CASES: &[Case] = &[
             r#"[splits("x";"i")], [scan("x";"i")], sub("x";"_";"gi")"#,
         ],
     ),
+    // The engine fuzzer's findings (M24, second run). A chain's subscripts
+    // run outside it, the last outermost, and the term inside them, once
+    // for each combination; the outermost subscript's error is raised.
+    c(
+        "[[1,2],[3,4]]",
+        &["-c", "[.[0,1][0,1]], [.[0,1]?[0,1]], [(.[0,1])[0,1]]"],
+    ),
+    c(
+        "[[1,2],[3,4]]",
+        &["-c", "[path(.[0,1][0,1])], [.[0,1][0:1,2]], [.[][0,1]]"],
+    ),
+    c(
+        r#"{"a":[1,2],"b":[3,4]}"#,
+        &["-c", r#"[.["a","b"][0,1]], [paths]"#],
+    ),
+    c("[[[1,2],[3,4]]]", &["-c", "[.[0][0,1][0,1]]"]),
+    c("[1,2] [3,4]", &["-nc", "[(input)[0,1]]"]),
+    c(
+        "[[1,2]]",
+        &["-c", r#"try [.[error("x")][error("y")]] catch ."#],
+    ),
+    c(
+        "[[1,2]]",
+        &["-c", r#"try [path(.[error("x")][error("y")])] catch ."#],
+    ),
+    c(
+        "[[1,2],[3,4]]",
+        &["-c", r"try (.[1,0][1,0] |= error(tostring)) catch ."],
+    ),
+    c("[[1,2],[3,4]]", &["-c", ".[0,1][0,1] = (10,20)"]),
+    // `null` indexed by what is no string, number or object is an error.
+    c(
+        "null",
+        &[
+            "-c",
+            "[.[null]?], [.[true]?], [.[[1]]?], .[{}], .[\"a\"], .[1.5]",
+        ],
+    ),
+    c(
+        "null",
+        &["-c", "try .[null] catch ., try path(.[true]) catch ."],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try del(.[null]) catch ., [nth(.,4> range(6;1;..,.))?]",
+        ],
+    ),
+    // A slice's path has both keys; `delpaths` wants both.
+    c(
+        "[1,4,3]",
+        &[
+            "-c",
+            "[path(.[5:][4.1])], [path(.[:4]?[66])], del(.[2:][0,1])",
+        ],
+    ),
+    c("[1,4,3]", &["-c", "del(.[1:][0:1]), del(.[5:][0])"]),
+    c(
+        "[1,2,3]",
+        &["-c", r#"try delpaths([[{"start":1}]]) catch ."#],
+    ),
+    c(
+        "[1,2,3]",
+        &["-c", r#"delpaths([[{"start":1,"end":null}]])"#],
+    ),
+    // A slice of `null` set: the bounds first, then the value, and `?`
+    // keeps neither; paths with `?` are found before any is updated.
+    c(
+        "null",
+        &[
+            "-c",
+            "try (.[:true] = 1) catch ., try ((.[:4,true]?) = 1) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ((.[:4,true]?) = [1]) catch ., try ((.[:4,true]?[0]) = 1) catch .",
+        ],
+    ),
+    c("[1,2]", &["-c", "(.[:true]?) = [1]"]),
+    // A string slice: read (bounds), `f`, then the error to set or delete.
+    c(
+        r#""ab""#,
+        &["-c", r#"(.[:true]?) = "x", try (.[:true] = "x") catch ."#],
+    ),
+    c(
+        r#""ab""#,
+        &[
+            "-c",
+            "try (.[:1] |= empty) catch ., try ((.[:1]?) |= empty) catch .",
+        ],
+    ),
+    c(
+        r#""ab""#,
+        &[
+            "-c",
+            r#"try (.[:1] = "x") catch ., try (.[:1] |= error("e")) catch ."#,
+        ],
+    ),
+    c("[1,[2,3]]", &["-c", "(.[]?|.[0]?) |= empty"]),
+    // Oniguruma's capture limit, 32 767 groups (`ONIG_MAX_CAPTURE_NUM`), and
+    // a class given a ctype many times (merged in one pass, T-067).
+    c(
+        r#""x""#,
+        &[
+            "-c",
+            r#"test("(a)"*32767), (try test("(a)"*32768) catch .), (try test("(?<n>a)"*32768) catch .)"#,
+        ],
+    ),
+    c(
+        r#""x""#,
+        &[
+            "-c",
+            r#"test("[\\w]"*500), test("[\\W\\w\\d]"*500), (try test("[\\w"*500) catch .)"#,
+        ],
+    ),
 ];
 
 /// Cases needing input files, which are created in a temp dir at run time.

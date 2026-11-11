@@ -11,7 +11,7 @@ Everything here was measured against **jq 1.8.1's release binary** (the
 declared baseline; see `AGENTS.md` for how to fetch it), not inferred. What
 Pathfinder *does* reproduce is not listed: the differential suite
 (`crates/pathfinder/tests/differential.rs`) asserts byte-for-byte agreement
-with jq on 1 205 invocations, stdout and exit status, and a part of it stderr
+with jq on 1 230 invocations, stdout and exit status, and a part of it stderr
 too; jq's own test suite passes 820 of 820.
 
 Until 0.2.0 Pathfinder could also run on a jaq binary (`PATHFINDER_ENGINE=jaq`),
@@ -77,6 +77,14 @@ rather than answering differently.
   engine per value, so when both streams go to the same file their lines
   interleave differently (`1 2 | ., debug`, a parse error after the first
   value). Each stream on its own is jq's.
+- **NUL bytes in the input.** jq reads with `fgets` and takes a chunk with no
+  newline as a C string, so a NUL drops the rest of it (`"ab\0cd"` is
+  `Unfinished string at EOF … column 3`, `"a"\0` is just `"a"`); and it reads
+  a number token as a C string too, so `1\0` is `1` and `[1\0,2]` is `[1,2]`.
+  Pathfinder reads every byte: a NUL outside a string is an invalid literal,
+  and the error's wording or column can differ. A NUL inside a string is
+  jq's `Invalid string: control characters …` in both, once a newline
+  follows it (TODO T-068). Found by fuzzing.
 - **`--seq` input.** The input's RS separators are stripped before the reader
   sees them, so jq's `ignoring parse error: …` and `Truncated value` messages
   are not given; a malformed text is a plain parse error. With a missing file

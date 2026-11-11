@@ -326,6 +326,10 @@ fn dels(v: Val, keys: &[Val]) -> ValR {
                     Val::Obj(o) => {
                         let start = o.get(&Val::utf8_str("start"));
                         let end = o.get(&Val::utf8_str("end"));
+                        // jq's `parse_slice` needs both keys.
+                        if start.is_none() || end.is_none() {
+                            return Err(Error::str("Array/string slice indices must be integers"));
+                        }
                         let r = Val::range_int(start..end)?;
                         let (skip, take) = crate::skip_take(r, len);
                         del[skip..skip + take].iter_mut().for_each(|d| *d = true);

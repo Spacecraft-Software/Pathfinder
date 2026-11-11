@@ -10,7 +10,6 @@
     clippy::clone_on_ref_ptr,
     clippy::default_trait_access,
     clippy::doc_markdown,
-    clippy::flat_map_option,
     clippy::format_push_string,
     clippy::if_not_else,
     clippy::items_after_statements,
@@ -393,14 +392,20 @@ impl jaq_core::ValT for Val {
     ) -> ValX<'a> {
         // Pathfinder: jq updates a slice of `null` from `null`: nothing
         // leaves it `null`, an array replaces it, anything else fails.
+        // Slicing `null` never fails, so a `?` keeps none of `jv_set`'s
+        // errors, and it checks the bounds before the value.
         if let Val::Null = self {
             return match f(Val::Null).next().transpose()? {
                 None => Ok(Val::Null),
-                Some(Val::Arr(a)) => Ok(Val::Arr(a)),
-                Some(_) => opt.fail(Val::Null, |_| {
-                    let e = "A slice of an array can only be assigned another array";
-                    Exn::from(Error::str(e))
-                }),
+                Some(y) => {
+                    Self::range_int(range)?;
+                    if let Val::Arr(a) = y {
+                        Ok(Val::Arr(a))
+                    } else {
+                        let e = "A slice of an array can only be assigned another array";
+                        Err(Exn::from(Error::str(e)))
+                    }
+                }
             };
         }
         let fs = |b: Bytes, range, skip_take: SkipTakeFn, from: ValBytesFn, into: BytesValFn| {
@@ -434,10 +439,21 @@ impl jaq_core::ValT for Val {
                 Ok(self)
             }
             Val::BStr(b) => fs(*b, range, stb, Val::into_byte_str, Val::byte_str),
-            // Pathfinder: jq 1.8.1 cannot update a slice of a string.
-            Val::TStr(_) => opt.fail(self, |_| {
-                Exn::from(Error::str("Cannot update string slices"))
-            }),
+            // Pathfinder: jq 1.8.1 cannot update a slice of a string. As
+            // its `_modify`, it reads the slice (the bounds' error, which `?`
+            // keeps), runs `f`, then fails to set or to delete; the path was
+            // found, so `?` keeps neither of those.
+            Val::TStr(_) => {
+                let slice = match self.clone().range(range) {
+                    Ok(slice) => slice,
+                    Err(e) => return opt.fail(self, |_| Exn::from(e)),
+                };
+                let e = match f(slice).next().transpose()? {
+                    Some(_) => "Cannot update string slices",
+                    None => "Cannot delete fields from string",
+                };
+                Err(Exn::from(Error::str(e)))
+            }
             // Pathfinder: jq's error for slicing what is no array.
             _ => {
                 let obj = Val::obj(Map::default());
@@ -691,7 +707,10 @@ impl Val {
 
     fn index_opt(self, index: &Self) -> Result<Option<Val>, Error> {
         Ok(match (self, index) {
-            (Val::Null, _) => None,
+            // Pathfinder: jq 1.8.1's `jv_get` gives `null` for `null` only
+            // under a string, a number or an object; any other key is an
+            // error (`null | .[null]`, `.[true]`, `.[[1]]`).
+            (Val::Null, Val::BStr(_) | Val::TStr(_) | Val::Num(_) | Val::Obj(_)) => None,
             (Val::BStr(a), Val::Num(i @ (Num::Int(_) | Num::BigInt(_)))) => i
                 .as_pos_usize()
                 .and_then(|i| abs_index(i, a.len()))
@@ -763,9 +782,11 @@ impl From<String> for Val {
 
 impl From<val::Range<Val>> for Val {
     fn from(r: val::Range<Val>) -> Self {
-        let kv = |(k, v): (&str, Option<_>)| v.map(|v| (k.to_owned().into(), v));
+        // Pathfinder: jq's path to a slice has both keys, a missing bound
+        // as `null` (`path(.[1:])` is `[{"start":1,"end":null}]`).
+        let kv = |(k, v): (&str, Option<_>)| (k.to_owned().into(), v.unwrap_or(Val::Null));
         let kvs = [("start", r.start), ("end", r.end)];
-        Val::obj(kvs.into_iter().flat_map(kv).collect())
+        Val::obj(kvs.into_iter().map(kv).collect())
     }
 }
 

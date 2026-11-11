@@ -414,7 +414,6 @@ fn update_paths<'a, V: ValT + 'a>(
 ) -> ValX<'a, V> {
     use crate::path::{Opt, Part, Path};
     use alloc::vec::Vec;
-    use core::cell::Cell;
     let mut deleted: Vec<V> = Vec::new();
     for vp in paths {
         let (at, p) = vp?;
@@ -423,30 +422,28 @@ fn update_paths<'a, V: ValT + 'a>(
         }
         let mut keys: Vec<V> = p.iter().cloned().collect();
         keys.reverse();
-        // jq takes `f`'s first output; with none, the path is deleted later.
-        let none = Cell::new(false);
-        let first = |x: V| {
-            let old = x.clone();
-            if let Some(y) = f(x).next() {
-                box_once(y)
-            } else {
-                none.set(true);
-                box_once(Ok(old))
+        // As jq's `_modify`: `getpath`, `f`'s first output set in its place,
+        // and with none, the path deleted later, never written meanwhile (a
+        // string slice cannot be set, but its deletion fails differently).
+        let path = Path(
+            keys.iter()
+                .map(|k| (Part::Index(k.clone()), Opt::Essential))
+                .collect(),
+        );
+        let old = match path.clone().run(v.clone()).next() {
+            Some(old) => old.map_err(Exn::from)?,
+            None => null(),
+        };
+        match f(old).next() {
+            Some(y) => {
+                let y = y?;
+                v = if keys.is_empty() {
+                    y
+                } else {
+                    path.update(v, move |_| box_once(Ok(y.clone())))?
+                };
             }
-        };
-        v = if keys.is_empty() {
-            // The empty path is the value itself; `first` yields one output.
-            first(v)
-                .try_fold(None, |_, y| y.map(Some))?
-                .unwrap_or_else(null)
-        } else {
-            let parts = keys
-                .iter()
-                .map(|k| (Part::Index(k.clone()), Opt::Essential));
-            Path(parts.collect()).update(v, first)?
-        };
-        if none.get() {
-            deleted.push(keys.into_iter().collect());
+            None => deleted.push(keys.into_iter().collect()),
         }
     }
     if deleted.is_empty() {
@@ -469,10 +466,19 @@ fn update_paths<'a, V: ValT + 'a>(
 /// Pathfinder: whether `id` is a path by its form alone: `.`, steps on a
 /// plain path (whatever their index expressions), and pipes and commas of
 /// plain paths.
+///
+/// A step with `?` is not plain: jq finds its paths in the input before
+/// updating any, so a step that fails only on an updated value
+/// (`null | (.[:4,true]?) = [1]`) is an error there, not skipped.
 fn plain_path<D: DataT>(id: &Id, lut: &crate::Lut<D>) -> bool {
     match &lut.terms[id.0] {
         Ast::Id => true,
-        Ast::Path(base, _) => plain_path(base, lut),
+        Ast::Path(base, path) => {
+            path.0
+                .iter()
+                .all(|(_, opt)| matches!(opt, crate::path::Opt::Essential))
+                && plain_path(base, lut)
+        }
         Ast::Pipe(l, None, r) | Ast::Comma(l, r) => plain_path(l, lut) && plain_path(r, lut),
         _ => false,
     }
@@ -719,8 +725,10 @@ impl Id {
                     let cv = cv.clone();
                     crate::into_iter::collect_if_once(move || i.run(cv))
                 });
-                flat_map_then_with(f.run(cv), path, |y, path| {
-                    flat_map_then_with(path.explode(), y, |path, y| {
+                // Pathfinder: jq runs the term inside its subscripts' loops,
+                // once for each combination (`[(input)[0,1]]`).
+                flat_map_then_with(path.explode(), cv, move |path, cv| {
+                    flat_map_then_with(f.run(cv), path, |y, path| {
                         Box::new(path.run(y).map(|r| r.map_err(Exn::from)))
                     })
                 })
@@ -872,8 +880,9 @@ impl Id {
                     let cv = (cv.0.clone(), cv.1 .0.clone());
                     crate::into_iter::collect_if_once(move || i.run(cv))
                 });
-                flat_map_then_with(f.paths(cv), path, |y, path| {
-                    flat_map_then_with(path.explode(), y, |path, y| {
+                // Pathfinder: the term inside the subscripts' loops, as above.
+                flat_map_then_with(path.explode(), cv, move |path, cv| {
+                    flat_map_then_with(f.paths(cv), path, |y, path| {
                         Box::new(path.paths(y).map(|r| r.map_err(Exn::from)))
                     })
                 })
