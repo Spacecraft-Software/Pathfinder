@@ -164,6 +164,23 @@ fn rc_unwrap_or_clone<T: Clone>(a: Rc<T>) -> T {
 }
 
 impl jaq_core::ValT for Val {
+    fn jq_del_index(&self, container: &Self) -> Option<Self> {
+        match (container, self) {
+            // `jv_dels`: a negative key is `len + (int)key` (so `-0.5` is
+            // `len`, nothing), any other `(int)key` (so `1.5` is `1`).
+            (Val::Arr(a), Val::Num(n)) if !n.as_f64().is_nan() => {
+                let (f, len) = (n.as_f64(), a.len() as f64);
+                let i = if f < 0.0 { len + f.trunc() } else { f.trunc() };
+                Some(Val::from(if i < 0.0 {
+                    a.len() as isize
+                } else {
+                    i as isize
+                }))
+            }
+            _ => None,
+        }
+    }
+
     fn jq_absent(&self, index: &Self) -> bool {
         match (self, index) {
             (Val::Null, _) => true,
@@ -350,9 +367,19 @@ impl jaq_core::ValT for Val {
                 } else {
                     (t < len as f64).then_some(t as usize)
                 };
-                let x = at.map_or(Val::Null, |i| core::mem::take(&mut Rc::make_mut(a)[i]));
+                // `jv_dels` takes a negative key as `len + (int)key`: one in
+                // (-1, 0) is read as element 0 but deletes nothing, so that
+                // element is kept (cloned, not taken) until `f` is known.
+                let past_end = n.as_f64() < 0.0 && t == 0.0;
+                let x = at.map_or(Val::Null, |i| {
+                    if past_end {
+                        a[i].clone()
+                    } else {
+                        core::mem::take(&mut Rc::make_mut(a)[i])
+                    }
+                });
                 let Some(y) = f(x).next().transpose()? else {
-                    if let Some(i) = at {
+                    if let Some(i) = at.filter(|_| !past_end) {
                         Rc::make_mut(a).remove(i);
                     }
                     return Ok(self);

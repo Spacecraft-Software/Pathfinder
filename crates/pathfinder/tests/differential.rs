@@ -2623,6 +2623,43 @@ static NATIVE_CASES: &[Case] = &[
             r#"test("[\\w]"*500), test("[\\W\\w\\d]"*500), (try test("[\\w"*500) catch .)"#,
         ],
     ),
+    // PR #25 review: deletions resolved together, as `jv_dels` (a negative
+    // key is `len + (int)key`, a fractional one `(int)key`), and a
+    // subscript that reads state runs last first.
+    c("[0,1,2,3]", &["-c", "def p: .[-2,-1]; p |= empty"]),
+    c(
+        "[0,1,2,3]",
+        &[
+            "-c",
+            "(def p: .[-1,-3]; p |= empty), (def p: .[1.5,1]; p |= empty)",
+        ],
+    ),
+    c(
+        "[0,1,2,[3,4]]",
+        &[
+            "-c",
+            "del(.[-0.5]), (.[-0.5] |= empty), (.[3][-0.5] |= .*2)",
+        ],
+    ),
+    c(
+        "[0,1,2,[3,4]]",
+        &[
+            "-c",
+            "(def p: .[-0.5]; p |= empty), (.[-0.5] |= 9), del(.[-0.5,-1])",
+        ],
+    ),
+    c(
+        "[[10,20],[30,40]] 0 1 2",
+        &["-c", "[path(.[input][input])]"],
+    ),
+    c(r#"{"a":{"b":1}} "x" "a""#, &["-c", "[.[input][input]]"]),
+    c(
+        "[[[0], 1], 2, [3, [4]]]",
+        &[
+            "-c",
+            "try (.. |= if . < [] then .+1 else [42] + . end) catch .",
+        ],
+    ),
 ];
 
 /// Cases needing input files, which are created in a temp dir at run time.

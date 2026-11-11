@@ -223,10 +223,17 @@ impl<'a, U: Clone + 'a, F: IntoIterator<Item = U> + Clone + 'a> Part<F> {
 }
 
 impl<T> Path<T> {
+    /// Apply `f` to the indices, the last part's first.
+    ///
+    /// Pathfinder: `f` may run a subscript at once (`collect_if_once`), and
+    /// jq runs the last one outermost, so first: `.[input][input]` reads the
+    /// last subscript's input before the first's.
     pub(crate) fn map_ref<'a, U>(&'a self, mut f: impl FnMut(&'a T) -> U) -> Path<U> {
-        let path = self.0.iter();
+        let path = self.0.iter().rev();
         let path = path.map(move |(part, opt)| (part.as_ref().map(&mut f), *opt));
-        Path(path.collect())
+        let mut path: Vec<_> = path.collect();
+        path.reverse();
+        Path(path)
     }
 }
 

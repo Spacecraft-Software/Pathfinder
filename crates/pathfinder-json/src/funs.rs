@@ -317,8 +317,14 @@ fn dels(v: Val, keys: &[Val]) -> ValR {
                 match k {
                     Val::Num(n) => {
                         // C's `(int)` cast, as jq has it.
-                        let f = n.as_f64().trunc();
-                        let i = if f < 0.0 { len as f64 + f } else { f };
+                        // The sign of the key, not of its truncation:
+                        // `-0.5` is `len + 0`, past the end.
+                        let f = n.as_f64();
+                        let i = if f < 0.0 {
+                            len as f64 + f.trunc()
+                        } else {
+                            f.trunc()
+                        };
                         if i >= 0.0 && i < len as f64 {
                             del[i as usize] = true;
                         }

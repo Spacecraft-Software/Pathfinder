@@ -449,11 +449,27 @@ fn update_paths<'a, V: ValT + 'a>(
     if deleted.is_empty() {
         return Ok(v);
     }
-    // jq's `delpaths`: the paths sorted, the greatest deleted first, and the
-    // whole value gone (`null`) if one of them is the empty path.
-    deleted.sort_by(|x, y| x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal));
-    for keys in deleted.into_iter().rev() {
+    // jq's `delpaths`: every index resolved before any is removed (so
+    // `.[-2,-1]` are the last two), the paths sorted, each once, the
+    // greatest deleted first, and the whole value gone (`null`) if one of
+    // them is the empty path.
+    let mut resolved = Vec::with_capacity(deleted.len());
+    for keys in deleted {
         let keys: Vec<V> = keys.values().collect::<Result<_, _>>()?;
+        let mut at = Some(v.clone());
+        let keys: Vec<V> = keys
+            .into_iter()
+            .map(|k| {
+                let k = at.as_ref().and_then(|c| k.jq_del_index(c)).unwrap_or(k);
+                at = at.take().and_then(|c| c.index(&k).ok());
+                k
+            })
+            .collect();
+        resolved.push(keys);
+    }
+    resolved.sort_by(|x, y| x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal));
+    resolved.dedup();
+    for keys in resolved.into_iter().rev() {
         if keys.is_empty() {
             return Ok(null());
         }

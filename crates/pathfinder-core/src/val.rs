@@ -85,6 +85,14 @@ pub trait ValT:
         false
     }
 
+    /// Pathfinder: where jq's `jv_dels` deletes `self` from `container`,
+    /// when that differs from `self`: a negative index into an array, as an
+    /// index from its start (`len` when it falls before it, deleting
+    /// nothing). jq resolves every index of a deletion before removing any.
+    fn jq_del_index(&self, _container: &Self) -> Option<Self> {
+        None
+    }
+
     /// Pathfinder: a string's text, unescaped, for jq's error messages.
     fn jq_string(&self) -> Option<alloc::string::String>;
 
