@@ -2660,6 +2660,15 @@ static NATIVE_CASES: &[Case] = &[
             "try (.. |= if . < [] then .+1 else [42] + . end) catch .",
         ],
     ),
+    // A path `f` deletes is never written first: no padding, no container.
+    c(
+        "[]",
+        &["-c", "(def p: .[2]; p |= empty), (def p: .[2]; p |= 5)"],
+    ),
+    c(
+        "{}",
+        &["-c", "(def p: .a.b; p |= empty), ((.a.b?) |= empty)"],
+    ),
 ];
 
 /// Cases needing input files, which are created in a temp dir at run time.
