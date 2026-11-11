@@ -185,6 +185,50 @@ static CASES: &[Case] = &[
         r#"[{"id":1,"v":0},{"id":2,"v":0}]"#,
         &["-c", "(.[] | select(.id == 2) | .v) |= 9"],
     ),
+    // An update finds its paths in the input first, as jq's `_modify` and
+    // `_assign` do, so what it writes is not walked (found by fuzzing, M24:
+    // `recurse = ./.` overflowed the stack) and deletions wait for the end.
+    c(
+        "\"ab\"",
+        &[
+            "-c",
+            "(recurse = ./.), (recurse /= \"\"), (recurse(.[]?) = [1]), \
+             (recurse(.[]?; true) = [1])",
+        ],
+    ),
+    c(
+        "[1]",
+        &[
+            "-c",
+            "(.. = [[2]]), (.. |= [[2]]), try (.. /= \"x\") catch .",
+        ],
+    ),
+    c(
+        "[1,[2]]",
+        &[
+            "-c",
+            "try (.. |= if . < [] then . else [0] + . end) catch ., \
+             walk(if . >= [] and . < {} then [0] + . else . end)",
+        ],
+    ),
+    c(
+        r#"{"a":[1,2]}"#,
+        &["-c", "((.a, .a[]) = [5,6]), ((.a, .a[]) |= [5,6])"],
+    ),
+    c("{\"a\":1}", &["-c", "try (.. += 1) catch ."]),
+    c(
+        "[3,1,2]",
+        &[
+            "-c",
+            "((.[] | select(. > 1)) |= (., .)), (first(.[]) = 9), \
+             ((.. | numbers) |= empty)",
+        ],
+    ),
+    c("\"ab\"", &["-c", "paths |= 1"]),
+    c(
+        "[[3,1],[2],{\"b\":[2,1]}]",
+        &["-c", "walk(if . >= [] and . < {} then sort else . end)"],
+    ),
     c(r#"{"a":1,"b":2,"c":3}"#, &["-c", "del(.a)"]),
     c(r#"{"a":1,"b":2,"c":3}"#, &["-c", "del(.c, .a)"]),
     c(r#"{"a":1,"b":2,"c":3}"#, &["-c", ".b |= empty"]),
@@ -1081,6 +1125,28 @@ static NATIVE_CASES: &[Case] = &[
     c(
         "null",
         &["-c", "def f: 1.; [f, -.5, .5e1], ([1., 2.] | add)"],
+    ),
+    // --- decNumber's limits on a literal (found by fuzzing, M24): an
+    // overflow is an infinity, printed as the largest double; a zero's
+    // exponent is clamped; below Etiny a literal rounds half-up to it ---
+    c(
+        "0e9223372036854775807 -0e9223372036854775807 1e9223372036854775807 \
+         -1e99999999999 12e9223372036854775807 1e9223372036854775808 \
+         1e0000000001999999999 1e1000000000 0.1e1000000000 1e999999999",
+        &["-c", "[., -., tostring, tojson, . + 0]"],
+    ),
+    c(
+        "1e-9223372036854775808 -0e-99999999999 0e-1147483647 6e-1147483647 \
+         5e-1147483647 4e-1147483647 95e-1147483648 15e-1147483648 \
+         9951e-1147483649 1.5e-1147483646 1e-1000000000 1e-00000000000000000001",
+        &["-c", "[., -., tostring, tojson, . + 0]"],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "[1e1000000000, 0e99999999999, 6e-1147483647, -(4e-1147483647)]",
+        ],
     ),
     // --- a `module` directive is part of the header (M23) ---
     c("null", &["-c", "module {a:1}; undefined_fn"]),
@@ -2437,6 +2503,171 @@ static NATIVE_CASES: &[Case] = &[
             "-c",
             r#"[splits("x";"i")], [scan("x";"i")], sub("x";"_";"gi")"#,
         ],
+    ),
+    // The engine fuzzer's findings (M24, second run). A chain's subscripts
+    // run outside it, the last outermost, and the term inside them, once
+    // for each combination; the outermost subscript's error is raised.
+    c(
+        "[[1,2],[3,4]]",
+        &["-c", "[.[0,1][0,1]], [.[0,1]?[0,1]], [(.[0,1])[0,1]]"],
+    ),
+    c(
+        "[[1,2],[3,4]]",
+        &["-c", "[path(.[0,1][0,1])], [.[0,1][0:1,2]], [.[][0,1]]"],
+    ),
+    c(
+        r#"{"a":[1,2],"b":[3,4]}"#,
+        &["-c", r#"[.["a","b"][0,1]], [paths]"#],
+    ),
+    c("[[[1,2],[3,4]]]", &["-c", "[.[0][0,1][0,1]]"]),
+    c("[1,2] [3,4]", &["-nc", "[(input)[0,1]]"]),
+    c(
+        "[[1,2]]",
+        &["-c", r#"try [.[error("x")][error("y")]] catch ."#],
+    ),
+    c(
+        "[[1,2]]",
+        &["-c", r#"try [path(.[error("x")][error("y")])] catch ."#],
+    ),
+    c(
+        "[[1,2],[3,4]]",
+        &["-c", r"try (.[1,0][1,0] |= error(tostring)) catch ."],
+    ),
+    c("[[1,2],[3,4]]", &["-c", ".[0,1][0,1] = (10,20)"]),
+    // `null` indexed by what is no string, number or object is an error.
+    c(
+        "null",
+        &[
+            "-c",
+            "[.[null]?], [.[true]?], [.[[1]]?], .[{}], .[\"a\"], .[1.5]",
+        ],
+    ),
+    c(
+        "null",
+        &["-c", "try .[null] catch ., try path(.[true]) catch ."],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try del(.[null]) catch ., [nth(.,4> range(6;1;..,.))?]",
+        ],
+    ),
+    // A slice's path has both keys; `delpaths` wants both.
+    c(
+        "[1,4,3]",
+        &[
+            "-c",
+            "[path(.[5:][4.1])], [path(.[:4]?[66])], del(.[2:][0,1])",
+        ],
+    ),
+    c("[1,4,3]", &["-c", "del(.[1:][0:1]), del(.[5:][0])"]),
+    c(
+        "[1,2,3]",
+        &["-c", r#"try delpaths([[{"start":1}]]) catch ."#],
+    ),
+    c(
+        "[1,2,3]",
+        &["-c", r#"delpaths([[{"start":1,"end":null}]])"#],
+    ),
+    // A slice of `null` set: the bounds first, then the value, and `?`
+    // keeps neither; paths with `?` are found before any is updated.
+    c(
+        "null",
+        &[
+            "-c",
+            "try (.[:true] = 1) catch ., try ((.[:4,true]?) = 1) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ((.[:4,true]?) = [1]) catch ., try ((.[:4,true]?[0]) = 1) catch .",
+        ],
+    ),
+    c("[1,2]", &["-c", "(.[:true]?) = [1]"]),
+    // A string slice: read (bounds), `f`, then the error to set or delete.
+    c(
+        r#""ab""#,
+        &["-c", r#"(.[:true]?) = "x", try (.[:true] = "x") catch ."#],
+    ),
+    c(
+        r#""ab""#,
+        &[
+            "-c",
+            "try (.[:1] |= empty) catch ., try ((.[:1]?) |= empty) catch .",
+        ],
+    ),
+    c(
+        r#""ab""#,
+        &[
+            "-c",
+            r#"try (.[:1] = "x") catch ., try (.[:1] |= error("e")) catch ."#,
+        ],
+    ),
+    c("[1,[2,3]]", &["-c", "(.[]?|.[0]?) |= empty"]),
+    // Oniguruma's capture limit, 32 767 groups (`ONIG_MAX_CAPTURE_NUM`), and
+    // a class given a ctype many times (merged in one pass, T-067).
+    c(
+        r#""x""#,
+        &[
+            "-c",
+            r#"test("(a)"*32767), (try test("(a)"*32768) catch .), (try test("(?<n>a)"*32768) catch .)"#,
+        ],
+    ),
+    c(
+        r#""x""#,
+        &[
+            "-c",
+            r#"test("[\\w]"*500), test("[\\W\\w\\d]"*500), (try test("[\\w"*500) catch .)"#,
+        ],
+    ),
+    // PR #25 review: deletions resolved together, as `jv_dels` (a negative
+    // key is `len + (int)key`, a fractional one `(int)key`), and a
+    // subscript that reads state runs last first.
+    c("[0,1,2,3]", &["-c", "def p: .[-2,-1]; p |= empty"]),
+    c(
+        "[0,1,2,3]",
+        &[
+            "-c",
+            "(def p: .[-1,-3]; p |= empty), (def p: .[1.5,1]; p |= empty)",
+        ],
+    ),
+    c(
+        "[0,1,2,[3,4]]",
+        &[
+            "-c",
+            "del(.[-0.5]), (.[-0.5] |= empty), (.[3][-0.5] |= .*2)",
+        ],
+    ),
+    c(
+        "[0,1,2,[3,4]]",
+        &[
+            "-c",
+            "(def p: .[-0.5]; p |= empty), (.[-0.5] |= 9), del(.[-0.5,-1])",
+        ],
+    ),
+    c(
+        "[[10,20],[30,40]] 0 1 2",
+        &["-c", "[path(.[input][input])]"],
+    ),
+    c(r#"{"a":{"b":1}} "x" "a""#, &["-c", "[.[input][input]]"]),
+    c(
+        "[[[0], 1], 2, [3, [4]]]",
+        &[
+            "-c",
+            "try (.. |= if . < [] then .+1 else [42] + . end) catch .",
+        ],
+    ),
+    // A path `f` deletes is never written first: no padding, no container.
+    c(
+        "[]",
+        &["-c", "(def p: .[2]; p |= empty), (def p: .[2]; p |= 5)"],
+    ),
+    c(
+        "{}",
+        &["-c", "(def p: .a.b; p |= empty), ((.a.b?) |= empty)"],
     ),
 ];
 

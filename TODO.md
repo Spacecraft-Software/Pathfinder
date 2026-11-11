@@ -91,12 +91,22 @@ one does, its Unicode tables generated from Oniguruma's data files.
 - [x] T-051 `mjq`, a short name for `pathfinder`, installed by the Nix, Guix and Arch packages and `make install`
 - [x] T-052 (P-080) README, AGENTS.md, SKILL.md, the Texinfo manual, `crates/UPSTREAM.md` and `doc/DIVERGENCES.md` describe one engine; every divergence re-measured
 - [x] T-053 (P-079) Benchmarks against jq 1.8.1 and jaq 3.1.2 recorded in `doc/DIVERGENCES.md`
-- [ ] T-054 (P-079) 24 h of fuzzing clean, all four targets: `regex` from 2026-10-31T04:11Z, `syntax` from 14:24Z (after T-057, T-058) and `jqargs` from 15:02Z ran clean; `engine` runs again from 2026-11-01T17:10Z (after T-059)
+- [ ] T-054 (P-079) 24 h of fuzzing clean, all four targets: `regex` from 2026-10-31T04:11Z, `syntax` from 14:24Z (after T-057, T-058) and `jqargs` from 15:02Z ran clean; `engine` ran 24 h from 2026-11-10T10:57Z on T-059, T-062 and T-063 (no panic; its findings are T-064–T-069) and runs again after them
 - [x] T-055 (P-081) Version 0.2.0
 - [ ] T-056 (P-081) Bravais on Pathfinder 0.2.0 (`nix flake update pathfinder`), then the `v0.2.0` tag
 - [x] T-057 (P-079, fuzzing) `range/1` and `range/2` take only numbers, as jq's `RANGE` opcode: `range("")` counted up for ever; a NaN bound counts for ever, as in jq; `transpose` is jq's definition
 - [x] T-058 (P-079, fuzzing) The body of a `?//` chain is written once, as a definition: pasted into each alternative it grew threefold per link (12 links, 2 GB)
 - [x] T-059 (P-079, fuzzing) A string's slice bound in (-1, 0) is its end, as in jq: `"abcd"[:-0.99]` was `""` (an overflow, a panic in a checked build)
+- [ ] T-060 Number literals compared as decimals, as jq compares two literals: `1e-400 == 0` is `false` in jq (`doc/DIVERGENCES.md`) (optional)
+- [ ] T-061 A value keeps its path while it is the same value, as in jq: `path(limit(2; .[]))`, `. as $x | path($x)` (optional)
+- [x] T-062 (P-079, fuzzing) A literal is finalized in jq's decNumber context before it is printed: an exponent past `emax` is an infinity (`1.7976931348623157e+308`), a zero's exponent is clamped, a literal below Etiny rounds half-up to it; an exponent near `i64::MAX` overflowed (a panic in a checked build)
+- [x] T-063 (P-079, fuzzing) `=`, `|=` and `op=` update the paths found in the input, as jq's `_assign` and `_modify`, deletions at the end; `walk` is jq's definition: `recurse = ./.` walked what it wrote and overflowed the stack, `[1] | .. = [[2]]` was `[[2]]`, `(try .a catch .b) |= 1` failed
+- [x] T-064 (P-079, fuzzing) A chain's subscripts run outside it, the last outermost, the term inside them once per combination, as jq's `gen_subexp`: `[[1,2],[3,4]] | [.[0,1][0,1]]` was `[1,2,3,4]` (jq: `[1,3,2,4]`), and `path`, `del` and updates followed
+- [x] T-065 (P-079, fuzzing) `null` indexed by `null`, a boolean or an array is an error, as jq's `jv_get`: `[.[null, range(6;1;null)]?]` ran for ever where jq stops at the error; a slice's path has both keys (`{"start":5,"end":null}`), which `delpaths` requires
+- [x] T-066 (P-079, fuzzing) An update target with `?` finds its paths in the input first (`_assign`, `_modify`): `null | (.[:4,true]?) = [1]` skipped the bad slice and ran for ever on the fuzzer's chain; a slice of `null` set checks its bounds first, a string slice's update fails as jq's (bounds, `f`, then `Cannot update string slices` or `Cannot delete fields from string`)
+- [x] T-067 (P-079, fuzzing) A class takes a ctype's ranges in one merge: `[\w` repeated 1000 times took 1.1 s (jq 0.05 s), every range inserted by rebuilding the list
+- [x] T-069 (P-079, fuzzing) A pattern of more than 32 767 groups is `too many captures`, as Oniguruma's `scan_env_add_mem_entry`
+- [ ] T-068 NUL bytes in the input read as jq reads them: a chunk with no newline cut at its first NUL (`strlen` after `fgets`), a number token read up to a NUL (`1\0` is `1`) (`doc/DIVERGENCES.md`) (optional)
 
 ## Standing
 

@@ -558,10 +558,14 @@ fn jq_float(x: f64) -> String {
 
 /// Whether the literal `n` is a zero (`0.0`, `0E+10`).
 fn dec_is_zero(n: &str) -> bool {
-    let mantissa = n.split(['e', 'E']).next().unwrap_or(n);
-    mantissa
-        .bytes()
-        .all(|b| matches!(b, b'0' | b'.' | b'+' | b'-'))
+    let zero = |n: &str| {
+        let mantissa = n.split(['e', 'E']).next().unwrap_or(n);
+        mantissa
+            .bytes()
+            .all(|b| matches!(b, b'0' | b'.' | b'+' | b'-'))
+    };
+    // A literal below Etiny is a zero once decNumber has rounded it.
+    zero(n) || n.contains(['e', 'E']) && jq_dec(n).is_some_and(|d| zero(&d))
 }
 
 /// Whether decNumber would print the literal `n` exactly as written: plain
@@ -585,15 +589,87 @@ fn dec_is_canonical(n: &str) -> bool {
     }
 }
 
+// Pathfinder: jq's decNumber context (`DEC_INIT_BASE`, `traps = 0`, its
+// `digits` lowered so exponent arithmetic cannot overflow `int32`).
+/// The context's largest adjusted exponent.
+const DEC_EMAX: i64 = 999_999_999;
+/// The context's smallest normal adjusted exponent.
+const DEC_EMIN: i64 = -999_999_999;
+/// The context's precision: `INT32_MAX - (DECDPUN - 1) - (emax - emin - 1)`.
+const DEC_DIGITS: i64 = 147_483_648;
+/// The smallest exponent a subnormal keeps (decNumber's Etiny).
+const DEC_ETINY: i64 = DEC_EMIN - (DEC_DIGITS - 1);
+
+/// decNumber's reading of an exponent's digits (`decNumberFromString`):
+/// past nine significant digits it may have wrapped, so ten digits above
+/// `1999999999`, or more than ten, are taken as twice `DECNUMMAXE`.
+fn dec_exponent(e: &str) -> Option<i64> {
+    let (neg, digits) = match e.as_bytes().first() {
+        Some(b'-') => (true, &e[1..]),
+        Some(b'+') => (false, &e[1..]),
+        _ => (false, e),
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let digits = match digits.trim_start_matches('0') {
+        "" => "0",
+        d => d,
+    };
+    let value = if digits.len() > 10 || digits.len() == 10 && digits.as_bytes()[0] > b'1' {
+        2 * DEC_EMAX
+    } else {
+        digits.parse::<i64>().ok()?
+    };
+    Some(if neg { -value } else { value })
+}
+
+/// Rounds the decimal digits `coeff` half-up after dropping its last `drop`
+/// digits, as decNumber's `decSetCoeff` and `decApplyRound` do.
+fn dec_round_half_up(coeff: &str, drop: usize) -> String {
+    let len = coeff.len();
+    let (kept, guard) = match drop.cmp(&len) {
+        // Everything and a zero guard digit go: the sticky rest cannot reach a half.
+        Ordering::Greater => return String::from("0"),
+        Ordering::Equal => ("", coeff.as_bytes()[0]),
+        Ordering::Less => (&coeff[..len - drop], coeff.as_bytes()[len - drop]),
+    };
+    let mut out: Vec<u8> = if kept.is_empty() {
+        alloc::vec![b'0']
+    } else {
+        kept.into()
+    };
+    if guard >= b'5' {
+        let mut i = out.len();
+        loop {
+            if i == 0 {
+                out.insert(0, b'1');
+                break;
+            }
+            i -= 1;
+            if out[i] == b'9' {
+                out[i] = b'0';
+            } else {
+                out[i] += 1;
+                break;
+            }
+        }
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
 /// decNumber's to-scientific-string for a decimal literal, or `None` if the
-/// text is not one.
+/// text is not one. The literal is first finalized as `decNumberFromString`
+/// finalizes it in jq's context: an overflow is an infinity, which jq prints
+/// as the largest double; a zero's exponent is clamped to `emax` or Etiny;
+/// a subnormal below Etiny is rounded half-up to it.
 fn jq_dec(n: &str) -> Option<String> {
     let (sign, n) = match n.strip_prefix('-') {
         Some(rest) => ("-", rest),
         None => ("", n.strip_prefix('+').unwrap_or(n)),
     };
     let (mantissa, exp) = match n.find(['e', 'E']) {
-        Some(i) => (&n[..i], n[i + 1..].parse::<i64>().ok()?),
+        Some(i) => (&n[..i], dec_exponent(&n[i + 1..])?),
         None => (n, 0),
     };
     let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
@@ -603,11 +679,26 @@ fn jq_dec(n: &str) -> Option<String> {
         return None;
     }
     let all: String = alloc::format!("{int}{frac}");
-    let coeff = match all.trim_start_matches('0') {
-        "" => "0",
-        c => c,
+    let mut coeff = match all.trim_start_matches('0') {
+        "" => String::from("0"),
+        c => String::from(c),
     };
-    let e = exp.checked_sub(i64::try_from(frac.len()).ok()?)?;
+    let mut e = exp.checked_sub(i64::try_from(frac.len()).ok()?)?;
+    if coeff == "0" {
+        e = e.clamp(DEC_ETINY, DEC_EMAX);
+    } else {
+        let len = i64::try_from(coeff.len()).ok()?;
+        if e.checked_add(len - 1)? > DEC_EMAX {
+            let max = if sign.is_empty() { f64::MAX } else { f64::MIN };
+            return Some(jq_float(max));
+        }
+        if e < DEC_ETINY {
+            let drop = usize::try_from(DEC_ETINY - e).ok()?;
+            coeff = dec_round_half_up(&coeff, drop);
+            e = DEC_ETINY;
+        }
+    }
+    let coeff = coeff.as_str();
     let len = coeff.len() as i64;
     let adjusted = e + len - 1;
     let mut out = String::from(sign);

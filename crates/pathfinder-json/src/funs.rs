@@ -317,8 +317,14 @@ fn dels(v: Val, keys: &[Val]) -> ValR {
                 match k {
                     Val::Num(n) => {
                         // C's `(int)` cast, as jq has it.
-                        let f = n.as_f64().trunc();
-                        let i = if f < 0.0 { len as f64 + f } else { f };
+                        // The sign of the key, not of its truncation:
+                        // `-0.5` is `len + 0`, past the end.
+                        let f = n.as_f64();
+                        let i = if f < 0.0 {
+                            len as f64 + f.trunc()
+                        } else {
+                            f.trunc()
+                        };
                         if i >= 0.0 && i < len as f64 {
                             del[i as usize] = true;
                         }
@@ -326,6 +332,10 @@ fn dels(v: Val, keys: &[Val]) -> ValR {
                     Val::Obj(o) => {
                         let start = o.get(&Val::utf8_str("start"));
                         let end = o.get(&Val::utf8_str("end"));
+                        // jq's `parse_slice` needs both keys.
+                        if start.is_none() || end.is_none() {
+                            return Err(Error::str("Array/string slice indices must be integers"));
+                        }
                         let r = Val::range_int(start..end)?;
                         let (skip, take) = crate::skip_take(r, len);
                         del[skip..skip + take].iter_mut().for_each(|d| *d = true);

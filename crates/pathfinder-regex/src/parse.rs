@@ -1721,9 +1721,7 @@ impl Parser<'_> {
         if self.peek_is(b'*') {
             return Err(Error::new(E::Unsupported));
         }
-        self.groups += 1;
-        let num = self.groups;
-        self.group_nodes.push(false);
+        let num = self.new_group()?;
         let body = self.group_body()?;
         self.group_nodes[num - 1] = true;
         Ok((
@@ -1736,6 +1734,18 @@ impl Parser<'_> {
         ))
     }
 
+    /// The next capture group's number (`scan_env_add_mem_entry`): past
+    /// `ONIG_MAX_CAPTURE_NUM`, 32 767, a pattern has too many captures.
+    fn new_group(&mut self) -> Result<usize, Error> {
+        const MAX_CAPTURE_NUM: usize = 32_767;
+        if self.groups + 1 > MAX_CAPTURE_NUM {
+            return Err(Error::new(E::TooManyCaptures));
+        }
+        self.groups += 1;
+        self.group_nodes.push(false);
+        Ok(self.groups)
+    }
+
     /// A group's alternatives up to its `)`.
     fn group_body(&mut self) -> Result<Node, Error> {
         let mut t = self.fetch_token()?;
@@ -1746,9 +1756,7 @@ impl Parser<'_> {
     fn named_group(&mut self, c: u32) -> Result<Node, Error> {
         let name = self.p;
         let (name_end, _, _) = self.fetch_name(c, false)?;
-        self.groups += 1;
-        let num = self.groups;
-        self.group_nodes.push(false);
+        let num = self.new_group()?;
         let key = self.s[name..name_end].to_vec();
         // `ONIG_SYN_ALLOW_MULTIPLEX_DEFINITION_NAME`.
         match self.names.iter_mut().find(|(n, _)| *n == key) {
@@ -2275,18 +2283,18 @@ pub(crate) fn add_ctype_to_cc(cc: &mut Class, ctype: usize, not: bool) {
         add_ctype_not(cc, mbr, SB_OUT);
         return;
     }
-    {
-        for &(from, to) in mbr {
-            if to < SB_OUT {
-                cc.set_bits(from, to);
-            } else if from < SB_OUT {
-                cc.set_bits(from, SB_OUT - 1);
-                cc.add_range(SB_OUT, to);
-            } else {
-                cc.add_range(from, to);
-            }
+    let mut multibyte = Vec::with_capacity(mbr.len());
+    for &(from, to) in mbr {
+        if to < SB_OUT {
+            cc.set_bits(from, to);
+        } else if from < SB_OUT {
+            cc.set_bits(from, SB_OUT - 1);
+            multibyte.push((SB_OUT, to));
+        } else {
+            multibyte.push((from, to));
         }
     }
+    cc.add_sorted_ranges(&multibyte);
 }
 
 /// The negated half of `add_ctype_to_cc_by_range`: below `sb_out` the
@@ -2306,16 +2314,22 @@ fn add_ctype_not(cc: &mut Class, mbr: &[(u32, u32)], sb_out: u32) {
         cc.set_bits(prev, sb_out - 1);
     }
     let mut prev = sb_out;
+    let mut multibyte = Vec::with_capacity(mbr.len() + 1);
+    let mut whole = true;
     for &(from, to) in mbr {
         if prev < from {
-            cc.add_range(prev, from - 1);
+            multibyte.push((prev, from - 1));
         }
         prev = to.wrapping_add(1);
         if prev == 0 {
-            return;
+            whole = false;
+            break;
         }
     }
-    cc.add_range(prev, u32::MAX);
+    if whole {
+        multibyte.push((prev, u32::MAX));
+    }
+    cc.add_sorted_ranges(&multibyte);
 }
 
 /// `i_apply_case_fold` over every fold (`ONIGENC_APPLY_ALL_CASE_FOLD`),

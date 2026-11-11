@@ -49,10 +49,22 @@ impl Opt {
 }
 
 impl<'a, U: Clone + 'a, E: Clone + 'a, T: Clone + IntoIterator<Item = Result<U, E>> + 'a> Path<T> {
+    /// Every combination of the parts' indices.
+    ///
+    /// Pathfinder: jq evaluates a chain's subscripts (`gen_subexp`) outside
+    /// the chain, the last one outermost, so `.[0,1][0,1]` takes the paths
+    /// `[0,0]`, `[1,0]`, `[0,1]`, `[1,1]`, in that order.
     pub(crate) fn explode(self) -> impl Iterator<Item = Result<Path<U>, E>> + 'a {
         Path(Vec::new())
-            .combinations(self.0.into_iter())
-            .map(Path::transpose)
+            .combinations(self.0.into_iter().rev())
+            // The parts are still in loop order here, so the error that
+            // `transpose` finds first is the outermost subscript's.
+            .map(|path| {
+                path.transpose().map(|mut path| {
+                    path.0.reverse();
+                    path
+                })
+            })
     }
 }
 
@@ -211,10 +223,17 @@ impl<'a, U: Clone + 'a, F: IntoIterator<Item = U> + Clone + 'a> Part<F> {
 }
 
 impl<T> Path<T> {
+    /// Apply `f` to the indices, the last part's first.
+    ///
+    /// Pathfinder: `f` may run a subscript at once (`collect_if_once`), and
+    /// jq runs the last one outermost, so first: `.[input][input]` reads the
+    /// last subscript's input before the first's.
     pub(crate) fn map_ref<'a, U>(&'a self, mut f: impl FnMut(&'a T) -> U) -> Path<U> {
-        let path = self.0.iter();
+        let path = self.0.iter().rev();
         let path = path.map(move |(part, opt)| (part.as_ref().map(&mut f), *opt));
-        Path(path.collect())
+        let mut path: Vec<_> = path.collect();
+        path.reverse();
+        Path(path)
     }
 }
 

@@ -11,7 +11,7 @@ Everything here was measured against **jq 1.8.1's release binary** (the
 declared baseline; see `AGENTS.md` for how to fetch it), not inferred. What
 Pathfinder *does* reproduce is not listed: the differential suite
 (`crates/pathfinder/tests/differential.rs`) asserts byte-for-byte agreement
-with jq on 1 194 invocations, stdout and exit status, and a part of it stderr
+with jq on 1 239 invocations, stdout and exit status, and a part of it stderr
 too; jq's own test suite passes 820 of 820.
 
 Until 0.2.0 Pathfinder could also run on a jaq binary (`PATHFINDER_ENGINE=jaq`),
@@ -41,9 +41,9 @@ rather than answering differently.
 
 - **A value's path.** jq keeps a value's path while it is the *same* value, so
   `. as $x | path($x)` is `[]`; here it is `Invalid path expression with
-  result 1`.
-- **An update through `try … catch`.** `(try .a catch .b) |= 1` updates `.a` in
-  jq; here it fails with `invalid path expression with input …`.
+  result 1`. `limit` is defined with `foreach … as $item (…; …; $item)`, so
+  `path(limit(2; .[]))` and `limit(2; .[]) |= f` fail here the same way
+  (TODO T-061).
 - **A path through `?//`.** `path(.[] as [$a] ?// $a | .)` is `[]` for each
   element in jq; here it fails with `Invalid path expression with result …`,
   because the alternatives are tried with `try … catch`.
@@ -62,12 +62,29 @@ rather than answering differently.
   (`.{4}{3,}{3}?+…` on a text too short for it). Found by fuzzing; both give
   the same answer on the rest of what was found.
 
+## Numbers
+
+- **Comparing literals beyond a double's range.** jq compares two number
+  literals as decimals, so `1e-400 == 0` is `false`, `1e-400 < 2e-400` is
+  `true` and `[1e-400, 0] | unique` is `[0,1E-400]`. Pathfinder compares them
+  as doubles, where both are `0`: `true`, `false`, `[1E-400]`. A literal
+  still prints as jq prints it, and arithmetic (`1e-400 + 0 == 0`) agrees
+  (TODO T-060).
+
 ## Input and output
 
 - **stdout and stderr in one file.** jq writes its outputs in blocks, the
   engine per value, so when both streams go to the same file their lines
   interleave differently (`1 2 | ., debug`, a parse error after the first
   value). Each stream on its own is jq's.
+- **NUL bytes in the input.** jq reads with `fgets` and takes a chunk with no
+  newline as a C string, so a NUL drops the rest of it (`"ab\0cd"` is
+  `Unfinished string at EOF … column 3`, `"a"\0` is just `"a"`); and it reads
+  a number token as a C string too, so `1\0` is `1` and `[1\0,2]` is `[1,2]`.
+  Pathfinder reads every byte: a NUL outside a string is an invalid literal,
+  and the error's wording or column can differ. A NUL inside a string is
+  jq's `Invalid string: control characters …` in both, once a newline
+  follows it (TODO T-068). Found by fuzzing.
 - **`--seq` input.** The input's RS separators are stripped before the reader
   sees them, so jq's `ignoring parse error: …` and `Truncated value` messages
   are not given; a malformed text is a plain parse error. With a missing file
