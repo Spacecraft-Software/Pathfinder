@@ -91,7 +91,7 @@ one does, its Unicode tables generated from Oniguruma's data files.
 - [x] T-051 `mjq`, a short name for `pathfinder`, installed by the Nix, Guix and Arch packages and `make install`
 - [x] T-052 (P-080) README, AGENTS.md, SKILL.md, the Texinfo manual, `crates/UPSTREAM.md` and `doc/DIVERGENCES.md` describe one engine; every divergence re-measured
 - [x] T-053 (P-079) Benchmarks against jq 1.8.1 and jaq 3.1.2 recorded in `doc/DIVERGENCES.md`
-- [ ] T-054 (P-079) 24 h of fuzzing clean, all four targets: `regex` from 2026-10-31T04:11Z, `syntax` from 14:24Z (after T-057, T-058) and `jqargs` from 15:02Z ran clean; `engine` ran 24 h from 2026-11-10T10:57Z on T-059, T-062 and T-063 (no panic; its findings are T-064–T-069) and runs again after them
+- [ ] T-054 (P-079) 24 h of fuzzing clean, all four targets: `regex` from 2026-10-31T04:11Z, `syntax` from 14:24Z (after T-057, T-058) and `jqargs` from 15:02Z ran clean; `engine` ran 24 h from 2026-11-10T10:57Z on T-059, T-062 and T-063 (no panic; its findings are T-064–T-069); the run on them from 2026-11-11T22:10Z stopped after 18.1 h when the host was suspended (no panic; its one finding is T-070) and runs again
 - [x] T-055 (P-081) Version 0.2.0
 - [ ] T-056 (P-081) Bravais on Pathfinder 0.2.0 (`nix flake update pathfinder`), then the `v0.2.0` tag
 - [x] T-057 (P-079, fuzzing) `range/1` and `range/2` take only numbers, as jq's `RANGE` opcode: `range("")` counted up for ever; a NaN bound counts for ever, as in jq; `transpose` is jq's definition
@@ -106,6 +106,7 @@ one does, its Unicode tables generated from Oniguruma's data files.
 - [x] T-066 (P-079, fuzzing) An update target with `?` finds its paths in the input first (`_assign`, `_modify`): `null | (.[:4,true]?) = [1]` skipped the bad slice and ran for ever on the fuzzer's chain; a slice of `null` set checks its bounds first, a string slice's update fails as jq's (bounds, `f`, then `Cannot update string slices` or `Cannot delete fields from string`)
 - [x] T-067 (P-079, fuzzing) A class takes a ctype's ranges in one merge: `[\w` repeated 1000 times took 1.1 s (jq 0.05 s), every range inserted by rebuilding the list
 - [x] T-069 (P-079, fuzzing) A pattern of more than 32 767 groups is `too many captures`, as Oniguruma's `scan_env_add_mem_entry`
+- [x] T-070 (P-079, fuzzing) A repeated string may be up to `INT_MAX` − 1 bytes, as jq's `jv_string_repeat`: `"abc" * 715827882` (2 147 483 646 bytes) was `Repeat string result too long`, the limit 8 bytes short
 - [ ] T-068 NUL bytes in the input read as jq reads them: a chunk with no newline cut at its first NUL (`strlen` after `fgets`), a number token read up to a NUL (`1\0` is `1`) (`doc/DIVERGENCES.md`) (optional)
 
 ## Standing

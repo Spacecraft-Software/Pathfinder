@@ -887,8 +887,8 @@ impl core::ops::Mul for Val {
             (Num(x), Num(y)) => Ok(Num(x * y)),
             // Pathfinder: jq 1.8.1's `binop_multiply` and `jv_string_repeat`.
             // The count is truncated (`"ab" * 1.5` is `"ab"`, `* 0.5` is `""`),
-            // a negative or NaN count is `null`, and a result of 2 GiB or more
-            // is an error rather than an allocation.
+            // a negative or NaN count is `null`, and a result of `INT_MAX`
+            // bytes or more is an error rather than an allocation.
             (s @ (BStr(_) | TStr(_)), Num(n)) | (Num(n), s @ (BStr(_) | TStr(_))) => {
                 let d = n.as_f64();
                 if d < 0.0 || d.is_nan() {
@@ -903,7 +903,7 @@ impl core::ops::Mul for Val {
                     BStr(b) | TStr(b) => b.len(),
                     _ => unreachable!(),
                 };
-                if (len as u64).saturating_mul(count as u64) >= (i32::MAX as u64 - 8) {
+                if (len as u64).saturating_mul(count as u64) >= i32::MAX as u64 {
                     return Err(Error::str("Repeat string result too long"));
                 }
                 match s {
