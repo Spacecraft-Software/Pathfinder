@@ -43,7 +43,9 @@ def delpaths($paths): reduce $paths[] as $path (.; getpath($path) |= empty);
 # Updates
 def map(f): [.[] | f];
 def map_values(f): .[] |= f;
-def walk(f): .. |= f;
+# Pathfinder: jq 1.8.1's `walk`, bottom up; `.. |= f` updates top down.
+# An object is at least `{}`, an array at least `[]` and below `{}`.
+def walk(f): def w: if . < [] then . elif . < {} then map(w) else map_values(w) end | f; w;
 def del(f): f |= empty;
 
 # Arrays

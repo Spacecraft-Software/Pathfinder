@@ -150,10 +150,11 @@ fn recurse_arr() {
     let y = json!([[[1, 42], 2, 42], 3, [4, [5, 42], 42], 42]);
     give(x.clone(), f, y);
 
-    let f = ".. |= if . < [] then .+1 else [42] + . end";
-    let y = json!([42, [42, [42, 1], 2], 3, [42, 4, [42, 5]]]);
-    // jq fails here with: "Cannot index number with number"
-    give(x.clone(), f, y);
+    // Pathfinder: jq 1.8.1 updates the paths `..` found in the input, the
+    // outermost first, so `[0]` of the input is `42` by the time it is
+    // reached (M24, found by fuzzing).
+    let f = "try (.. |= if . < [] then .+1 else [42] + . end) catch .";
+    give(x.clone(), f, json!("Cannot index number with number"));
 }
 
 // Pathfinder: jq computes integers beyond 2^53 in doubles (patch 0003) and

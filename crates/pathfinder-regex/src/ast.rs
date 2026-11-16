@@ -38,6 +38,24 @@ impl Class {
     /// Adds `from..=to` to the ranges, merging (`add_code_range_to_buf`).
     pub fn add_range(&mut self, from: u32, to: u32) {
         let (from, to) = if from <= to { (from, to) } else { (to, from) };
+        // Ranges mostly come in ascending order (a ctype's table): one that
+        // starts at or past the last range's start is appended or merged
+        // into it, keeping a class of `\w`'s ranges linear to build.
+        match self.ranges.last_mut() {
+            None => {
+                self.ranges.push((from, to));
+                return;
+            }
+            Some(last) if last.1.saturating_add(1) < from => {
+                self.ranges.push((from, to));
+                return;
+            }
+            Some(last) if last.0 <= from => {
+                last.1 = last.1.max(to);
+                return;
+            }
+            Some(_) => {}
+        }
         let mut lo = from;
         let mut hi = to;
         let mut out = Vec::with_capacity(self.ranges.len() + 1);
@@ -58,6 +76,36 @@ impl Class {
         }
         if !placed {
             out.push((lo, hi));
+        }
+        self.ranges = out;
+    }
+
+    /// Adds ranges sorted by their start, as many `add_range` calls would,
+    /// in one merge: a class given `\w` a thousand times (`[\w\w…`) stays
+    /// linear in the ranges.
+    pub fn add_sorted_ranges(&mut self, new: &[(u32, u32)]) {
+        let after = |l: &(u32, u32)| new.first().is_none_or(|n| l.0 <= n.0);
+        if self.ranges.last().is_none_or(after) {
+            for &(from, to) in new {
+                self.add_range(from, to);
+            }
+            return;
+        }
+        let old = core::mem::take(&mut self.ranges);
+        let mut out: Vec<(u32, u32)> = Vec::with_capacity(old.len() + new.len());
+        let (mut i, mut j) = (0, 0);
+        while i < old.len() || j < new.len() {
+            let next = if j >= new.len() || (i < old.len() && old[i].0 <= new[j].0) {
+                i += 1;
+                old[i - 1]
+            } else {
+                j += 1;
+                new[j - 1]
+            };
+            match out.last_mut() {
+                Some(last) if next.0 <= last.1.saturating_add(1) => last.1 = last.1.max(next.1),
+                _ => out.push(next),
+            }
         }
         self.ranges = out;
     }
@@ -179,4 +227,41 @@ pub enum Node {
     /// A node that never matches (`onig_node_reset_fail`, a gimmick): what
     /// a negative lookbehind of nothing becomes.
     Fail,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Class;
+
+    /// `add_sorted_ranges` is `add_range` over each range, whatever the
+    /// class held before: before, after, around or across the new ones.
+    #[test]
+    fn sorted_ranges_merge_as_add_range_does() {
+        let new = [
+            (0x100, 0x120),
+            (0x122, 0x130),
+            (0x400, 0x500),
+            (0x501, 0x501),
+        ];
+        let olds: [&[(u32, u32)]; 5] = [
+            &[],
+            &[(0x80, 0x90)],
+            &[(0x600, 0x700)],
+            &[(0x110, 0x121), (0x131, 0x3ff), (0x1_0000, 0x10_ffff)],
+            &[(0x80, 0x10_ffff)],
+        ];
+        for old in olds {
+            let mut one = Class::default();
+            let mut each = Class::default();
+            for &(a, b) in old {
+                one.add_range(a, b);
+                each.add_range(a, b);
+            }
+            one.add_sorted_ranges(&new);
+            for &(a, b) in &new {
+                each.add_range(a, b);
+            }
+            assert_eq!(one.ranges, each.ranges, "over {old:?}");
+        }
+    }
 }

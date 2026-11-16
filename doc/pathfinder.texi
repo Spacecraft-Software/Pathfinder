@@ -215,8 +215,12 @@ Oniguruma's subexpression calls, absent operator and callouts. Each gets a
 diagnostic naming the construct.
 
 @item Paths and updates
-@code{. as $x | path($x)}, an update through @code{try @dots{} catch}, and
-@code{break} inside a @code{?//} alternative.
+@code{. as $x | path($x)} and @code{path(limit(2; .[]))}, a path through
+@code{?//}, and @code{break} inside a @code{?//} alternative.
+
+@item Numbers
+Two number literals beyond a double's range are compared as doubles, so
+@code{1e-400 == 0} is @code{true}, where jq compares them as decimals.
 
 @item Input and output
 The interleaving of stdout and stderr in one file; jq's @option{--seq} input
