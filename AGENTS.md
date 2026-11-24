@@ -383,7 +383,10 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
 - A job can hang after its timeout fires (`-s none`, M24: `ALARM: working
   on the last Unit`, then no CPU for five hours), and `-fork`'s parent waits
   on it. In a long run, check that each target's log still grows; killing
-  the stuck job lets the parent go on.
+  the stuck job lets the parent go on. Not before its first `#` stats
+  line: with `-fork`, loading a corpus of 30 000 inputs logs nothing for
+  over 20 minutes, and a watchdog that kills it then restarts the load
+  for ever (M24).
 - `fuzz/seeds/` is committed (jq's suite for `syntax`/`engine`); `corpus/`,
   `artifacts/` and `target/` are not.
 
