@@ -4,6 +4,20 @@ def _totype(p; e): if p then . else fromjson | if p then . else e end end;
 
 # Arrays
 def transpose: [range(0; map(length)|max // 0) as $i | [.[][$i]]];
+# Pathfinder: jq 1.8.1's `combinations`. `combinations(n)` takes `range` over
+# every output of `n` at once (`combinations(1, 2)` is three copies, `null`
+# a range error), and `combinations` indexes its input by number (an object
+# is an error) (M24 fuzzing).
+def combinations:
+    if length == 0 then [] else
+        .[0][] as $x
+          | (.[1:] | combinations) as $y
+          | [$x] + $y
+    end;
+def combinations(n):
+    . as $dot
+      | [range(n) | $dot]
+      | combinations;
 
 # Indexing
 def in(xs)    : . as $x | xs | has     ($x);

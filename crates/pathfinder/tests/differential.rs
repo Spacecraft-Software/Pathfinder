@@ -897,6 +897,31 @@ static PATCHED_CASES: &[Case] = &[
 /// as jq reports it, with its location, and the next input still runs; the
 /// exit status is the last input's. Also `debug` and `halt_error` output.
 static PATCHED_STDERR_CASES: &[Case] = &[
+    // A value in an error message is its first 11 bytes, never splitting a
+    // character, written no further (M24 fuzzing: a 1 GB string took 2 GB).
+    c("null", &["\"abcdefghijkl\" - 1"]),
+    c("null", &["\"abcdefghijklm\" - 1"]),
+    c("null", &["\"aéééééé\" - 1"]),
+    c("null", &["\"aaaaaaaaaaé\" - 1"]),
+    c("null", &["\"😀😀😀😀\" - 1"]),
+    c("null", &["{\"a\": \"bbbbbbbbbbbbbb\"} - 1"]),
+    c("null", &["\"a\\\"\\\\b\\nccccc\" - 1"]),
+    c("null", &["(\"1\" * 10000000) - 1"]),
+    // jq 1.8.1's `combinations`: `range` over every output of `n` at once,
+    // and its input indexed by number (M24 fuzzing).
+    c("null", &["-c", "[1, 2] | [combinations(1, 2)]"]),
+    c("null", &["-c", "[0] | [combinations(empty)]"]),
+    c("null", &["-c", "[[1], [2]] | [combinations(null)]"]),
+    c("null", &["-c", "{\"a\": [1]} | [combinations]"]),
+    c("null", &["-c", "[[], 3] | [combinations]"]),
+    c("null", &["-c", "\"ab\" | [combinations]"]),
+    c(
+        "null",
+        &[
+            "-c",
+            "[[1, 2], {\"a\": 3, \"b\": 4}] | [combinations], [limit(2; [[1, 2], 3] | combinations)]",
+        ],
+    ),
     // Functions only the engine defines are jq's compile error, in reachable
     // code only (PRD R-004).
     c("null", &["isarray"]),

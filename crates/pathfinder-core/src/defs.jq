@@ -53,8 +53,7 @@ def first:  .[ 0];
 def last:   .[-1];
 def nth(n): .[ n];
 def join($s): .[] |= tostring | .[:-1][] += $s | reduce .[] as $x (""; . + $x);
-def combinations: .[][] |= [.] | reduce .[] as $a ([]; . + $a[]);
-def combinations($n): [limit($n; repeat(.))] | combinations;
+# Pathfinder: `combinations` is jq 1.8.1's, in `pathfinder-json` (it needs `length`).
 
 def nth(n; g): first(skip(n; g));
 
