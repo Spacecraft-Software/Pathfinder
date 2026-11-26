@@ -320,6 +320,17 @@ print. To keep the `jq` name untouched:
   line buffer is compacted. jaq's reader rejects what jq's rejects (comments,
   byte strings, non-string keys, run-on literals) so that both stop at the
   same byte; loosening it makes the two disagree on where an error is.
+- **A string from outside is made as jq makes one** (M24, T-071): bytes
+  that are not UTF-8 become U+FFFD as jq's `jvp_utf8_next` reads them
+  (`jaq_std::jq_lossy_utf8`; a sequence cut short by the end of the piece
+  runs to its end), on the piece jq repairs at once: a JSON string whole,
+  after its escapes (`Val::jq_str`); raw input one `fgets` chunk at a time,
+  as `jq::Lines` hands them out, so a character split across two chunks or
+  files is two U+FFFD; an argument; `--rawfile`; each environment name and
+  value (`env_vars`: `std::env::vars` panics on one that is not UTF-8, which
+  aborted every run); `input_filename`. `--argjson` text reaches the JSON
+  reader as bytes. `Val::utf8_str` trusts its bytes: use it only for text
+  that is UTF-8 already.
 - **A path expression fails where jq's does**: a non-path filter in path
   mode yields a *lost* path (`Node::Lost`), which fails only when a later
   step uses it. The messages start `Invalid`, which `jq.rs::wording` passes

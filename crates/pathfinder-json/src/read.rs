@@ -442,7 +442,8 @@ fn parse<L: LexAlloc>(next: u8, lexer: &mut L, depth: usize) -> Result<Val, hifi
             w => Val::Num(Num::Float(special_word(&w, lexer).ok_or(Expect::Value)?)),
         },
         b'0'..=b'9' | b'+' | b'-' | b'.' => Val::Num(parse_num(lexer)?),
-        b'"' => Val::utf8_str(parse_string(lexer.discarded(), false)?),
+        // Pathfinder: jq repairs a string's bytes once it has them all.
+        b'"' => Val::jq_str(parse_string(lexer.discarded(), false)?),
         b'[' => Val::Arr({
             let mut arr = Vec::new();
             lexer.discarded().seq(b']', ws_tk, |next, lexer| {

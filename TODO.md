@@ -91,7 +91,7 @@ one does, its Unicode tables generated from Oniguruma's data files.
 - [x] T-051 `mjq`, a short name for `pathfinder`, installed by the Nix, Guix and Arch packages and `make install`
 - [x] T-052 (P-080) README, AGENTS.md, SKILL.md, the Texinfo manual, `crates/UPSTREAM.md` and `doc/DIVERGENCES.md` describe one engine; every divergence re-measured
 - [x] T-053 (P-079) Benchmarks against jq 1.8.1 and jaq 3.1.2 recorded in `doc/DIVERGENCES.md`
-- [ ] T-054 (P-079) 24 h of fuzzing clean, all four targets: `regex` from 2026-10-31T04:11Z, `syntax` from 14:24Z (after T-057, T-058) and `jqargs` from 15:02Z ran clean; `engine` ran 24 h from 2026-11-10T10:57Z on T-059, T-062 and T-063 (no panic; its findings are T-064–T-069); the run on them from 2026-11-11T22:10Z stopped after 18.1 h when the host was suspended (no panic; its one finding is T-070); on T-070 (221c0c2) the 24 h are counted across interruptions, each segment resuming the saved corpus on the same build: 4.0 h from 2026-11-16T04:16Z, then the rest from 2026-11-24
+- [ ] T-054 (P-079) 24 h of fuzzing clean, all four targets: `regex` from 2026-10-31T04:11Z, `syntax` from 14:24Z (after T-057, T-058) and `jqargs` from 15:02Z ran clean; `engine` ran 24 h from 2026-11-10T10:57Z on T-059, T-062 and T-063 (no panic; its findings are T-064–T-069); the run on them from 2026-11-11T22:10Z stopped after 18.1 h when the host was suspended (no panic; its one finding is T-070); on T-070 (221c0c2) 8.1 h were counted across interruptions, each segment resuming the saved corpus on the same build and time the host was suspended left out (4.0 h from 2026-11-16T04:16Z, 0.6 h and 3.4 h from 2026-11-24), before its findings gave T-071; on T-071 the 24 h start again, counted the same way
 - [x] T-055 (P-081) Version 0.2.0
 - [ ] T-056 (P-081) Bravais on Pathfinder 0.2.0 (`nix flake update pathfinder`), then the `v0.2.0` tag
 - [x] T-057 (P-079, fuzzing) `range/1` and `range/2` take only numbers, as jq's `RANGE` opcode: `range("")` counted up for ever; a NaN bound counts for ever, as in jq; `transpose` is jq's definition
@@ -107,6 +107,7 @@ one does, its Unicode tables generated from Oniguruma's data files.
 - [x] T-067 (P-079, fuzzing) A class takes a ctype's ranges in one merge: `[\w` repeated 1000 times took 1.1 s (jq 0.05 s), every range inserted by rebuilding the list
 - [x] T-069 (P-079, fuzzing) A pattern of more than 32 767 groups is `too many captures`, as Oniguruma's `scan_env_add_mem_entry`
 - [x] T-070 (P-079, fuzzing) A repeated string may be up to `INT_MAX` − 1 bytes, as jq's `jv_string_repeat`: `"abc" * 715827882` (2 147 483 646 bytes) was `Repeat string result too long`, the limit 8 bytes short
+- [x] T-071 (P-079, fuzzing) Text that is not UTF-8 becomes U+FFFD as jq makes a string of it (`jv_string_sized`): a JSON string once whole, raw input one `fgets` chunk at a time (a character split across chunks is two), arguments, `--rawfile`, the environment and `input_filename`; `"\xf0"` printed the raw byte and `explode` gave `-240`, `-R` dropped a `\r` before a newline, and a variable in the environment that is not UTF-8 aborted every run
 - [ ] T-068 NUL bytes in the input read as jq reads them: a chunk with no newline cut at its first NUL (`strlen` after `fgets`), a number token read up to a NUL (`1\0` is `1`) (`doc/DIVERGENCES.md`) (optional)
 
 ## Standing

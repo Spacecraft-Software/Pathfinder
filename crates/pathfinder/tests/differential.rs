@@ -2926,3 +2926,132 @@ fn shim_matches_real_jq() {
     );
     eprintln!("{total} differential cases matched jq exactly");
 }
+
+/// A comparison whose input, arguments or environment are bytes that are not
+/// UTF-8, which a [`Case`] cannot hold.
+struct ByteCase {
+    stdin: Vec<u8>,
+    args: Vec<Vec<u8>>,
+    env: Option<(&'static [u8], &'static [u8])>,
+}
+
+fn bc(stdin: &[u8], args: &[&[u8]]) -> ByteCase {
+    let args = args.iter().map(|a| a.to_vec()).collect();
+    ByteCase {
+        stdin: stdin.to_vec(),
+        args,
+        env: None,
+    }
+}
+
+/// Text that is not UTF-8 becomes U+FFFD as jq makes strings of it
+/// (`jv_string_sized`, M24's fuzzing): a JSON string or key once whole, raw
+/// input one `fgets` chunk at a time (a character split across chunks or
+/// files is two), `\r` before a newline kept, arguments, `--argjson` text as
+/// JSON, `--rawfile`, the environment (a name that is not UTF-8 aborted the
+/// shim) and `input_filename`.
+fn byte_cases() -> Vec<ByteCase> {
+    let long = |tail: &[u8]| [b"a".repeat(4094).as_slice(), tail].concat();
+    let mut cases = vec![
+        bc(
+            b"\"a\xf0b\" \"\xf0bcd\" \"\xc0\x80x\" {\"k\xffy\":\"\xed\xa0\x80\"} \"\xf0\\u0041\" [\"\xe2\x82\"]",
+            &[b"-c", b"[., length, (explode? // null)]"],
+        ),
+        bc(b"\"\xf0\"", &[b"."]),
+        bc(b"\"\xf4\x90\x80\x80\xe0\x80\x80\"", &[b"-c", b"[., explode]"]),
+        bc(b"a\xf0b\nc\xe2\x82\r\nd\xff", &[b"-R", b"-c", b"[., length]"]),
+        bc(b"a\xf0b\nc\xe2\x82", &[b"-Rs", b"-c", b"[., length]"]),
+        bc(&long(b"\xc3\xa9z\n"), &[b"-R", b"-c", b"[length, .[4090:]]"]),
+        bc(&long(b"\xc3\xa9z\n"), &[b"-Rs", b"-c", b"[length, .[4090:]]"]),
+        bc(b"a\r\nb\r\n\r", &[b"-R", b"-c", b"."]),
+        bc(b"", &[b"-R", b"-c", b"[., length]", b"p1.txt", b"p2.txt"]),
+        bc(b"", &[b"-Rs", b"-c", b"[., length]", b"p1.txt", b"p2.txt"]),
+        bc(b"", &[b"-R", b"-c", b"[input_filename, .]", b"f\xf0name.txt"]),
+        bc(b"", &[b"-n", b"-c", b"--argjson", b"x", b"\"\xf0b\"", b"$x | [length, explode]"]),
+        bc(b"", &[b"-n", b"-c", b"--arg", b"x", b"\xf0b", b"$x | [length, explode]"]),
+        bc(b"", &[b"-n", b"-c", b"$ARGS.positional", b"--args", b"a\xf0b", b"\xe2\x82"]),
+        bc(b"", &[b"-n", b"-c", b"--rawfile", b"r", b"bad.txt", b"$r | [., length]"]),
+    ];
+    let env = |name: &'static [u8], value: &'static [u8], filter: &[u8]| ByteCase {
+        env: Some((name, value)),
+        ..bc(b"", &[b"-n", b"-c", filter])
+    };
+    cases.push(env(b"PF_BAD", b"a\xf0b", b"[$ENV.PF_BAD, env.PF_BAD]"));
+    cases.push(env(
+        b"PF_\xff",
+        b"1",
+        b"$ENV | keys | map(select(startswith(\"PF_\")))",
+    ));
+    cases.push(env(b"PF_\xff", b"1", b"1"));
+    cases
+}
+
+#[test]
+fn bytes_that_are_not_utf8_read_as_jq_reads_them() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let Some(jq) = real_jq() else {
+        skip_or_fail("no usable jq available");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("pathfinder-utf8-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let files: &[(&[u8], &[u8])] = &[
+        (b"p1.txt", b"a\xf0"),
+        (b"p2.txt", b"\x9f\x98\x80b\n"),
+        (b"bad.txt", b"a\xf0b"),
+        (b"f\xf0name.txt", b"x\xff\n"),
+    ];
+    for (name, bytes) in files {
+        std::fs::write(dir.join(OsStr::from_bytes(name)), bytes).expect("fixture");
+    }
+    let shim = shim(&dir);
+    let run = |exe: &std::path::Path, case: &ByteCase| {
+        use std::io::Write as _;
+        let mut cmd = Command::new(exe);
+        cmd.args(case.args.iter().map(|a| OsStr::from_bytes(a)));
+        if let Some((name, value)) = case.env {
+            cmd.env(OsStr::from_bytes(name), OsStr::from_bytes(value));
+        }
+        let mut child = cmd
+            .current_dir(&dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawns");
+        let _ = child
+            .stdin
+            .take()
+            .expect("stdin piped")
+            .write_all(&case.stdin);
+        let out = child.wait_with_output().expect("completes");
+        (out.status.code(), out.stdout, out.stderr)
+    };
+    let cases = byte_cases();
+    let mut failures: Vec<String> = Vec::new();
+    for case in &cases {
+        let (expected, actual) = (run(&jq, case), run(&shim, case));
+        if expected != actual {
+            let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+            let args: Vec<_> = case.args.iter().map(|a| text(a)).collect();
+            failures.push(format!(
+                "  args {args:?} env {:?}\n    jq   -> {:?} {:?} {:?}\n    shim -> {:?} {:?} {:?}",
+                case.env.map(|(n, v)| (text(n), text(v))),
+                expected.0,
+                text(&expected.1),
+                text(&expected.2),
+                actual.0,
+                text(&actual.1),
+                text(&actual.2),
+            ));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        failures.is_empty(),
+        "{} of {} byte cases diverged from jq:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}

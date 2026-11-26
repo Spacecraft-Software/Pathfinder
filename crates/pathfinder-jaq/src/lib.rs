@@ -39,6 +39,9 @@ mod tests;
 pub use cli::{Cli, Filter as Program, Format};
 /// Pathfinder: the engine core, for a front end that builds its terms (M21).
 pub use jaq_all::jaq_core;
+/// Pathfinder: text as jq makes a string of it, for the front end's
+/// arguments.
+pub use jaq_all::jaq_std::jq_lossy_utf8;
 pub use jq::Segment;
 
 use core::fmt::{self, Display, Formatter};
@@ -274,7 +277,11 @@ fn real_main(
                 ),
                 _ => read::read(format, jq::Lines::new(&bytes[..], &pos), cli.slurp),
             };
-            let name = file.as_os_str().to_string_lossy();
+            // Pathfinder: jq makes a string of the name as of any text.
+            let name = file.as_os_str().to_str().map_or_else(
+                || jq_lossy_utf8(file.as_os_str().as_encoded_bytes()).into(),
+                std::borrow::Cow::Borrowed,
+            );
             let in_memory = matches!(format, Format::Json).then_some(&bytes[..]);
             let location = || pos.location(&name, in_memory);
             let filename = || pos.filename(&name);
@@ -316,7 +323,7 @@ fn binds(cli: &Cli) -> Result<Vec<(String, Val)>, Error> {
             "argjson"
         };
         let err = |_| Error::Usage(format!("invalid JSON text passed to --{flag}"));
-        let s = s.as_bytes();
+        let s = s.as_encoded_bytes();
         Ok((k.to_owned(), read::json::parse_jq_single(s).map_err(err)?))
     });
     // Pathfinder: jq 1.8.1's report of a file it cannot open or parse.
@@ -330,7 +337,7 @@ fn binds(cli: &Cli) -> Result<Vec<(String, Val)>, Error> {
     };
     let rawfile = cli.rawfile.iter().map(|(k, path)| {
         let s = read::load_file(path).map_err(|e| bad("rawfile", k, path.as_ref(), e))?;
-        Ok((k.to_owned(), Val::utf8_str(s)))
+        Ok((k.to_owned(), Val::jq_str(s)))
     });
     let slurpfile = cli.slurpfile.iter().map(|(k, path)| {
         let v = read::json_array(path).map_err(|e| bad("slurpfile", k, path.as_ref(), e))?;
@@ -344,7 +351,7 @@ fn binds(cli: &Cli) -> Result<Vec<(String, Val)>, Error> {
     let mut var_val = var_val.collect::<Result<Vec<_>, Error>>()?;
 
     var_val.push(("ARGS".to_string(), args(&positional, &var_val)));
-    let env = std::env::vars().map(|(k, v)| (k.into(), Val::from(v)));
+    let env = jaq_all::jaq_std::env_vars().map(|(k, v)| (k.into(), Val::from(v)));
     var_val.push(("ENV".to_string(), Val::obj(env.collect())));
 
     Ok(var_val)

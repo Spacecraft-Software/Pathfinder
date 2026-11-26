@@ -687,6 +687,23 @@ impl Val {
         Self::TStr(s.into().into())
     }
 
+    /// Pathfinder: a string of bytes read from outside, as jq makes one
+    /// (`jv_string_sized`): bytes that are not UTF-8 become U+FFFD
+    /// ([`jaq_std::jq_lossy_utf8`]). [`Self::utf8_str`] keeps them, and they
+    /// were printed as they came.
+    ///
+    /// The ASCII test goes first: inlined, it is most of the cost saved on
+    /// short strings, where `from_utf8`'s call is not.
+    #[inline]
+    pub fn jq_str(s: impl Into<Bytes>) -> Self {
+        let s = s.into();
+        if s.is_ascii() || core::str::from_utf8(&s).is_ok() {
+            Self::utf8_str(s)
+        } else {
+            Self::utf8_str(jaq_std::jq_lossy_utf8(&s))
+        }
+    }
+
     /// Construct a string that is interpreted as bytes.
     pub fn byte_str(s: impl Into<Bytes>) -> Self {
         Self::BStr(s.into().into())

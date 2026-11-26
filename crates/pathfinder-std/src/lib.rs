@@ -740,15 +740,29 @@ fn std<D: DataT>() -> Box<[Filter<RunPtr<D>>]>
 where
     for<'a> D::V<'a>: ValT,
 {
-    use std::env::vars;
     Box::new([
         ("env", v(0), |_| {
             bome(D::V::from_map(
-                vars().map(|(k, v)| (D::V::from(k), D::V::from(v))),
+                env_vars().map(|(k, v)| (D::V::from(k), D::V::from(v))),
             ))
         }),
         ("now", v(0), |_| bome(now().map(D::V::from))),
     ])
+}
+
+/// Pathfinder: the environment as jq's `env` and `$ENV` read it, each name
+/// and value made a string as jq makes one ([`jq_lossy_utf8`]). `vars`
+/// panicked on a variable that is not UTF-8, so any run in such an
+/// environment aborted (M24).
+#[cfg(feature = "std")]
+pub fn env_vars() -> impl Iterator<Item = (String, String)> {
+    std::env::vars_os().map(|(k, v)| {
+        let text = |s: std::ffi::OsString| match s.into_string() {
+            Ok(s) => s,
+            Err(s) => jq_lossy_utf8(s.as_encoded_bytes()),
+        };
+        (text(k), text(v))
+    })
 }
 
 #[cfg(feature = "format")]
@@ -859,22 +873,45 @@ fn jq_decode_uri<V: ValT>(v: V) -> ValR<V> {
     }
 }
 
-/// Pathfinder: bytes as jq makes a string of them (`jvp_utf8_next`): each
-/// sequence that is not UTF-8 becomes one U+FFFD. A stray continuation byte
-/// or a byte no sequence starts with is one sequence; a sequence cut short
-/// by a byte that does not continue it ends before that byte; one cut short
-/// by the end of the input runs to the end; an overlong form, a surrogate or
-/// a code point past U+10FFFF is one sequence of its full length.
-#[cfg(feature = "format")]
-fn jq_lossy_utf8(mut bytes: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
+/// Pathfinder: bytes as jq makes a string of them (`jv_string_sized`, which
+/// reads them with `jvp_utf8_next`): each sequence that is not UTF-8 becomes
+/// one U+FFFD. A stray continuation byte or a byte no sequence starts with
+/// is one sequence; a sequence cut short by a byte that does not continue it
+/// ends before that byte; one cut short by the end of the input runs to the
+/// end; an overlong form, a surrogate or a code point past U+10FFFF is one
+/// sequence of its full length.
+///
+/// jq repairs each piece of text it makes a string of on its own: a JSON
+/// string whole, raw input one `fgets` chunk at a time, an argument or an
+/// environment variable whole. The caller hands over that piece.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(jaq_std::jq_lossy_utf8(b"a\xf0b"), "a\u{FFFD}");
+/// assert_eq!(jaq_std::jq_lossy_utf8(b"\xf0bcd"), "\u{FFFD}bcd");
+/// assert_eq!(jaq_std::jq_lossy_utf8(b"\xc0\x80x"), "\u{FFFD}\u{FFFD}x");
+/// ```
+pub fn jq_lossy_utf8(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    push_jq_lossy_utf8(&mut out, bytes);
+    out
+}
+
+/// Pathfinder: [`jq_lossy_utf8`], appended to `out`, for text read in
+/// pieces (raw input), which would otherwise be copied twice.
+pub fn push_jq_lossy_utf8(out: &mut String, mut bytes: &[u8]) {
     while !bytes.is_empty() {
-        let valid = match core::str::from_utf8(bytes) {
-            Ok(_) => bytes.len(),
-            Err(e) => e.valid_up_to(),
+        let (valid, rest) = match core::str::from_utf8(bytes) {
+            Ok(s) => (s, &[][..]),
+            Err(e) => {
+                let (valid, rest) = bytes.split_at(e.valid_up_to());
+                // `valid_up_to` ends where the bytes stop being UTF-8.
+                (core::str::from_utf8(valid).unwrap_or_default(), rest)
+            }
         };
-        out.extend_from_slice(&bytes[..valid]);
-        bytes = &bytes[valid..];
+        out.push_str(valid);
+        bytes = rest;
         let Some(&first) = bytes.first() else { break };
         let length = match first {
             0xC2..=0xDF => 2,
@@ -889,10 +926,9 @@ fn jq_lossy_utf8(mut bytes: &[u8]) -> Vec<u8> {
                 .find(|&i| bytes[i] & 0xC0 != 0x80)
                 .unwrap_or(length)
         };
-        out.extend_from_slice("\u{FFFD}".as_bytes());
+        out.push('\u{FFFD}');
         bytes = &bytes[length..];
     }
-    out
 }
 
 #[cfg(feature = "math")]

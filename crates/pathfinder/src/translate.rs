@@ -228,7 +228,11 @@ fn run_options(
 ) -> jaq::Cli {
     use jaq::Format;
     let f = &args.flags;
-    let text = |s: &OsString| s.to_string_lossy().into_owned();
+    // A value made a string as jq makes one of `argv` (`jv_string`).
+    let text = |s: &OsString| match s.to_str() {
+        Some(s) => s.to_owned(),
+        None => jaq::jq_lossy_utf8(s.as_encoded_bytes()),
+    };
     let mut cli = jaq::Cli {
         null_input: f.null_input,
         slurp: f.slurp,
@@ -267,13 +271,13 @@ fn run_options(
     for (name, value) in &args.named {
         match value {
             NamedValue::Str(v) => cli.arg.push((name.clone(), text(v))),
-            NamedValue::Json(v) => cli.argjson.push((name.clone(), text(v))),
+            NamedValue::Json(v) => cli.argjson.push((name.clone(), v.clone())),
             NamedValue::RawFile(v) => cli.rawfile.push((name.clone(), v.clone())),
             NamedValue::SlurpFile(v) => cli.slurpfile.push((name.clone(), v.clone())),
         }
     }
     for (name, value) in bound {
-        cli.argjson.push((name.clone(), text(value)));
+        cli.argjson.push((name.clone(), value.clone()));
     }
     if matches!(args.positional_mode, PositionalMode::Strings) {
         cli.args = args.positional.iter().map(text).collect();
@@ -392,11 +396,14 @@ mod tests {
             .cli
             .argjson
             .iter()
-            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .map(|(n, v)| (n.as_str(), v.to_str()))
             .collect();
         assert_eq!(
             bound,
-            [("__pathfinder_p0", "1"), ("__pathfinder_p1", "{\"a\":2}")]
+            [
+                ("__pathfinder_p0", Some("1")),
+                ("__pathfinder_p1", Some("{\"a\":2}"))
+            ]
         );
         let program = program_of(&p);
         // Extending rather than rebuilding keeps $ARGS.named from --arg.
