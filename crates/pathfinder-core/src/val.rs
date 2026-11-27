@@ -12,6 +12,35 @@ use core::ops::{Add, Div, Mul, Neg, Rem, Sub};
 #[cfg(doc)]
 use core::str::FromStr;
 
+/// Pathfinder: the first [`Prefix::CAP`] bytes of a text, never splitting a
+/// character, for [`ValT::jq_quoted`]; a write past them fails, so that the
+/// writer stops.
+#[derive(Default)]
+struct Prefix {
+    text: alloc::string::String,
+    /// Whether the text went on past what is kept.
+    cut: bool,
+}
+
+impl Prefix {
+    /// jq shows 14 bytes whole, and the first 11 of a longer text.
+    const CAP: usize = 15;
+}
+
+impl core::fmt::Write for Prefix {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let room = Self::CAP - self.text.len();
+        if s.len() <= room {
+            self.text.push_str(s);
+            return Ok(());
+        }
+        let end = (0..=room).rev().find(|&i| s.is_char_boundary(i));
+        self.text.push_str(&s[..end.unwrap_or(0)]);
+        self.cut = true;
+        Err(core::fmt::Error)
+    }
+}
+
 /// Value or eRror.
 pub type ValR<T, V = T> = Result<T, crate::Error<V>>;
 /// Stream of values and eRrors.
@@ -85,16 +114,30 @@ pub trait ValT:
         false
     }
 
+    /// Pathfinder: where jq's `jv_dels` deletes `self` from `container`,
+    /// when that differs from `self`: a negative index into an array, as an
+    /// index from its start (`len` when it falls before it, deleting
+    /// nothing). jq resolves every index of a deletion before removing any.
+    fn jq_del_index(&self, _container: &Self) -> Option<Self> {
+        None
+    }
+
     /// Pathfinder: a string's text, unescaped, for jq's error messages.
     fn jq_string(&self) -> Option<alloc::string::String>;
 
     /// Pathfinder: the value as jq's error messages show it, its type and
     /// its JSON text cut short: `array ([1,2,3,4,5,...)` (jq's
     /// `jv_dump_string_trunc` into 15 bytes).
+    ///
+    /// Only the first 15 bytes of the text are written: the whole of a
+    /// 1 GB string, written to be cut, took 2 GB (M24 fuzzing).
     fn jq_quoted(&self) -> alloc::string::String {
-        use alloc::string::ToString;
-        let s = self.to_string();
-        if s.len() <= 14 {
+        use core::fmt::Write as _;
+        let mut prefix = Prefix::default();
+        // The error is `Prefix` stopping the value's text once it is full.
+        let _ = write!(prefix, "{self}");
+        let s = prefix.text;
+        if !prefix.cut && s.len() <= 14 {
             return alloc::format!("{} ({s})", self.jq_type());
         }
         // jq keeps the first 11 bytes, never splitting a character.

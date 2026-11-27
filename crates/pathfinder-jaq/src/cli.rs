@@ -33,7 +33,9 @@ pub struct Cli {
 
     // Key-value options
     pub arg: Vec<(String, String)>,
-    pub argjson: Vec<(String, String)>,
+    /// Pathfinder: the text as given, so that the JSON reader makes its
+    /// strings as jq does, bytes that are not UTF-8 included.
+    pub argjson: Vec<(String, OsString)>,
     pub slurpfile: Vec<(String, OsString)>,
     pub rawfile: Vec<(String, OsString)>,
 
@@ -123,7 +125,7 @@ impl Cli {
             }
             "argjson" => {
                 let (name, value) = parse_key_val("--argjson", args)?;
-                self.argjson.push((name, value.into_string()?));
+                self.argjson.push((name, value));
             }
             "slurpfile" => self.slurpfile.push(parse_key_val("--slurpfile", args)?),
             "rawfile" => self.rawfile.push(parse_key_val("--rawfile", args)?),

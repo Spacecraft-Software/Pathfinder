@@ -37,7 +37,7 @@ listed.
 |---|---|
 | Baseline | jq **1.8.1** |
 | Engine | Pathfinder's engine crates (forked from jaq 3.1.1), in process |
-| Differential suite | **1 174 invocations**, byte-identical stdout and exit code against jq 1.8.1 |
+| Differential suite | **1 239 invocations**, byte-identical stdout and exit code against jq 1.8.1 |
 | jq's own test suite | **100%** (820/820) — `make conformance` |
 | Known unrepaired divergences | All in [`doc/DIVERGENCES.md`](doc/DIVERGENCES.md), measured |
 

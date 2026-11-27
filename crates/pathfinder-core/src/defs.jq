@@ -43,7 +43,9 @@ def delpaths($paths): reduce $paths[] as $path (.; getpath($path) |= empty);
 # Updates
 def map(f): [.[] | f];
 def map_values(f): .[] |= f;
-def walk(f): .. |= f;
+# Pathfinder: jq 1.8.1's `walk`, bottom up; `.. |= f` updates top down.
+# An object is at least `{}`, an array at least `[]` and below `{}`.
+def walk(f): def w: if . < [] then . elif . < {} then map(w) else map_values(w) end | f; w;
 def del(f): f |= empty;
 
 # Arrays
@@ -51,8 +53,7 @@ def first:  .[ 0];
 def last:   .[-1];
 def nth(n): .[ n];
 def join($s): .[] |= tostring | .[:-1][] += $s | reduce .[] as $x (""; . + $x);
-def combinations: .[][] |= [.] | reduce .[] as $a ([]; . + $a[]);
-def combinations($n): [limit($n; repeat(.))] | combinations;
+# Pathfinder: `combinations` is jq 1.8.1's, in `pathfinder-json` (it needs `length`).
 
 def nth(n; g): first(skip(n; g));
 

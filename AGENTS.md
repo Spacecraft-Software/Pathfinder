@@ -227,6 +227,23 @@ print. To keep the `jq` name untouched:
   nothing deletes the path, as jq's does: a step whose child is absent
   (`ValT::jq_absent`) and still `null` after the rest of the path yields
   nothing, so the parent creates no key and pads no array.
+  Only a plain path (`.`, steps without `?`, and pipes and commas of them;
+  `filter::plain_path`) is updated in one native pass. Any other target is
+  updated as jq's `_assign`/`_modify` do (`filter::update_paths`, M24): its
+  paths are found in the input first, then each is read (`getpath`), `f`
+  runs, and its first output is set; those `f` yields nothing for are never
+  written but deleted together at the end. Updating while the
+  target was walked made `recurse = ./.` walk what it wrote until the stack
+  overflowed, and a `?` step skipped what failed only on the updated value
+  (`null | (.[:4,true]?) = [1]`, a fuzzer's hang). `walk` is jq's bottom-up
+  definition, not `.. |= f`.
+- **A chain's subscripts run outside it** (`gen_subexp`): in `t[a][b]`
+  every subscript is evaluated on the chain's input, the last one in the
+  outermost loop, and the term `t` inside them all, once per combination
+  (`Path::explode`). So `[[1,2],[3,4]] | [.[0,1][0,1]]` is `[1,3,2,4]`,
+  `[(input)[0,1]]` reads two inputs, and of two failing subscripts the last
+  one's error is raised. jq's suite never checked the order; the engine
+  fuzzer found it (M24).
 - **Arguments run in jq's order.** jq runs a C builtin's last argument in
   the outermost loop and a definition's first (`def f($a; $b)` is
   `a as $a | b as $b | …`). The engine's natives bind as C builtins do
@@ -303,6 +320,17 @@ print. To keep the `jq` name untouched:
   line buffer is compacted. jaq's reader rejects what jq's rejects (comments,
   byte strings, non-string keys, run-on literals) so that both stop at the
   same byte; loosening it makes the two disagree on where an error is.
+- **A string from outside is made as jq makes one** (M24, T-071): bytes
+  that are not UTF-8 become U+FFFD as jq's `jvp_utf8_next` reads them
+  (`jaq_std::jq_lossy_utf8`; a sequence cut short by the end of the piece
+  runs to its end), on the piece jq repairs at once: a JSON string whole,
+  after its escapes (`Val::jq_str`); raw input one `fgets` chunk at a time,
+  as `jq::Lines` hands them out, so a character split across two chunks or
+  files is two U+FFFD; an argument; `--rawfile`; each environment name and
+  value (`env_vars`: `std::env::vars` panics on one that is not UTF-8, which
+  aborted every run); `input_filename`. `--argjson` text reaches the JSON
+  reader as bytes. `Val::utf8_str` trusts its bytes: use it only for text
+  that is UTF-8 already.
 - **A path expression fails where jq's does**: a non-path filter in path
   mode yields a *lost* path (`Node::Lost`), which fails only when a later
   step uses it. The messages start `Invalid`, which `jq.rs::wording` passes
@@ -355,13 +383,21 @@ env -u CFLAGS -u CXXFLAGS cargo fuzz run -s none syntax corpus/syntax seeds/synt
   ever that way, and `syntax` a chain of `?//` growing threefold per link.
   The target's first finding, a panic on `[1 #`, is fixed in the engine's
   lexer.
+- A stack overflow kills a job before libFuzzer can write an artifact: the
+  log's crash count rises with no `crash-*` file. Its input is in the core
+  dump: `coredumpctl dump <pid> -o core`, then in `gdb`, `frame function
+  fuzzer::Fuzzer::ExecuteCallback` and `dump binary memory in Data
+  Data+Size` (M24 found `recurse = ./.` that way).
 - A crash is reproduced with `cargo fuzz run -s none <target> <artifact>`.
   A crash gets a fix and a test where it happened: a unit test in the shim,
   a differential case or an engine crate test in the engine.
 - A job can hang after its timeout fires (`-s none`, M24: `ALARM: working
   on the last Unit`, then no CPU for five hours), and `-fork`'s parent waits
   on it. In a long run, check that each target's log still grows; killing
-  the stuck job lets the parent go on.
+  the stuck job lets the parent go on. Not before its first `#` stats
+  line: with `-fork`, loading a corpus of 30 000 inputs logs nothing for
+  over 20 minutes, and a watchdog that kills it then restarts the load
+  for ever (M24).
 - `fuzz/seeds/` is committed (jq's suite for `syntax`/`engine`); `corpus/`,
   `artifacts/` and `target/` are not.
 

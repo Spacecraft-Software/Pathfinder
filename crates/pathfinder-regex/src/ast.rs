@@ -38,26 +38,68 @@ impl Class {
     /// Adds `from..=to` to the ranges, merging (`add_code_range_to_buf`).
     pub fn add_range(&mut self, from: u32, to: u32) {
         let (from, to) = if from <= to { (from, to) } else { (to, from) };
-        let mut lo = from;
-        let mut hi = to;
-        let mut out = Vec::with_capacity(self.ranges.len() + 1);
-        let mut placed = false;
-        for &(a, b) in &self.ranges {
-            if b.saturating_add(1) < lo {
-                out.push((a, b));
-            } else if hi.saturating_add(1) < a {
-                if !placed {
-                    out.push((lo, hi));
-                    placed = true;
-                }
-                out.push((a, b));
-            } else {
-                lo = lo.min(a);
-                hi = hi.max(b);
+        // Ranges mostly come in ascending order (a ctype's table): one that
+        // starts at or past the last range's start is appended or merged
+        // into it, keeping a class of `\w`'s ranges linear to build.
+        match self.ranges.last_mut() {
+            None => {
+                self.ranges.push((from, to));
+                return;
             }
+            Some(last) if last.1.saturating_add(1) < from => {
+                self.ranges.push((from, to));
+                return;
+            }
+            Some(last) if last.0 <= from => {
+                last.1 = last.1.max(to);
+                return;
+            }
+            Some(_) => {}
         }
-        if !placed {
-            out.push((lo, hi));
+        // The ranges are sorted, disjoint and never adjacent, so those the
+        // new one touches are one run, `start..end`, found by two binary
+        // searches and replaced in place. Rebuilding the whole list instead
+        // made a 28 KB `(?i)` class take 25 times jq's time (M24 fuzzing).
+        let start = self
+            .ranges
+            .partition_point(|&(_, b)| b.saturating_add(1) < from);
+        let end = self
+            .ranges
+            .partition_point(|&(a, _)| a <= to.saturating_add(1));
+        let merged = match self.ranges.get(start..end) {
+            Some([first, .., last]) => (from.min(first.0), to.max(last.1)),
+            Some([only]) => (from.min(only.0), to.max(only.1)),
+            _ => (from, to),
+        };
+        self.ranges.splice(start..end, [merged]);
+    }
+
+    /// Adds ranges sorted by their start, as many `add_range` calls would,
+    /// in one merge: a class given `\w` a thousand times (`[\w\w…`) stays
+    /// linear in the ranges.
+    pub fn add_sorted_ranges(&mut self, new: &[(u32, u32)]) {
+        let after = |l: &(u32, u32)| new.first().is_none_or(|n| l.0 <= n.0);
+        if self.ranges.last().is_none_or(after) {
+            for &(from, to) in new {
+                self.add_range(from, to);
+            }
+            return;
+        }
+        let old = core::mem::take(&mut self.ranges);
+        let mut out: Vec<(u32, u32)> = Vec::with_capacity(old.len() + new.len());
+        let (mut i, mut j) = (0, 0);
+        while i < old.len() || j < new.len() {
+            let next = if j >= new.len() || (i < old.len() && old[i].0 <= new[j].0) {
+                i += 1;
+                old[i - 1]
+            } else {
+                j += 1;
+                new[j - 1]
+            };
+            match out.last_mut() {
+                Some(last) if next.0 <= last.1.saturating_add(1) => last.1 = last.1.max(next.1),
+                _ => out.push(next),
+            }
         }
         self.ranges = out;
     }
@@ -179,4 +221,78 @@ pub enum Node {
     /// A node that never matches (`onig_node_reset_fail`, a gimmick): what
     /// a negative lookbehind of nothing becomes.
     Fail,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Class;
+
+    /// `add_sorted_ranges` is `add_range` over each range, whatever the
+    /// class held before: before, after, around or across the new ones.
+    #[test]
+    fn sorted_ranges_merge_as_add_range_does() {
+        let new = [
+            (0x100, 0x120),
+            (0x122, 0x130),
+            (0x400, 0x500),
+            (0x501, 0x501),
+        ];
+        let olds: [&[(u32, u32)]; 5] = [
+            &[],
+            &[(0x80, 0x90)],
+            &[(0x600, 0x700)],
+            &[(0x110, 0x121), (0x131, 0x3ff), (0x1_0000, 0x10_ffff)],
+            &[(0x80, 0x10_ffff)],
+        ];
+        for old in olds {
+            let mut one = Class::default();
+            let mut each = Class::default();
+            for &(a, b) in old {
+                one.add_range(a, b);
+                each.add_range(a, b);
+            }
+            one.add_sorted_ranges(&new);
+            for &(a, b) in &new {
+                each.add_range(a, b);
+            }
+            assert_eq!(one.ranges, each.ranges, "over {old:?}");
+        }
+    }
+
+    /// Ranges added in any order, overlapping, adjacent or apart, end as
+    /// the sorted, merged ranges of the codes they cover.
+    #[test]
+    fn ranges_in_any_order_merge() {
+        const N: u32 = 300;
+        let mut seed: u32 = 0x9e37_79b9;
+        let mut next = |m: u32| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) % m
+        };
+        for _ in 0..200 {
+            let mut class = Class::default();
+            let mut set = [false; N as usize];
+            for _ in 0..next(40) {
+                let a = next(N);
+                let b = (a + next(6)).min(N - 1);
+                // Either way round: `add_range` orders its ends.
+                if next(2) == 0 {
+                    class.add_range(a, b);
+                } else {
+                    class.add_range(b, a);
+                }
+                set[a as usize..=b as usize]
+                    .iter_mut()
+                    .for_each(|s| *s = true);
+            }
+            let mut want: Vec<(u32, u32)> = Vec::new();
+            for i in (0..N).filter(|&i| set[i as usize]) {
+                match want.last_mut() {
+                    Some(last) if last.1 + 1 == i => last.1 = i,
+                    _ => want.push((i, i)),
+                }
+            }
+            assert_eq!(class.ranges, want);
+        }
+    }
 }

@@ -185,6 +185,50 @@ static CASES: &[Case] = &[
         r#"[{"id":1,"v":0},{"id":2,"v":0}]"#,
         &["-c", "(.[] | select(.id == 2) | .v) |= 9"],
     ),
+    // An update finds its paths in the input first, as jq's `_modify` and
+    // `_assign` do, so what it writes is not walked (found by fuzzing, M24:
+    // `recurse = ./.` overflowed the stack) and deletions wait for the end.
+    c(
+        "\"ab\"",
+        &[
+            "-c",
+            "(recurse = ./.), (recurse /= \"\"), (recurse(.[]?) = [1]), \
+             (recurse(.[]?; true) = [1])",
+        ],
+    ),
+    c(
+        "[1]",
+        &[
+            "-c",
+            "(.. = [[2]]), (.. |= [[2]]), try (.. /= \"x\") catch .",
+        ],
+    ),
+    c(
+        "[1,[2]]",
+        &[
+            "-c",
+            "try (.. |= if . < [] then . else [0] + . end) catch ., \
+             walk(if . >= [] and . < {} then [0] + . else . end)",
+        ],
+    ),
+    c(
+        r#"{"a":[1,2]}"#,
+        &["-c", "((.a, .a[]) = [5,6]), ((.a, .a[]) |= [5,6])"],
+    ),
+    c("{\"a\":1}", &["-c", "try (.. += 1) catch ."]),
+    c(
+        "[3,1,2]",
+        &[
+            "-c",
+            "((.[] | select(. > 1)) |= (., .)), (first(.[]) = 9), \
+             ((.. | numbers) |= empty)",
+        ],
+    ),
+    c("\"ab\"", &["-c", "paths |= 1"]),
+    c(
+        "[[3,1],[2],{\"b\":[2,1]}]",
+        &["-c", "walk(if . >= [] and . < {} then sort else . end)"],
+    ),
     c(r#"{"a":1,"b":2,"c":3}"#, &["-c", "del(.a)"]),
     c(r#"{"a":1,"b":2,"c":3}"#, &["-c", "del(.c, .a)"]),
     c(r#"{"a":1,"b":2,"c":3}"#, &["-c", ".b |= empty"]),
@@ -853,6 +897,51 @@ static PATCHED_CASES: &[Case] = &[
 /// as jq reports it, with its location, and the next input still runs; the
 /// exit status is the last input's. Also `debug` and `halt_error` output.
 static PATCHED_STDERR_CASES: &[Case] = &[
+    // A value in an error message is its first 11 bytes, never splitting a
+    // character, written no further (M24 fuzzing: a 1 GB string took 2 GB).
+    c("null", &["\"abcdefghijkl\" - 1"]),
+    c("null", &["\"abcdefghijklm\" - 1"]),
+    c("null", &["\"aéééééé\" - 1"]),
+    c("null", &["\"aaaaaaaaaaé\" - 1"]),
+    c("null", &["\"😀😀😀😀\" - 1"]),
+    c("null", &["{\"a\": \"bbbbbbbbbbbbbb\"} - 1"]),
+    c("null", &["\"a\\\"\\\\b\\nccccc\" - 1"]),
+    c("null", &["(\"1\" * 10000000) - 1"]),
+    // jq 1.8.1's `combinations`: `range` over every output of `n` at once,
+    // and its input indexed by number (M24 fuzzing).
+    c("null", &["-c", "[1, 2] | [combinations(1, 2)]"]),
+    c("null", &["-c", "[0] | [combinations(empty)]"]),
+    c("null", &["-c", "[[1], [2]] | [combinations(null)]"]),
+    c("null", &["-c", "{\"a\": [1]} | [combinations]"]),
+    c("null", &["-c", "[[], 3] | [combinations]"]),
+    c("null", &["-c", "\"ab\" | [combinations]"]),
+    c(
+        "null",
+        &[
+            "-c",
+            "[[1, 2], {\"a\": 3, \"b\": 4}] | [combinations], [limit(2; [[1, 2], 3] | combinations)]",
+        ],
+    ),
+    // An object slices only with both `start` and `end` (`null` counts), in
+    // an update too, where jq reads the step before it writes, so that
+    // error comes first; `?` drops it (M24 fuzzing).
+    c("[1,2,3]", &["-c", ".[{}] = [9]"]),
+    c("[1,2,3]", &["-c", ".[{\"start\": 1}] = [9]"]),
+    c("[1,2,3]", &["-c", ".[{\"end\": 1}] |= empty"]),
+    c(
+        "[1,2,3]",
+        &["-c", "setpath([{\"start\": 1, \"x\": 2}]; [9])"],
+    ),
+    c(
+        "[1,2,3]",
+        &["-c", ".[{\"start\": null, \"end\": null}] = [9]"],
+    ),
+    c("[1,2,3]", &["-c", ".[{}]? = [9], ((.[{}]?, .[0]) = 7)"]),
+    c("null", &["-c", ".[{}] = [9]"]),
+    c("null", &["-c", ".[{\"start\": 1, \"end\": null}] = [9]"]),
+    c("\"abc\"", &["-c", ".[{\"start\": 0}] = [\"x\"]"]),
+    c("[[1]]", &["-c", ".[0][{}] = 1"]),
+    c("[]", &["-c", ".[{}, 7][{}] = 1"]),
     // Functions only the engine defines are jq's compile error, in reachable
     // code only (PRD R-004).
     c("null", &["isarray"]),
@@ -1081,6 +1170,28 @@ static NATIVE_CASES: &[Case] = &[
     c(
         "null",
         &["-c", "def f: 1.; [f, -.5, .5e1], ([1., 2.] | add)"],
+    ),
+    // --- decNumber's limits on a literal (found by fuzzing, M24): an
+    // overflow is an infinity, printed as the largest double; a zero's
+    // exponent is clamped; below Etiny a literal rounds half-up to it ---
+    c(
+        "0e9223372036854775807 -0e9223372036854775807 1e9223372036854775807 \
+         -1e99999999999 12e9223372036854775807 1e9223372036854775808 \
+         1e0000000001999999999 1e1000000000 0.1e1000000000 1e999999999",
+        &["-c", "[., -., tostring, tojson, . + 0]"],
+    ),
+    c(
+        "1e-9223372036854775808 -0e-99999999999 0e-1147483647 6e-1147483647 \
+         5e-1147483647 4e-1147483647 95e-1147483648 15e-1147483648 \
+         9951e-1147483649 1.5e-1147483646 1e-1000000000 1e-00000000000000000001",
+        &["-c", "[., -., tostring, tojson, . + 0]"],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "[1e1000000000, 0e99999999999, 6e-1147483647, -(4e-1147483647)]",
+        ],
     ),
     // --- a `module` directive is part of the header (M23) ---
     c("null", &["-c", "module {a:1}; undefined_fn"]),
@@ -2438,6 +2549,171 @@ static NATIVE_CASES: &[Case] = &[
             r#"[splits("x";"i")], [scan("x";"i")], sub("x";"_";"gi")"#,
         ],
     ),
+    // The engine fuzzer's findings (M24, second run). A chain's subscripts
+    // run outside it, the last outermost, and the term inside them, once
+    // for each combination; the outermost subscript's error is raised.
+    c(
+        "[[1,2],[3,4]]",
+        &["-c", "[.[0,1][0,1]], [.[0,1]?[0,1]], [(.[0,1])[0,1]]"],
+    ),
+    c(
+        "[[1,2],[3,4]]",
+        &["-c", "[path(.[0,1][0,1])], [.[0,1][0:1,2]], [.[][0,1]]"],
+    ),
+    c(
+        r#"{"a":[1,2],"b":[3,4]}"#,
+        &["-c", r#"[.["a","b"][0,1]], [paths]"#],
+    ),
+    c("[[[1,2],[3,4]]]", &["-c", "[.[0][0,1][0,1]]"]),
+    c("[1,2] [3,4]", &["-nc", "[(input)[0,1]]"]),
+    c(
+        "[[1,2]]",
+        &["-c", r#"try [.[error("x")][error("y")]] catch ."#],
+    ),
+    c(
+        "[[1,2]]",
+        &["-c", r#"try [path(.[error("x")][error("y")])] catch ."#],
+    ),
+    c(
+        "[[1,2],[3,4]]",
+        &["-c", r"try (.[1,0][1,0] |= error(tostring)) catch ."],
+    ),
+    c("[[1,2],[3,4]]", &["-c", ".[0,1][0,1] = (10,20)"]),
+    // `null` indexed by what is no string, number or object is an error.
+    c(
+        "null",
+        &[
+            "-c",
+            "[.[null]?], [.[true]?], [.[[1]]?], .[{}], .[\"a\"], .[1.5]",
+        ],
+    ),
+    c(
+        "null",
+        &["-c", "try .[null] catch ., try path(.[true]) catch ."],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try del(.[null]) catch ., [nth(.,4> range(6;1;..,.))?]",
+        ],
+    ),
+    // A slice's path has both keys; `delpaths` wants both.
+    c(
+        "[1,4,3]",
+        &[
+            "-c",
+            "[path(.[5:][4.1])], [path(.[:4]?[66])], del(.[2:][0,1])",
+        ],
+    ),
+    c("[1,4,3]", &["-c", "del(.[1:][0:1]), del(.[5:][0])"]),
+    c(
+        "[1,2,3]",
+        &["-c", r#"try delpaths([[{"start":1}]]) catch ."#],
+    ),
+    c(
+        "[1,2,3]",
+        &["-c", r#"delpaths([[{"start":1,"end":null}]])"#],
+    ),
+    // A slice of `null` set: the bounds first, then the value, and `?`
+    // keeps neither; paths with `?` are found before any is updated.
+    c(
+        "null",
+        &[
+            "-c",
+            "try (.[:true] = 1) catch ., try ((.[:4,true]?) = 1) catch .",
+        ],
+    ),
+    c(
+        "null",
+        &[
+            "-c",
+            "try ((.[:4,true]?) = [1]) catch ., try ((.[:4,true]?[0]) = 1) catch .",
+        ],
+    ),
+    c("[1,2]", &["-c", "(.[:true]?) = [1]"]),
+    // A string slice: read (bounds), `f`, then the error to set or delete.
+    c(
+        r#""ab""#,
+        &["-c", r#"(.[:true]?) = "x", try (.[:true] = "x") catch ."#],
+    ),
+    c(
+        r#""ab""#,
+        &[
+            "-c",
+            "try (.[:1] |= empty) catch ., try ((.[:1]?) |= empty) catch .",
+        ],
+    ),
+    c(
+        r#""ab""#,
+        &[
+            "-c",
+            r#"try (.[:1] = "x") catch ., try (.[:1] |= error("e")) catch ."#,
+        ],
+    ),
+    c("[1,[2,3]]", &["-c", "(.[]?|.[0]?) |= empty"]),
+    // Oniguruma's capture limit, 32 767 groups (`ONIG_MAX_CAPTURE_NUM`), and
+    // a class given a ctype many times (merged in one pass, T-067).
+    c(
+        r#""x""#,
+        &[
+            "-c",
+            r#"test("(a)"*32767), (try test("(a)"*32768) catch .), (try test("(?<n>a)"*32768) catch .)"#,
+        ],
+    ),
+    c(
+        r#""x""#,
+        &[
+            "-c",
+            r#"test("[\\w]"*500), test("[\\W\\w\\d]"*500), (try test("[\\w"*500) catch .)"#,
+        ],
+    ),
+    // PR #25 review: deletions resolved together, as `jv_dels` (a negative
+    // key is `len + (int)key`, a fractional one `(int)key`), and a
+    // subscript that reads state runs last first.
+    c("[0,1,2,3]", &["-c", "def p: .[-2,-1]; p |= empty"]),
+    c(
+        "[0,1,2,3]",
+        &[
+            "-c",
+            "(def p: .[-1,-3]; p |= empty), (def p: .[1.5,1]; p |= empty)",
+        ],
+    ),
+    c(
+        "[0,1,2,[3,4]]",
+        &[
+            "-c",
+            "del(.[-0.5]), (.[-0.5] |= empty), (.[3][-0.5] |= .*2)",
+        ],
+    ),
+    c(
+        "[0,1,2,[3,4]]",
+        &[
+            "-c",
+            "(def p: .[-0.5]; p |= empty), (.[-0.5] |= 9), del(.[-0.5,-1])",
+        ],
+    ),
+    c(
+        "[[10,20],[30,40]] 0 1 2",
+        &["-c", "[path(.[input][input])]"],
+    ),
+    c(r#"{"a":{"b":1}} "x" "a""#, &["-c", "[.[input][input]]"]),
+    c(
+        "[[[0], 1], 2, [3, [4]]]",
+        &[
+            "-c",
+            "try (.. |= if . < [] then .+1 else [42] + . end) catch .",
+        ],
+    ),
+    // A path `f` deletes is never written first: no padding, no container.
+    c(
+        "[]",
+        &["-c", "(def p: .[2]; p |= empty), (def p: .[2]; p |= 5)"],
+    ),
+    c(
+        "{}",
+        &["-c", "(def p: .a.b; p |= empty), ((.a.b?) |= empty)"],
+    ),
 ];
 
 /// Cases needing input files, which are created in a temp dir at run time.
@@ -2694,4 +2970,133 @@ fn shim_matches_real_jq() {
         failures.join("\n")
     );
     eprintln!("{total} differential cases matched jq exactly");
+}
+
+/// A comparison whose input, arguments or environment are bytes that are not
+/// UTF-8, which a [`Case`] cannot hold.
+struct ByteCase {
+    stdin: Vec<u8>,
+    args: Vec<Vec<u8>>,
+    env: Option<(&'static [u8], &'static [u8])>,
+}
+
+fn bc(stdin: &[u8], args: &[&[u8]]) -> ByteCase {
+    let args = args.iter().map(|a| a.to_vec()).collect();
+    ByteCase {
+        stdin: stdin.to_vec(),
+        args,
+        env: None,
+    }
+}
+
+/// Text that is not UTF-8 becomes U+FFFD as jq makes strings of it
+/// (`jv_string_sized`, M24's fuzzing): a JSON string or key once whole, raw
+/// input one `fgets` chunk at a time (a character split across chunks or
+/// files is two), `\r` before a newline kept, arguments, `--argjson` text as
+/// JSON, `--rawfile`, the environment (a name that is not UTF-8 aborted the
+/// shim) and `input_filename`.
+fn byte_cases() -> Vec<ByteCase> {
+    let long = |tail: &[u8]| [b"a".repeat(4094).as_slice(), tail].concat();
+    let mut cases = vec![
+        bc(
+            b"\"a\xf0b\" \"\xf0bcd\" \"\xc0\x80x\" {\"k\xffy\":\"\xed\xa0\x80\"} \"\xf0\\u0041\" [\"\xe2\x82\"]",
+            &[b"-c", b"[., length, (explode? // null)]"],
+        ),
+        bc(b"\"\xf0\"", &[b"."]),
+        bc(b"\"\xf4\x90\x80\x80\xe0\x80\x80\"", &[b"-c", b"[., explode]"]),
+        bc(b"a\xf0b\nc\xe2\x82\r\nd\xff", &[b"-R", b"-c", b"[., length]"]),
+        bc(b"a\xf0b\nc\xe2\x82", &[b"-Rs", b"-c", b"[., length]"]),
+        bc(&long(b"\xc3\xa9z\n"), &[b"-R", b"-c", b"[length, .[4090:]]"]),
+        bc(&long(b"\xc3\xa9z\n"), &[b"-Rs", b"-c", b"[length, .[4090:]]"]),
+        bc(b"a\r\nb\r\n\r", &[b"-R", b"-c", b"."]),
+        bc(b"", &[b"-R", b"-c", b"[., length]", b"p1.txt", b"p2.txt"]),
+        bc(b"", &[b"-Rs", b"-c", b"[., length]", b"p1.txt", b"p2.txt"]),
+        bc(b"", &[b"-R", b"-c", b"[input_filename, .]", b"f\xf0name.txt"]),
+        bc(b"", &[b"-n", b"-c", b"--argjson", b"x", b"\"\xf0b\"", b"$x | [length, explode]"]),
+        bc(b"", &[b"-n", b"-c", b"--arg", b"x", b"\xf0b", b"$x | [length, explode]"]),
+        bc(b"", &[b"-n", b"-c", b"$ARGS.positional", b"--args", b"a\xf0b", b"\xe2\x82"]),
+        bc(b"", &[b"-n", b"-c", b"--rawfile", b"r", b"bad.txt", b"$r | [., length]"]),
+    ];
+    let env = |name: &'static [u8], value: &'static [u8], filter: &[u8]| ByteCase {
+        env: Some((name, value)),
+        ..bc(b"", &[b"-n", b"-c", filter])
+    };
+    cases.push(env(b"PF_BAD", b"a\xf0b", b"[$ENV.PF_BAD, env.PF_BAD]"));
+    cases.push(env(
+        b"PF_\xff",
+        b"1",
+        b"$ENV | keys | map(select(startswith(\"PF_\")))",
+    ));
+    cases.push(env(b"PF_\xff", b"1", b"1"));
+    cases
+}
+
+#[test]
+fn bytes_that_are_not_utf8_read_as_jq_reads_them() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let Some(jq) = real_jq() else {
+        skip_or_fail("no usable jq available");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("pathfinder-utf8-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let files: &[(&[u8], &[u8])] = &[
+        (b"p1.txt", b"a\xf0"),
+        (b"p2.txt", b"\x9f\x98\x80b\n"),
+        (b"bad.txt", b"a\xf0b"),
+        (b"f\xf0name.txt", b"x\xff\n"),
+    ];
+    for (name, bytes) in files {
+        std::fs::write(dir.join(OsStr::from_bytes(name)), bytes).expect("fixture");
+    }
+    let shim = shim(&dir);
+    let run = |exe: &std::path::Path, case: &ByteCase| {
+        use std::io::Write as _;
+        let mut cmd = Command::new(exe);
+        cmd.args(case.args.iter().map(|a| OsStr::from_bytes(a)));
+        if let Some((name, value)) = case.env {
+            cmd.env(OsStr::from_bytes(name), OsStr::from_bytes(value));
+        }
+        let mut child = cmd
+            .current_dir(&dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawns");
+        let _ = child
+            .stdin
+            .take()
+            .expect("stdin piped")
+            .write_all(&case.stdin);
+        let out = child.wait_with_output().expect("completes");
+        (out.status.code(), out.stdout, out.stderr)
+    };
+    let cases = byte_cases();
+    let mut failures: Vec<String> = Vec::new();
+    for case in &cases {
+        let (expected, actual) = (run(&jq, case), run(&shim, case));
+        if expected != actual {
+            let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+            let args: Vec<_> = case.args.iter().map(|a| text(a)).collect();
+            failures.push(format!(
+                "  args {args:?} env {:?}\n    jq   -> {:?} {:?} {:?}\n    shim -> {:?} {:?} {:?}",
+                case.env.map(|(n, v)| (text(n), text(v))),
+                expected.0,
+                text(&expected.1),
+                text(&expected.2),
+                actual.0,
+                text(&actual.1),
+                text(&actual.2),
+            ));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        failures.is_empty(),
+        "{} of {} byte cases diverged from jq:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
 }
