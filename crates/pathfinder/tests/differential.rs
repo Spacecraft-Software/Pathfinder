@@ -922,6 +922,26 @@ static PATCHED_STDERR_CASES: &[Case] = &[
             "[[1, 2], {\"a\": 3, \"b\": 4}] | [combinations], [limit(2; [[1, 2], 3] | combinations)]",
         ],
     ),
+    // An object slices only with both `start` and `end` (`null` counts), in
+    // an update too, where jq reads the step before it writes, so that
+    // error comes first; `?` drops it (M24 fuzzing).
+    c("[1,2,3]", &["-c", ".[{}] = [9]"]),
+    c("[1,2,3]", &["-c", ".[{\"start\": 1}] = [9]"]),
+    c("[1,2,3]", &["-c", ".[{\"end\": 1}] |= empty"]),
+    c(
+        "[1,2,3]",
+        &["-c", "setpath([{\"start\": 1, \"x\": 2}]; [9])"],
+    ),
+    c(
+        "[1,2,3]",
+        &["-c", ".[{\"start\": null, \"end\": null}] = [9]"],
+    ),
+    c("[1,2,3]", &["-c", ".[{}]? = [9], ((.[{}]?, .[0]) = 7)"]),
+    c("null", &["-c", ".[{}] = [9]"]),
+    c("null", &["-c", ".[{\"start\": 1, \"end\": null}] = [9]"]),
+    c("\"abc\"", &["-c", ".[{\"start\": 0}] = [\"x\"]"]),
+    c("[[1]]", &["-c", ".[0][{}] = 1"]),
+    c("[]", &["-c", ".[{}, 7][{}] = 1"]),
     // Functions only the engine defines are jq's compile error, in reachable
     // code only (PRD R-004).
     c("null", &["isarray"]),

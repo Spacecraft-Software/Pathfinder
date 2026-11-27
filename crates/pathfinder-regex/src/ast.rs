@@ -56,28 +56,22 @@ impl Class {
             }
             Some(_) => {}
         }
-        let mut lo = from;
-        let mut hi = to;
-        let mut out = Vec::with_capacity(self.ranges.len() + 1);
-        let mut placed = false;
-        for &(a, b) in &self.ranges {
-            if b.saturating_add(1) < lo {
-                out.push((a, b));
-            } else if hi.saturating_add(1) < a {
-                if !placed {
-                    out.push((lo, hi));
-                    placed = true;
-                }
-                out.push((a, b));
-            } else {
-                lo = lo.min(a);
-                hi = hi.max(b);
-            }
-        }
-        if !placed {
-            out.push((lo, hi));
-        }
-        self.ranges = out;
+        // The ranges are sorted, disjoint and never adjacent, so those the
+        // new one touches are one run, `start..end`, found by two binary
+        // searches and replaced in place. Rebuilding the whole list instead
+        // made a 28 KB `(?i)` class take 25 times jq's time (M24 fuzzing).
+        let start = self
+            .ranges
+            .partition_point(|&(_, b)| b.saturating_add(1) < from);
+        let end = self
+            .ranges
+            .partition_point(|&(a, _)| a <= to.saturating_add(1));
+        let merged = match self.ranges.get(start..end) {
+            Some([first, .., last]) => (from.min(first.0), to.max(last.1)),
+            Some([only]) => (from.min(only.0), to.max(only.1)),
+            _ => (from, to),
+        };
+        self.ranges.splice(start..end, [merged]);
     }
 
     /// Adds ranges sorted by their start, as many `add_range` calls would,
@@ -262,6 +256,43 @@ mod tests {
                 each.add_range(a, b);
             }
             assert_eq!(one.ranges, each.ranges, "over {old:?}");
+        }
+    }
+
+    /// Ranges added in any order, overlapping, adjacent or apart, end as
+    /// the sorted, merged ranges of the codes they cover.
+    #[test]
+    fn ranges_in_any_order_merge() {
+        const N: u32 = 300;
+        let mut seed: u32 = 0x9e37_79b9;
+        let mut next = |m: u32| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) % m
+        };
+        for _ in 0..200 {
+            let mut class = Class::default();
+            let mut set = [false; N as usize];
+            for _ in 0..next(40) {
+                let a = next(N);
+                let b = (a + next(6)).min(N - 1);
+                // Either way round: `add_range` orders its ends.
+                if next(2) == 0 {
+                    class.add_range(a, b);
+                } else {
+                    class.add_range(b, a);
+                }
+                set[a as usize..=b as usize]
+                    .iter_mut()
+                    .for_each(|s| *s = true);
+            }
+            let mut want: Vec<(u32, u32)> = Vec::new();
+            for i in (0..N).filter(|&i| set[i as usize]) {
+                match want.last_mut() {
+                    Some(last) if last.1 + 1 == i => last.1 = i,
+                    _ => want.push((i, i)),
+                }
+            }
+            assert_eq!(class.ranges, want);
         }
     }
 }

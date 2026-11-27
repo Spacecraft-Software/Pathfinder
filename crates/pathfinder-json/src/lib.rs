@@ -302,6 +302,13 @@ impl jaq_core::ValT for Val {
         if let (Val::Null | Val::BStr(_) | Val::TStr(_) | Val::Arr(_), Val::Obj(o)) = (&self, index)
         {
             let range = o.get(&Val::utf8_str("start"))..o.get(&Val::utf8_str("end"));
+            // jq's `parse_slice` needs both keys (`null | .[{}] = [1]` is an
+            // error), and `jv_setpath` reads the step before it writes, so
+            // that error comes before any other (M24 fuzzing).
+            if range.start.is_none() || range.end.is_none() {
+                let e = || Error::str("Array/string slice indices must be integers");
+                return opt.fail(self, |_| Exn::from(e()));
+            }
             return self.map_range(range, opt, f);
         };
         match self {
